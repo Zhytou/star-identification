@@ -12,7 +12,7 @@ def create_star_image(ra: float, de: float, roll: float, f: float=0.00304, myu=1
         de: declination in degrees
         roll: roll in degrees
     Returns:
-
+        img: the simulated star image
     """
 
     def get_rotation_matrix(ra: float, de: float, roll: float):
@@ -45,19 +45,24 @@ def create_star_image(ra: float, de: float, roll: float, f: float=0.00304, myu=1
             x: the x coordinate in pixel (starting from left to right)
             y: the y coordinate in pixel (starting from top to bottom)
             magnitude: the stellar magnitude
-            gaussian: true if , false if using own function
             background: background image
             ROI: The region of interest for each star in pixel radius
         """
-        # using the gaussian function
-        H = 2000*exp(-magnitude+1)
-        sigma = 5
+        # stellar magnitude to intensity
+        H = pow(10, 6-magnitude)
+
+        # gaussian distribution variance
+        sigma = 1
+
         for u in range(x-ROI, x+ROI+1):
+            if u < 0 or u >= len(background[0]):
+                continue
             for v in range(y-ROI, y+ROI+1):
-                dist = ((u-x)**2)+((v-y)**2)
-                diff = (dist)/(2*(sigma**2))
-                exponent_exp = 1/(exp(diff))
-                raw_intensity = int(round((H/(2*pi*(sigma**2)))*exponent_exp))
+                if v < 0 or v >= len(background):
+                    continue
+                # gaussian distribution probability density function
+                p = exp(-((u-x)^2+(v-y)^2)/(2*(sigma^2)))
+                raw_intensity = int(round((H/(2*pi*(sigma**2)))*p))
                 background[v ,u] = raw_intensity
         
         return background
@@ -96,7 +101,7 @@ def create_star_image(ra: float, de: float, roll: float, f: float=0.00304, myu=1
     # read star catalogue
     col_list = ["Star ID", "RA", "DE", "Magnitude"]
     star_catalogue = pd.read_csv('catalogues/Below_6.0_SAO.csv', usecols=col_list)
-
+    print(len(star_catalogue))
     # search for image-able stars
     R = (sqrt((radians(FOVx)**2)+(radians(FOVy)**2))/2)
     ra1, ra2 = (ra - (R/cos(de))), (ra + (R/cos(de)))
@@ -132,34 +137,36 @@ def create_star_image(ra: float, de: float, roll: float, f: float=0.00304, myu=1
     xpixel = l/xtot
     ypixel = w/ytot
 
-    magnitude_mv = list(stars_within_FOV['Magnitude'])
-    filtered_magnitude = []
-
     # rescale to pixel sizes
     pixel_coordinates = []
-    delete_indices = []
+    magnitude_mv = list(stars_within_FOV['Magnitude'])
+    filtered_magnitude = []
     for i, (x, y) in enumerate(image_coordinates):
         x = round(xpixel*x)
         y = round(ypixel*y)
         if abs(x) > l/2 or abs(y) > w/2:
-            delete_indices.append(i)
             continue
         pixel_coordinates.append((x, y))
         filtered_magnitude.append(magnitude_mv[i])
 
-    # initialize image
-    background = np.zeros((w,l))
+    print(pixel_coordinates)
 
+    # initialize image
+    img = np.zeros((w,l))
+
+    # draw stars
     for i in range(len(filtered_magnitude)):
         x = round(l/2 + pixel_coordinates[i][0])
         y = round(w/2 - pixel_coordinates[i][1])
-        background = draw_star(x, y, filtered_magnitude[i], background)
+        img = draw_star(x, y, filtered_magnitude[i], img)
 
     # add white noise
-    background = add_white_noise(0, 50, background=background)
+    img = add_white_noise(0, 50, background=img)
 
-    return background
+    return img
 
 
 if __name__ == '__main__':
-    create_star_image(0, 0, 0)
+    img = create_star_image(-180, -90, 0)
+    print(img)
+    cv2.imwrite("test.png", img)
