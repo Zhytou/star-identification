@@ -4,13 +4,26 @@ import pandas as pd
 import cv2
 
 
-def create_star_image(ra: float, de: float, roll: float, f: float=0.00304, myu=1.12*(10**-6)):
+# # star sensor pixel num
+l = 256
+w = 256
+
+# star sensor foucs in metres
+f = 0.00304
+
+# star catalogue path
+catalogue_path = 'catalogues/Below_6.0_SAO.csv'
+
+
+def create_star_image(ra: float, de: float, roll: float, FOVx: float, FOVy: float):
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
         ra: right ascension in degrees
         de: declination in degrees
         roll: roll in degrees
+        FOVx: field of view on x axis in degrees
+        FOVy: field of view on y axis in degrees
     Returns:
         img: the simulated star image
     """
@@ -47,6 +60,8 @@ def create_star_image(ra: float, de: float, roll: float, f: float=0.00304, myu=1
             magnitude: the stellar magnitude
             background: background image
             ROI: The region of interest for each star in pixel radius
+        Returns:
+            background: the image with the star drawn
         """
         # stellar magnitude to intensity
         H = pow(10, 6-magnitude)
@@ -64,16 +79,18 @@ def create_star_image(ra: float, de: float, roll: float, f: float=0.00304, myu=1
                 p = exp(-((u-x)^2+(v-y)^2)/(2*(sigma^2)))
                 raw_intensity = int(round((H/(2*pi*(sigma**2)))*p))
                 background[v ,u] = raw_intensity
-        
+
         return background
 
-    def add_white_noise(low, high, background):
+    def add_white_noise(low: int, high: int, background: np.ndarray):
         """
             Adds white noise to an image.
         Args:
             low: lower threshold of the noise generated
             high: maximum pixel value of the noise generated
             background: the image that is put noise on
+        Returns:
+            noised_img: the image with white noise
         """
         row, col = np.shape(background)
         background = background.astype(int)
@@ -86,22 +103,14 @@ def create_star_image(ra: float, de: float, roll: float, f: float=0.00304, myu=1
     de = radians(float(de))
     roll = radians(float(roll))
 
-    # star sensor pixel
-    l = 3280
-    w = 2464
-
-    # star sensor FOV
-    FOVy = degrees(2*atan((myu*w/2)/f))
-    FOVx = degrees(2*atan((myu*l/2)/f))
-
     # get rotation matrix
     M = get_rotation_matrix(ra, de, roll)
     M_transpose = np.round(np.matrix.transpose(M), decimals=5)
 
     # read star catalogue
     col_list = ["Star ID", "RA", "DE", "Magnitude"]
-    star_catalogue = pd.read_csv('catalogues/Below_6.0_SAO.csv', usecols=col_list)
-    print(len(star_catalogue))
+    star_catalogue = pd.read_csv(catalogue_path, usecols=col_list)
+
     # search for image-able stars
     R = (sqrt((radians(FOVx)**2)+(radians(FOVy)**2))/2)
     ra1, ra2 = (ra - (R/cos(de))), (ra + (R/cos(de)))
@@ -111,7 +120,7 @@ def create_star_image(ra: float, de: float, roll: float, f: float=0.00304, myu=1
     star_in_de = star_catalogue[(de1 <= star_catalogue['DE']) & (star_catalogue['DE'] <= de2)]
     star_in_de = star_in_de[['Star ID']].copy()
     stars_within_FOV = pd.merge(star_in_ra, star_in_de, on="Star ID")
-
+    
     # convert to star sensor coordinate system
     star_ras = list(stars_within_FOV['RA'])
     star_des = list(stars_within_FOV['DE'])
@@ -149,16 +158,16 @@ def create_star_image(ra: float, de: float, roll: float, f: float=0.00304, myu=1
         pixel_coordinates.append((x, y))
         filtered_magnitude.append(magnitude_mv[i])
 
-    print(pixel_coordinates)
-
     # initialize image
     img = np.zeros((w,l))
 
-    # draw stars
+    # draw imagable stars
     for i in range(len(filtered_magnitude)):
         x = round(l/2 + pixel_coordinates[i][0])
         y = round(w/2 - pixel_coordinates[i][1])
         img = draw_star(x, y, filtered_magnitude[i], img)
+
+    # add false stars with random magitudes at random positions
 
     # add white noise
     img = add_white_noise(0, 50, background=img)
@@ -167,6 +176,5 @@ def create_star_image(ra: float, de: float, roll: float, f: float=0.00304, myu=1
 
 
 if __name__ == '__main__':
-    img = create_star_image(-180, -90, 0)
-    print(img)
-    cv2.imwrite("test.png", img)
+    img = create_star_image(69, -12, -13, 12, 12)
+    cv2.imwrite("test2.png", img)
