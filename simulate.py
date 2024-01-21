@@ -2,30 +2,41 @@ from math import radians, degrees, sin, cos, tan, sqrt, atan, pi, exp
 import numpy as np
 import pandas as pd
 import cv2
+import json
 
 
-# # star sensor pixel num
-l = 256
-w = 256
+# star sensor pixel num
+l = 1024
+w = 1024
 
 # star sensor foucs in metres
-f = 0.00304
+f = 58e-3
+
+# field of view angle in degrees
+FOVx = 12
+FOVy = 12
+
+# pixel size in metres
+myux = f * tan(radians(FOVx)/2) * 2 / l
+myuy = f * tan(radians(FOVy)/2) * 2 / w
 
 # star catalogue path
 catalogue_path = 'catalogues/Below_6.0_SAO.csv'
 
+# the standard deviation of white noise 
+noise_std = 10
 
-def create_star_image(ra: float, de: float, roll: float, FOVx: float, FOVy: float):
+
+def create_star_image(ra: float, de: float, roll: float):
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
         ra: right ascension in degrees
         de: declination in degrees
         roll: roll in degrees
-        FOVx: field of view on x axis in degrees
-        FOVy: field of view on y axis in degrees
     Returns:
         img: the simulated star image
+        stars: stars drawn in the image
     """
 
     def get_rotation_matrix(ra: float, de: float, roll: float):
@@ -51,51 +62,44 @@ def create_star_image(ra: float, de: float, roll: float, FOVx: float, FOVy: floa
             
         return M
 
-    def draw_star(x: int, y: int, magnitude: float, background: np.ndarray, ROI: int=5):
+    def draw_star(x: int, y: int, magnitude: float, img: np.ndarray, ROI: int=2):
         """
-            Draw the star in the background image.
+            Draw star at yth row and xth column in the image.
         Args:
             x: the x coordinate in pixel (starting from left to right)
             y: the y coordinate in pixel (starting from top to bottom)
             magnitude: the stellar magnitude
-            background: background image
+            img: background image
             ROI: The region of interest for each star in pixel radius
         Returns:
-            background: the image with the star drawn
+            img: the image with the star drawn
         """
         # stellar magnitude to intensity
-        H = pow(10, 6-magnitude)
-
-        # gaussian distribution variance
-        sigma = 1
+        H = 20 * (6-magnitude) + 128
 
         for u in range(x-ROI, x+ROI+1):
-            if u < 0 or u >= len(background[0]):
+            if u < 0 or u >= len(img[0]):
                 continue
             for v in range(y-ROI, y+ROI+1):
-                if v < 0 or v >= len(background):
+                if v < 0 or v >= len(img):
                     continue
-                # gaussian distribution probability density function
-                p = exp(-((u-x)^2+(v-y)^2)/(2*(sigma^2)))
-                raw_intensity = int(round((H/(2*pi*(sigma**2)))*p))
-                background[v ,u] = raw_intensity
+                raw_intensity = int(H*exp(-((u-x)**2+(v-y)**2)/(2*ROI**2)))
+                img[v ,u] = raw_intensity
 
-        return background
+        return img
 
-    def add_white_noise(low: int, high: int, background: np.ndarray):
+    def add_white_noise(img: np.ndarray):
         """
             Adds white noise to an image.
         Args:
-            low: lower threshold of the noise generated
-            high: maximum pixel value of the noise generated
-            background: the image that is put noise on
+            img: the image to put noise on
         Returns:
             noised_img: the image with white noise
         """
-        row, col = np.shape(background)
-        background = background.astype(int)
-        noise = np.random.randint(low, high=high, size=(row, col))
-        noised_img = cv2.addWeighted(noise, 0.1, background, 0.9, 0)
+        # generate white noise whose mean is 0 and standard deviation is noise_std
+        noise = np.random.normal(0, noise_std, img.shape)
+        # make sure no pixel value is less than 0 or greater than 255
+        noised_img = np.clip(img + noise, 0, 255).astype(np.uint8)
         return noised_img
 
     # right ascension, declination and roll in radians
@@ -148,33 +152,41 @@ def create_star_image(ra: float, de: float, roll: float, FOVx: float, FOVy: floa
 
     # rescale to pixel sizes
     pixel_coordinates = []
-    magnitude_mv = list(stars_within_FOV['Magnitude'])
-    filtered_magnitude = []
+    star_magnitudes = list(stars_within_FOV['Magnitude'])
+    star_ids = list(stars_within_FOV['Star ID'])
+    filtered_magnitudes = []
+    filtered_ids = []
     for i, (x, y) in enumerate(image_coordinates):
         x = round(xpixel*x)
         y = round(ypixel*y)
         if abs(x) > l/2 or abs(y) > w/2:
             continue
         pixel_coordinates.append((x, y))
-        filtered_magnitude.append(magnitude_mv[i])
+        filtered_magnitudes.append(star_magnitudes[i])
+        filtered_ids.append(star_ids[i])
 
     # initialize image
     img = np.zeros((w,l))
 
     # draw imagable stars
-    for i in range(len(filtered_magnitude)):
+    for i in range(len(filtered_magnitudes)):
         x = round(l/2 + pixel_coordinates[i][0])
         y = round(w/2 - pixel_coordinates[i][1])
-        img = draw_star(x, y, filtered_magnitude[i], img)
+        img = draw_star(x, y, filtered_magnitudes[i], img)
 
     # add false stars with random magitudes at random positions
+    # false_stars = add_false_stars(img, 5)
 
     # add white noise
-    img = add_white_noise(0, 50, background=img)
+    img = add_white_noise(img)
 
-    return img
+    # the star infomation
+    stars = list(zip(filtered_ids, pixel_coordinates))
+
+    return img, stars
 
 
 if __name__ == '__main__':
-    img = create_star_image(69, -12, -13, 12, 12)
+    img, stars = create_star_image(69, -12, -13)
     cv2.imwrite("test2.png", img)
+    json.dump(stars, open("test2.json", "w"))
