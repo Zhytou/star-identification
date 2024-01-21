@@ -1,6 +1,12 @@
-import numpy as np
+import json
 import cv2
+import numpy as np
 from skimage import measure
+
+from simulate import noise_std
+
+np.set_printoptions(threshold=np.inf)
+
 
 def get_centroids(img: np.ndarray):
     '''
@@ -11,7 +17,7 @@ def get_centroids(img: np.ndarray):
         centroids: the centroids of the stars in the image
     '''
 
-    def cal_multiwind_threshold(img: np.ndarray, wind_len: int, num_wind: int):
+    def cal_multiwind_threshold(img: np.ndarray, wind_len: int=200, num_wind: int=5):
         """
             Calculate the threshold of the image using the method "multi-window threshold division" from https://ieeexplore.ieee.org/abstract/document/1008988.
         Args:
@@ -19,10 +25,7 @@ def get_centroids(img: np.ndarray):
             num_wind: the number of the windows
         Returns:
             threshold: the threshold of the image
-        """
-        # get the image size
-        l, w = img.shape
-        
+        """        
         # initialize random windows
         winds = []
         for i in range(num_wind):
@@ -36,11 +39,8 @@ def get_centroids(img: np.ndarray):
         # calculate the mean of the window means
         tot_mean = np.mean(winds)
 
-        # calculate the standard deviation of the image   
-        std = np.std(img)
-
         # threshold = background_mean + std * 5
-        threshold = tot_mean + std * 5
+        threshold = tot_mean + noise_std * 5
 
         return threshold
 
@@ -61,13 +61,16 @@ def get_centroids(img: np.ndarray):
         group_coords = []
         for label in range(1, label_num + 1):
             # get the coords for each label
-            xs, ys = np.nonzero(labeled_img == label)
-            group_coords.append(list(zip(xs, ys)))
+            rows, cols = np.nonzero(labeled_img == label)
+            group_coords.append(list(zip(rows, cols)))
 
         return group_coords
-        
+
+    # get the image size
+    w, l = img.shape
+
     # calaculate the threshold
-    threshold = cal_multiwind_threshold(img, 20, 5)
+    threshold = cal_multiwind_threshold(img)
 
     # if img[u, v] < threshold: 0, else: img[u, v]
     _, nimg = cv2.threshold(img, threshold, 255, cv2.THRESH_TOZERO)
@@ -78,14 +81,16 @@ def get_centroids(img: np.ndarray):
     # calculate the centroid coordinate with threshold and weight
     centroids = []
     for coords in group_coords:
-        x_sum = 0
-        y_sum = 0
+        row_sum = 0
+        col_sum = 0
         gray_sum = 0
-        for x, y in coords:
-            x_sum += x * (img[x][y] - threshold)
-            y_sum += y * (img[x][y] - threshold)
-            gray_sum += img[x][y] - threshold
-        centroids.append((x_sum / gray_sum, y_sum / gray_sum))
+        for row, col in coords:
+            row_sum += row * (img[row][col] - threshold)
+            col_sum += col * (img[row][col] - threshold)
+            gray_sum += img[row][col] - threshold
+        x_mean = col_sum/gray_sum - l/2
+        y_mean = w/2 - row_sum/gray_sum
+        centroids.append((x_mean, y_mean))
 
     return centroids
 
@@ -98,7 +103,7 @@ def remove_white_noise(img: np.ndarray):
         img: the processed image
     """
     # get the image size
-    l, w = img.shape
+    w, l = img.shape
 
     # get the image mean
     img_mean = np.mean(img)
@@ -122,5 +127,22 @@ if __name__ == '__main__':
     # read the image
     img = cv2.imread('test2.png', 0)
 
+    # read star info
+    with open('test2.json', 'r') as f:
+        real_stars = json.load(f)
+
+    coords = []
+    for i in range(len(real_stars)):
+        x, y = real_stars[i][1]
+        coords.append((x, y))
+
     # get the centroids
-    get_centroids(img)
+    stars = get_centroids(img)
+
+    # test the accuracy
+    w, l = img.shape
+    for star in stars:
+        x, y = star
+        for coord in coords:
+            if abs(x - coord[0]) < 5 and abs(y - coord[1]) < 5:
+                print('True')
