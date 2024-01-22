@@ -27,7 +27,7 @@ catalogue_path = 'catalogues/Below_6.0_SAO.csv'
 noise_std = 10
 
 
-def create_star_image(ra: float, de: float, roll: float):
+def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, list]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
@@ -39,7 +39,7 @@ def create_star_image(ra: float, de: float, roll: float):
         stars: stars drawn in the image
     """
 
-    def get_rotation_matrix(ra: float, de: float, roll: float):
+    def get_rotation_matrix(ra: float, de: float, roll: float) -> np.ndarray:
         """
             Get the rotation matrix from star sensor coordinates to celestial coordinates. Note that M is an orthogonal matrix, which means the transpose of M represents the transformation matrix from celestial coordinates to star sensor coordinates.
         Args:
@@ -62,7 +62,7 @@ def create_star_image(ra: float, de: float, roll: float):
             
         return M
 
-    def draw_star(x: int, y: int, magnitude: float, img: np.ndarray, ROI: int=2):
+    def draw_star(x: int, y: int, magnitude: float, img: np.ndarray, ROI: int=2) -> np.ndarray:
         """
             Draw star at yth row and xth column in the image.
         Args:
@@ -88,7 +88,7 @@ def create_star_image(ra: float, de: float, roll: float):
 
         return img
 
-    def add_white_noise(img: np.ndarray):
+    def add_white_noise(img: np.ndarray) -> np.ndarray:
         """
             Adds white noise to an image.
         Args:

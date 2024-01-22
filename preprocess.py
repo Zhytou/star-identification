@@ -8,7 +8,7 @@ from simulate import noise_std
 np.set_printoptions(threshold=np.inf)
 
 
-def get_centroids(img: np.ndarray):
+def get_centroids(img: np.ndarray) -> list[tuple[int, int]]:
     '''
         Get the centroids of the stars in the image.
     Args:
@@ -17,7 +17,7 @@ def get_centroids(img: np.ndarray):
         centroids: the centroids of the stars in the image
     '''
 
-    def cal_multiwind_threshold(img: np.ndarray, wind_len: int=200, num_wind: int=5):
+    def cal_multiwind_threshold(img: np.ndarray, wind_len: int=200, num_wind: int=5) -> int:
         """
             Calculate the threshold of the image using the method "multi-window threshold division" from https://ieeexplore.ieee.org/abstract/document/1008988.
         Args:
@@ -44,7 +44,7 @@ def get_centroids(img: np.ndarray):
 
         return threshold
 
-    def group_star(img: np.ndarray, method: int):
+    def group_star(img: np.ndarray, method: int) -> list[list[tuple[int, int]]]:
         """
             Group the facula(potential star) in the image.
         Args:
