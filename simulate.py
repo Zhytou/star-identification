@@ -16,9 +16,17 @@ f = 58e-3
 FOVx = 12
 FOVy = 12
 
-# pixel size in metres
-myux = f * tan(radians(FOVx)/2) * 2 / l
-myuy = f * tan(radians(FOVy)/2) * 2 / w
+# camera total length and width in metres
+xtot = 2*tan(radians(FOVx/2))*f
+ytot = 2*tan(radians(FOVy/2))*f
+
+# length and width per pixel in metres
+myux = 2*tan(radians(FOVx/2))*f/l
+myuy = 2*tan(radians(FOVy/2))*f/w
+
+# pixel num per length
+xpixel = l/xtot
+ypixel = w/ytot
 
 # star catalogue path
 catalogue_path = 'catalogues/Below_6.0_SAO.csv'
@@ -125,63 +133,46 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
     star_in_de = star_in_de[['Star ID']].copy()
     stars_within_FOV = pd.merge(star_in_ra, star_in_de, on="Star ID")
     
-    # convert to star sensor coordinate system
     star_ras = list(stars_within_FOV['RA'])
     star_des = list(stars_within_FOV['DE'])
-    coordinates = []
+    star_magnitudes = list(stars_within_FOV['Magnitude'])
+    star_ids = list(stars_within_FOV['Star ID'])
+
+    # initialize image & star info list to return
+    img = np.zeros((w,l))
+    stars = []
+
     for i in range(len(star_ras)):
         x = (cos(star_ras[i])*cos(star_des[i]))
         y = (sin(star_ras[i])*cos(star_des[i]))
         z = (sin(star_des[i]))
-        coord = M_transpose.dot(np.array([[x], [y], [z]]))
-        coordinates.append(coord)
 
-    # convert to image coordinate system
-    image_coordinates = []
-    for coord in coordinates:
+        # convert to star sensor coordinate system
         # coord is like [[x], [y], [z]]
+        coord = M_transpose.dot(np.array([[x], [y], [z]]))
+
+        # convert to image coordinate system
         x = f*(coord[0]/coord[2])[0]
         y = f*(coord[1]/coord[2])[0]
-        image_coordinates.append((x, y))
 
-    # calculate pixel num per length
-    xtot = 2*tan(radians(FOVx)/2)*f
-    ytot = 2*tan(radians(FOVy)/2)*f
-    xpixel = l/xtot
-    ypixel = w/ytot
+        # convert to pixel coordinate system
+        x *= xpixel
+        y *= ypixel
 
-    # rescale to pixel sizes
-    pixel_coordinates = []
-    star_magnitudes = list(stars_within_FOV['Magnitude'])
-    star_ids = list(stars_within_FOV['Star ID'])
-    filtered_magnitudes = []
-    filtered_ids = []
-    for i, (x, y) in enumerate(image_coordinates):
-        x = round(xpixel*x)
-        y = round(ypixel*y)
+        # check if the star is in the image
         if abs(x) > l/2 or abs(y) > w/2:
             continue
-        pixel_coordinates.append((x, y))
-        filtered_magnitudes.append(star_magnitudes[i])
-        filtered_ids.append(star_ids[i])
-
-    # initialize image
-    img = np.zeros((w,l))
-
-    # draw imagable stars
-    for i in range(len(filtered_magnitudes)):
-        x = round(l/2 + pixel_coordinates[i][0])
-        y = round(w/2 - pixel_coordinates[i][1])
-        img = draw_star(x, y, filtered_magnitudes[i], img)
+        # draw imagable star at (row, col)
+        col = round(l/2 + x)
+        row = round(w/2 - y)
+        img = draw_star(col, row, star_magnitudes[i], img)
+        stars.append([star_ids[i], (row, col), star_magnitudes[i]])
 
     # add false stars with random magitudes at random positions
     # false_stars = add_false_stars(img, 5)
 
     # add white noise
     img = add_white_noise(img)
-
-    # the star infomation
-    stars = list(zip(filtered_ids, pixel_coordinates))
 
     return img, stars
 
