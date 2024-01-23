@@ -29,8 +29,8 @@ def get_star_centroids(img: np.ndarray) -> list[tuple[int, int]]:
         # initialize random windows
         winds = []
         for i in range(num_wind):
-            x = np.random.randint(0, l - wind_len)
-            y = np.random.randint(0, w - wind_len)
+            x = np.random.randint(0, w - wind_len)
+            y = np.random.randint(0, h - wind_len)
     
             wind = img[y:y+wind_len, x:x+wind_len]    
             mean = np.mean(wind)  
@@ -67,7 +67,7 @@ def get_star_centroids(img: np.ndarray) -> list[tuple[int, int]]:
         return group_coords
 
     # get the image size
-    w, l = img.shape
+    h, w = img.shape
 
     # calaculate the threshold
     threshold = cal_multiwind_threshold(img)
@@ -92,34 +92,6 @@ def get_star_centroids(img: np.ndarray) -> list[tuple[int, int]]:
 
     return centroids
 
-def remove_white_noise(img: np.ndarray):
-    """
-        Remove the white noise from the image.
-    Args:
-        img: the image to be processed
-    Returns:
-        img: the processed image
-    """
-    # get the image size
-    w, l = img.shape
-
-    # get the image mean
-    img_mean = np.mean(img)
-
-    # get the image standard deviation
-    img_std = np.std(img)
-
-    # get the image threshold
-    img_threshold = img_mean + 3 * img_std
-
-    # remove the white noise
-    for i in range(l):
-        for j in range(w):
-            if img[i][j] > img_threshold:
-                img[i][j] = 0
-
-    return img
-
 
 if __name__ == '__main__':
     # read the image
@@ -138,7 +110,7 @@ if __name__ == '__main__':
     stars = get_star_centroids(img)
 
     # test the accuracy
-    w, l = img.shape
+    h, w = img.shape
     for star in stars:
         row, col = star
         for coord in coords:

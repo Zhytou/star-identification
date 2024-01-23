@@ -6,8 +6,8 @@ import json
 
 
 # star sensor pixel num
-l = 1024
 w = 1024
+h = 1024
 
 # star sensor foucs in metres
 f = 58e-3
@@ -21,12 +21,12 @@ xtot = 2*tan(radians(FOVx/2))*f
 ytot = 2*tan(radians(FOVy/2))*f
 
 # length and width per pixel in metres
-myux = 2*tan(radians(FOVx/2))*f/l
-myuy = 2*tan(radians(FOVy/2))*f/w
+myux = 2*tan(radians(FOVx/2))*f/w
+myuy = 2*tan(radians(FOVy/2))*f/h
 
 # pixel num per length
-xpixel = l/xtot
-ypixel = w/ytot
+xpixel = w/xtot
+ypixel = h/ytot
 
 # star catalogue path
 catalogue_path = 'catalogues/Below_6.0_SAO.csv'
@@ -139,7 +139,7 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
     star_ids = list(stars_within_FOV['Star ID'])
 
     # initialize image & star info list to return
-    img = np.zeros((w,l))
+    img = np.zeros((h,w))
     stars = []
 
     for i in range(len(star_ras)):
@@ -160,11 +160,11 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
         y *= ypixel
 
         # check if the star is in the image
-        if abs(x) > l/2 or abs(y) > w/2:
+        if abs(x) > w/2 or abs(y) > h/2:
             continue
         # draw imagable star at (row, col)
-        col = round(l/2 + x)
-        row = round(w/2 - y)
+        col = round(w/2 + x)
+        row = round(h/2 - y)
         img = draw_star(col, row, star_magnitudes[i], img)
         stars.append([star_ids[i], (row, col), star_magnitudes[i]])
 
