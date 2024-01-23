@@ -1,35 +1,55 @@
+import os
+from datetime import datetime
 import cv2
 import numpy as np
+import pandas as pd
 from math import degrees, atan
 from scipy.spatial import KDTree
 
 from simulate import create_star_image
 from preprocess import get_star_centroids
 
-def generate_dataset(num_img: int, w: int=256, l: int=256):
+
+# dataset setting
+dataset_root_path = 'data'
+label_file = 'label.csv'
+# star number limit per image
+star_num_limit = 5
+
+
+def generate_dataset(num_img: int, h: int=256, w: int=256):
     '''
         Generate the dataset from the given star catalogue.
 
-        Here's the brief introduction of the generation process. Select a guide star as the reference star. Then, find the closest neighbor star and rotate the image until the adjacen star lies on the horizontal axis. Finally, crop the image and save it.
+        Here's the brief introduction of the generation process. Select a guide star as the reference star. Then, find the closest neighbor star and rotate the image until the adjacent star lies on the horizontal axis. Finally, crop the image and save it.
     Args:
         num_img: the number of images to be generated
-        w: the width of the image
-        l: the length of the image
+        h: the width of the image
+        w: the length of the image
     '''
-    # generate random right ascension[0, 360] and declination[-90, 90]
-    # ras = np.random.uniform(0, 360, num_img)
-    # des = np.random.uniform(-90, 90, num_img)
+    if not os.path.exists(dataset_root_path):
+        os.mkdir(dataset_root_path)
+    
+    # store the label information
+    labels = []
+
+    # generate random right ascension[-180, 180] and declination[-90, 90]
+    ras = np.random.randint(-180, 180, num_img)
+    des = np.random.uniform(-90, 90, num_img)
+    rolls = np.random.randint(-180, 180, num_img)
 
     # generate the star image
     for i in range(num_img):
         # star_info is a list of [star_ids[i], (row, col), star_magnitudes[i]]
-        img, star_info = create_star_image(69, -12, -13)
+        img, star_info = create_star_image(ras[i], des[i], 0)
+        if len(star_info) < star_num_limit:
+            continue
         # generate star_table: (row, col) -> star_id
         star_table = dict(map(lambda x: (x[1], x[0]), star_info))
 
         # get the centroids of the stars in the image
         stars = get_star_centroids(img)
-        assert(len(stars) == len(star_info))
+        # assert len(stars) == len(star_info), f'{ras[i], des[i]}'
         # data structure for fast nearest neighbour search
         tree = KDTree(stars)
 
@@ -41,27 +61,40 @@ def generate_dataset(num_img: int, w: int=256, l: int=256):
             if star_id == -1:
                 continue
             # check if the guide star is too close to the edge
-            if guide_star[0] - w/2 < 0 or guide_star[0] + w/2 > img.shape[0] or guide_star[1] - l/2 < 0 or guide_star[1] + l/2 > img.shape[1]:
+            row1, row2 = int(guide_star[0] - h/2), int(guide_star[0] + h/2)
+            col1, col2 = int(guide_star[1] - w/2), int(guide_star[1] + w/2)
+            if row1 < 0 or row2 > img.shape[0] or col1 < 0 or col2 > img.shape[1]:
                 continue
             
-            # find the nearest neighbor star to the reference one
-            _, idxs = tree.query(guide_star, 2)
-            nearest_star = stars[idxs[1]]
+            # find the top star_num_limit nearest neighbor star to the reference one
+            distances, idxs = tree.query(guide_star, star_num_limit)
+            # make sure at least star_num_limit neighbor stars are located in the region
+            if distances[-1] >= min(h, w) / 2:
+                continue
 
+            # find the nearest neighbor star
+            nearest_star = stars[idxs[1]]
             # calculate rotation angle & matrix
             angle = degrees(atan((nearest_star[0] - guide_star[0]) / (nearest_star[1] - guide_star[1])))
-            # be careful getRotationMatrix2D takes (width, height) as input, in other words (col, row)
+            # be careful that getRotationMatrix2D takes (width, height) as input, in other words (col, row)
             M = cv2.getRotationMatrix2D((float(guide_star[1]), float(guide_star[0])), angle, 1)
             rotated_img = cv2.warpAffine(img, M, img.shape)
 
             # crop and save the image
-            row1, row2 = int(guide_star[0] - w/2), int(guide_star[0] + w/2)
-            col1, col2 = int(guide_star[1] - l/2), int(guide_star[1] + l/2)
-
+            img_name = f'{dataset_root_path}/{datetime.now()}_{star_id}.png'
+            cv2.imwrite(img_name, rotated_img[row1:row2, col1:col2])
             # generate label information for training and testing
-            cv2.imwrite(f'{star_id}.png', rotated_img[row1:row2, col1:col2])
+            labels.append({
+                'img_name': img_name,
+                'ra': ras[i],
+                'de': des[i],
+                'star_id': star_id
+            })
 
+    # save the label information
+    df = pd.DataFrame(labels)
+    df.to_csv(os.path.join(dataset_root_path, label_file))
 
 
 if __name__ == '__main__':
-    generate_dataset(1)
+    generate_dataset(100)
