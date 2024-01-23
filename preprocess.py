@@ -8,7 +8,7 @@ from simulate import noise_std
 np.set_printoptions(threshold=np.inf)
 
 
-def get_centroids(img: np.ndarray) -> list[tuple[int, int]]:
+def get_star_centroids(img: np.ndarray) -> list[tuple[int, int]]:
     '''
         Get the centroids of the stars in the image.
     Args:
@@ -88,9 +88,7 @@ def get_centroids(img: np.ndarray) -> list[tuple[int, int]]:
             row_sum += row * (img[row][col] - threshold)
             col_sum += col * (img[row][col] - threshold)
             gray_sum += img[row][col] - threshold
-        x_mean = col_sum/gray_sum - l/2
-        y_mean = w/2 - row_sum/gray_sum
-        centroids.append((x_mean, y_mean))
+        centroids.append((round(row_sum/gray_sum), round(col_sum/gray_sum)))
 
     return centroids
 
@@ -133,16 +131,16 @@ if __name__ == '__main__':
 
     coords = []
     for i in range(len(real_stars)):
-        x, y = real_stars[i][1]
-        coords.append((x, y))
+        row, col = real_stars[i][1]
+        coords.append((row, col))
 
     # get the centroids
-    stars = get_centroids(img)
+    stars = get_star_centroids(img)
 
     # test the accuracy
     w, l = img.shape
     for star in stars:
-        x, y = star
+        row, col = star
         for coord in coords:
-            if abs(x - coord[0]) < 5 and abs(y - coord[1]) < 5:
+            if abs(row - coord[0]) < 5 and abs(col - coord[1]) < 5:
                 print('True')
