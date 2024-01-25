@@ -117,7 +117,6 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
 
     # get rotation matrix
     M = get_rotation_matrix(ra, de, roll)
-    M_transpose = np.round(np.matrix.transpose(M), decimals=5)
 
     # read star catalogue
     col_list = ["Star ID", "RA", "DE", "Magnitude"]
@@ -132,39 +131,36 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
     star_in_de = star_catalogue[(de1 <= star_catalogue['DE']) & (star_catalogue['DE'] <= de2)]
     star_in_de = star_in_de[['Star ID']].copy()
     stars_within_FOV = pd.merge(star_in_ra, star_in_de, on="Star ID")
+
+    # convert to celestial rectangular coordinate system
+    stars_within_FOV['X1'] = np.cos(stars_within_FOV['RA'])*np.cos(stars_within_FOV['DE'])
+    stars_within_FOV['Y1'] = np.sin(stars_within_FOV['RA'])*np.cos(stars_within_FOV['DE'])
+    stars_within_FOV['Z1'] = np.sin(stars_within_FOV['DE'])
+
+    # convert to star sensor coordinate system
+    stars_within_FOV[['X2', 'Y2', 'Z2']] = stars_within_FOV[['X1', 'Y1', 'Z1']].dot(M)
     
-    star_ras = list(stars_within_FOV['RA'])
-    star_des = list(stars_within_FOV['DE'])
+    # convert to image coordinate system
+    stars_within_FOV['X3'] = f*(stars_within_FOV['X2']/stars_within_FOV['Z2'])
+    stars_within_FOV['Y3'] = f*(stars_within_FOV['Y2']/stars_within_FOV['Z2'])
+
+    # convert to pixel coordinate system
+    stars_within_FOV['X4'] = np.round(w/2 + stars_within_FOV['X3']*xpixel).astype(int)
+    stars_within_FOV['Y4'] = np.round(h/2 - stars_within_FOV['Y3']*ypixel).astype(int)
+
+    # exclude stars beyond range
+    stars_within_FOV = stars_within_FOV[stars_within_FOV['X4'].between(0, w) & stars_within_FOV['Y4'].between(0, h)]
+
+    star_positions = list(zip(stars_within_FOV['X4'], stars_within_FOV['Y4']))
     star_magnitudes = list(stars_within_FOV['Magnitude'])
     star_ids = list(stars_within_FOV['Star ID'])
-
+    
     # initialize image & star info list to return
     img = np.zeros((h,w))
     stars = []
-
-    for i in range(len(star_ras)):
-        x = (cos(star_ras[i])*cos(star_des[i]))
-        y = (sin(star_ras[i])*cos(star_des[i]))
-        z = (sin(star_des[i]))
-
-        # convert to star sensor coordinate system
-        # coord is like [[x], [y], [z]]
-        coord = M_transpose.dot(np.array([[x], [y], [z]]))
-
-        # convert to image coordinate system
-        x = f*(coord[0]/coord[2])[0]
-        y = f*(coord[1]/coord[2])[0]
-
-        # convert to pixel coordinate system
-        x *= xpixel
-        y *= ypixel
-
-        # check if the star is in the image
-        if abs(x) > w/2 or abs(y) > h/2:
-            continue
+    for i in range(len(star_magnitudes)):
         # draw imagable star at (row, col)
-        col = round(w/2 + x)
-        row = round(h/2 - y)
+        col, row = star_positions[i]       
         img = draw_star(col, row, star_magnitudes[i], img)
         stars.append([star_ids[i], (row, col), star_magnitudes[i]])
 
