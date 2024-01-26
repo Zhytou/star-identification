@@ -10,14 +10,15 @@ from simulate import create_star_image
 from preprocess import get_star_centroids
 
 
-# dataset setting
 dataset_root_path = 'data'
-label_file = 'label.csv'
+# image dataset setting
+img_dataset_sub_path = 'star_images'
+label_file = 'labels.csv'
 # star number limit per image
 star_num_limit = 5
 
 
-def generate_dataset(num_img: int, h: int=256, w: int=256):
+def generate_image_dataset(num_img: int, h: int=256, w: int=256):
     '''
         Generate the dataset from the given star catalogue.
 
@@ -29,14 +30,17 @@ def generate_dataset(num_img: int, h: int=256, w: int=256):
     '''
     if not os.path.exists(dataset_root_path):
         os.mkdir(dataset_root_path)
-    
+    if not os.path.exists(os.path.join(dataset_root_path, img_dataset_sub_path)):
+        os.mkdir(os.path.join(dataset_root_path, img_dataset_sub_path))
+
+    dataset_path = os.path.join(dataset_root_path, img_dataset_sub_path)
+
     # store the label information
     labels = []
 
     # generate random right ascension[-180, 180] and declination[-90, 90]
     ras = np.random.randint(-180, 180, num_img)
     des = np.random.uniform(-90, 90, num_img)
-    rolls = np.random.randint(-180, 180, num_img)
 
     # generate the star image
     for i in range(num_img):
@@ -75,14 +79,17 @@ def generate_dataset(num_img: int, h: int=256, w: int=256):
             # find the nearest neighbor star
             nearest_star = stars[idxs[1]]
             # calculate rotation angle & matrix
-            angle = degrees(atan((nearest_star[0] - guide_star[0]) / (nearest_star[1] - guide_star[1])))
+            if nearest_star[1] == guide_star[1]:
+                angle = 90
+            else:
+                angle = degrees(atan((nearest_star[0] - guide_star[0]) / (nearest_star[1] - guide_star[1])))
             # be careful that getRotationMatrix2D takes (width, height) as input, in other words (col, row)
             M = cv2.getRotationMatrix2D((float(guide_star[1]), float(guide_star[0])), angle, 1)
             rotated_img = cv2.warpAffine(img, M, img.shape)
 
             # crop and save the image
-            img_name = f'{dataset_root_path}/{datetime.now()}_{star_id}.png'
-            cv2.imwrite(img_name, rotated_img[row1:row2, col1:col2])
+            img_name = f'{datetime.now()}_{star_id}.png'
+            cv2.imwrite(os.path.join(dataset_path, img_name), rotated_img[row1:row2, col1:col2])
             # generate label information for training and testing
             labels.append({
                 'img_name': img_name,
@@ -93,8 +100,13 @@ def generate_dataset(num_img: int, h: int=256, w: int=256):
 
     # save the label information
     df = pd.DataFrame(labels)
-    df.to_csv(os.path.join(dataset_root_path, label_file))
+
+    # read the old label information
+    if os.path.exists(os.path.join(dataset_path, label_file)):
+        odf = pd.read_csv(os.path.join(dataset_path, label_file), usecols=['img_name', 'ra', 'de', 'star_id'])
+        df = pd.merge(df, odf, on='img_name')
+    df.to_csv(os.path.join(dataset_path, label_file))
 
 
 if __name__ == '__main__':
-    generate_dataset(100)
+    generate_image_dataset(100)
