@@ -18,7 +18,7 @@ label_file = 'labels.csv'
 star_num_limit = 5
 
 
-def generate_image_dataset(num_img: int, h: int=256, w: int=256):
+def generate_image_dataset(num_img: int, h: int=224, w: int=224):
     '''
         Generate the dataset from the given star catalogue.
 
@@ -28,6 +28,25 @@ def generate_image_dataset(num_img: int, h: int=256, w: int=256):
         h: the width of the image
         w: the length of the image
     '''
+
+    def get_rotation_angle(nearest_star: np.ndarray, guide_star: np.ndarray) -> float:
+        if nearest_star[1] == guide_star[1]:
+            angle = 90
+            if nearest_star[0] > guide_star[0]:
+                angle = 270
+        else:
+            angle = abs(degrees(atan((nearest_star[0] - guide_star[0]) / (nearest_star[1] - guide_star[1]))))
+            # (-90, 90) -> (0, 360)
+            if nearest_star[1] > guide_star[1]:
+                if nearest_star[0] > guide_star[0]:
+                    angle = 360 - angle
+            else:
+                if nearest_star[0] < guide_star[0]:
+                    angle = 180 - angle
+                else:
+                    angle = 180 + angle
+        return angle
+    
     if not os.path.exists(dataset_root_path):
         os.mkdir(dataset_root_path)
     if not os.path.exists(os.path.join(dataset_root_path, img_dataset_sub_path)):
@@ -79,12 +98,9 @@ def generate_image_dataset(num_img: int, h: int=256, w: int=256):
             # find the nearest neighbor star
             nearest_star = stars[idxs[1]]
             # calculate rotation angle & matrix
-            if nearest_star[1] == guide_star[1]:
-                angle = 90
-            else:
-                angle = degrees(atan((nearest_star[0] - guide_star[0]) / (nearest_star[1] - guide_star[1])))
+            angle = get_rotation_angle(nearest_star, guide_star)
             # be careful that getRotationMatrix2D takes (width, height) as input, in other words (col, row)
-            M = cv2.getRotationMatrix2D((float(guide_star[1]), float(guide_star[0])), angle, 1)
+            M = cv2.getRotationMatrix2D((float(guide_star[1]), float(guide_star[0])), -angle, 1)
             rotated_img = cv2.warpAffine(img, M, img.shape)
 
             # crop and save the image
@@ -104,7 +120,7 @@ def generate_image_dataset(num_img: int, h: int=256, w: int=256):
     # read the old label information
     if os.path.exists(os.path.join(dataset_path, label_file)):
         odf = pd.read_csv(os.path.join(dataset_path, label_file), usecols=['img_name', 'ra', 'de', 'star_id'])
-        df = pd.merge(df, odf, on='img_name')
+        df = pd.concat([df, odf], ignore_index=True)
     df.to_csv(os.path.join(dataset_path, label_file))
 
 
