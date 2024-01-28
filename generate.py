@@ -12,7 +12,7 @@ from preprocess import get_star_centroids
 
 dataset_root_path = 'data'
 # star number limit per sample
-star_num_limit = 7
+star_num_per_sample = 7
 label_file = 'labels.csv'
 
 # image dataset setting
@@ -22,27 +22,27 @@ img_dataset_sub_path = 'star_images'
 point_dataset_sub_path = 'star_points'
 
 
-def get_rotation_angle(nearest_star: np.ndarray, guide_star: np.ndarray) -> float:
+def get_rotation_angle(neighbor_star: np.ndarray, reference_star: np.ndarray) -> float:
     '''
-    Calculate the angle to rotate the nearest neighbor star around guide star until it aligns to x axis.
+    Calculate the angle to rotate the neighbor star around reference star until it aligns to x axis.
     Args:
-        nearest_star: the nearest neighbor star
-        guide_star: the guide star
+        neighbor_star: the neighbor star
+        reference_star: the reference star
     Returns:
-        angle: the angle to rotate the nearest neighbor star around guide star
+        angle: the angle to rotate the nearest neighbor star around reference star
     '''
-    if nearest_star[1] == guide_star[1]:
+    if neighbor_star[1] == reference_star[1]:
         angle = 90
-        if nearest_star[0] > guide_star[0]:
+        if neighbor_star[0] > reference_star[0]:
             angle = 270
     else:
-        angle = abs(degrees(atan((nearest_star[0] - guide_star[0]) / (nearest_star[1] - guide_star[1]))))
+        angle = abs(degrees(atan((neighbor_star[0] - reference_star[0]) / (neighbor_star[1] - reference_star[1]))))
         # (-90, 90) -> (0, 360)
-        if nearest_star[1] > guide_star[1]:
-            if nearest_star[0] > guide_star[0]:
+        if neighbor_star[1] > reference_star[1]:
+            if neighbor_star[0] > reference_star[0]:
                 angle = 360 - angle
         else:
-            if nearest_star[0] < guide_star[0]:
+            if neighbor_star[0] < reference_star[0]:
                 angle = 180 - angle
             else:
                 angle = 180 + angle
@@ -78,7 +78,7 @@ def generate_image_dataset(num_sample: int, h: int=224, w: int=224):
     for i in range(num_sample):
         # star_info is a list of [star_ids[i], (row, col), star_magnitudes[i]]
         img, star_info = create_star_image(ras[i], des[i], 0)
-        if len(star_info) < star_num_limit:
+        if len(star_info) < star_num_per_sample + 1:
             continue
         # generate star_table: (row, col) -> star_id
         star_table = dict(map(lambda x: (x[1], x[0]), star_info))
@@ -102,9 +102,9 @@ def generate_image_dataset(num_sample: int, h: int=224, w: int=224):
             if row1 < 0 or row2 > img.shape[0] or col1 < 0 or col2 > img.shape[1]:
                 continue
             
-            # find the top star_num_limit nearest neighbor star to the reference one
-            distances, idxs = tree.query(guide_star, star_num_limit)
-            # make sure at least star_num_limit neighbor stars are located in the region
+            # find the top star_num_per_sample nearest neighbor star to the reference one
+            distances, idxs = tree.query(guide_star, star_num_per_sample + 1)
+            # make sure at least star_num_per_sample neighbor stars are located in the region
             if distances[-1] >= min(h, w) / 2:
                 continue
 
@@ -162,7 +162,7 @@ def generate_point_dataset(num_sample: int):
     for i in range(num_sample):
         # star_info is a list of [star_ids[i], (row, col), star_magnitudes[i]]
         img, star_info = create_star_image(ras[i], des[i], 0)
-        if len(star_info) < star_num_limit:
+        if len(star_info) < star_num_per_sample + 1:
             continue
         # generate star_table: (row, col) -> star_id
         star_table = dict(map(lambda x: (x[1], x[0]), star_info))
@@ -181,23 +181,30 @@ def generate_point_dataset(num_sample: int):
             if star_id == -1:
                 continue
             
-            # find the top star_num_limit nearest neighbor star to the reference one
-            _, idxs = tree.query(guide_star, star_num_limit)
+            # find the top star_num_per_sample nearest neighbor star to the reference one
+            _, idxs = tree.query(guide_star, star_num_per_sample + 1)
             # find the nearest neighbor star
             nearest_star = stars[idxs[1]]
             # calculate rotation angle & matrix
             angle = radians(-get_rotation_angle(nearest_star, guide_star))
             M = np.array([[cos(angle), -sin(angle)], [sin(angle), cos(angle)]])
+            
+            neighbor_stars = stars[idxs[1:]] - guide_star
+            # calculate the angle of each neighbor star
+            angles = np.array(list(map(lambda x: get_rotation_angle(x, guide_star), neighbor_stars)))
+            # sort the neighbor stars by angle
+            neighbor_stars = neighbor_stars[np.argsort(angles)]
             # calculate the position of the neighbor stars after rotation
-            neighbor_stars = stars[idxs] - guide_star
-            rotated_stars = np.dot(neighbor_stars, M.T)
+            rotated_stars = np.round(np.dot(neighbor_stars, M.T), 5)
             # generate label information for training and testing
-            labels.append({
-                'points': rotated_stars,
+            label = {
                 'ra': ras[i],
                 'de': des[i],
                 'star_id': star_id
-            })
+            }
+            for i, rotated_star in enumerate(rotated_stars):
+                label[f'point{i}_x'], label[f'point{i}_y'] = rotated_star[0], rotated_star[1]
+            labels.append(label)
 
     # save the label information
     df = pd.DataFrame(labels)
@@ -210,5 +217,5 @@ def generate_point_dataset(num_sample: int):
 
 
 if __name__ == '__main__':
-    generate_point_dataset(100)
+    generate_point_dataset(10)
     # generate_image_dataset(100)
