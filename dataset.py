@@ -1,24 +1,26 @@
 import os
 import torch
 import cv2
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import torchvision.transforms as transforms
 from torch.utils.data import Dataset, DataLoader
+
+from generate import star_num_per_sample
 
 
 class StarImageDataset(Dataset):
     '''Star image dataset'''
 
-    def __init__(self, root_dir: str, csv_file: str, transform=None):
+    def __init__(self, root_dir: str, label_file: str):
         '''
         Args:
             root_dir: directory with all the images
-            csv_file: name of the csv file with annotations
-            transform: optional transform to be applied on a sample
+            label_file: name of the csv file with annotations
         '''
-        self.label_df = pd.read_csv(os.path.join(root_dir, csv_file))
+        self.label_df = pd.read_csv(os.path.join(root_dir, label_file))
         self.root_dir = root_dir
-        self.transform = transform
 
     def __len__(self):
         return len(self.label_df)
@@ -27,26 +29,59 @@ class StarImageDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        img_name = os.path.join(self.root_dir, self.label_df.iloc[idx, 1])
-        img = cv2.imread(img_name)
-        star_id = self.label_df.iloc[idx, -1]
+        img_name = os.path.join(self.root_dir, self.label_df.loc[idx, 'img_name'])
+        img = cv2.imread(img_name, 0)
+        star_id = self.label_df.loc[idx, 'star_id']
 
-        if self.transform:
-            img = self.transform(img)
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=0.5, std=0.5)
+        ])
+        
+        return transform(img), torch.tensor([star_id])
 
-        return torch.from_numpy(img), torch.tensor([star_id])
+
+class StarPointDataset(Dataset):
+    '''Star point dataset'''
+
+    def __init__(self, label_file_path: str):
+        '''
+        Args:
+            label_file_path: name of the csv file with annotations
+        '''
+        
+        self.label_df = pd.read_csv(label_file_path)
+
+    def __len__(self):
+        return len(self.label_df)
+
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        points = []
+        for i in range(star_num_per_sample):
+            x, y = self.label_df.loc[0, [f'point{i}_x', f'point{i}_y']]
+            points.append([x, y])
+        points = np.array(points)
+        star_id = self.label_df.loc[idx, 'star_id']
+        
+        return torch.from_numpy(points), torch.tensor([star_id])
 
 
 if __name__ == '__main__':
-    dataset = StarImageDataset('data/star_images/', 'labels.csv')
-    loader = DataLoader(dataset, batch_size=4, shuffle=True)
-
+    img_dataset = StarImageDataset('data/star_images/', 'labels.csv')
     fig = plt.figure(figsize=(8, 8))
     col, row = 3, 3
     for i in range(1, col * row + 1):
-        idx = torch.randint(len(dataset), size=(1,)).item()
-        img, label = dataset[idx]
+        idx = torch.randint(len(img_dataset), size=(1,)).item()
+        img, label = img_dataset[idx]
         fig.add_subplot(row, col, i)
         plt.axis("off")
         plt.imshow(img.squeeze(), cmap="gray")
     plt.show()
+
+    pt_dataset = StarPointDataset('data/star_points/labels.csv')
+    pt_loader = DataLoader(pt_dataset, batch_size=4, shuffle=True)
+    for points, labels in pt_loader:
+        print(points)
