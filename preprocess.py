@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 from skimage import measure
 
-from simulate import noise_std
+from simulate import noise_std, create_star_image
 
 np.set_printoptions(threshold=np.inf)
 
@@ -72,7 +72,7 @@ def get_star_centroids(img: np.ndarray) -> list[tuple[int, int]]:
     # calaculate the threshold
     threshold = cal_multiwind_threshold(img)
 
-    # if img[u, v] < threshold: 0, else: img[u, v]
+    # if img[u, v] < threshold + 20: 0, else: img[u, v]
     _, nimg = cv2.threshold(img, threshold, 255, cv2.THRESH_TOZERO)
 
     # rough group star using connectivity
@@ -94,25 +94,39 @@ def get_star_centroids(img: np.ndarray) -> list[tuple[int, int]]:
 
 
 if __name__ == '__main__':
-    # read the image
-    img = cv2.imread('test2.png', 0)
+    error_num = 0
+    num_test = 1000
+    
+    # generate random right ascension[-180, 180] and declination[-90, 90]
+    ras = np.random.randint(-180, 180, num_test)
+    des = np.random.uniform(-90, 90, num_test)
 
-    # read star info
-    with open('test2.json', 'r') as f:
-        real_stars = json.load(f)
+    # generate the star image
+    for i in range(num_test):
+        img, star_info = create_star_image(ras[i], des[i], 0)
+        
+        # generate star_table: (row, col) -> star_id
+        star_table = dict(map(lambda x: (x[1], x[0]), star_info))
 
-    coords = []
-    for i in range(len(real_stars)):
-        row, col = real_stars[i][1]
-        coords.append((row, col))
+        # get the centroids of the stars in the image
+        stars = get_star_centroids(img)
 
-    # get the centroids
-    stars = get_star_centroids(img)
+        if len(stars) != len(star_info):
+            error_num += 1
+            # print(f'{ras[i], des[i]}')
+            # print(len(stars), len(star_info))
+            # print(stars)
+            # print(star_info)
 
-    # test the accuracy
-    h, w = img.shape
-    for star in stars:
-        row, col = star
-        for coord in coords:
-            if abs(row - coord[0]) < 5 and abs(col - coord[1]) < 5:
-                print('True')
+        # for star in stars:
+        #     # check if false star
+        #     star_id = star_table.get(tuple(star), -1)
+        #     if star_id == -1:
+        #         error_num += 1
+        #         # print(f'{ras[i], des[i]}')
+        #         # print(len(stars), len(star_info))
+        #         # print(stars)
+        #         # print(star_info)
+        #         break
+    
+    print(f'error_num: {error_num}, accuracy: {(num_test - error_num)*100.0/num_test}%')
