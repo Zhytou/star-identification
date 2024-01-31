@@ -59,14 +59,15 @@ class StarPointDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        points = []
+        cols = []
         for i in range(star_num_per_sample):
-            x, y = self.label_df.loc[0, [f'point{i}_x', f'point{i}_y']]
-            points.append([x, y])
-        points = np.array(points)
+            cols.append(f'point{i}_x')
+            cols.append(f'point{i}_y')
+
+        points = self.label_df.loc[idx, cols].values
         star_id = self.label_df.loc[idx, 'star_id']
         
-        return torch.from_numpy(points), torch.tensor([star_id])
+        return torch.from_numpy(points).float(), torch.tensor([star_id])
 
 
 if __name__ == '__main__':
