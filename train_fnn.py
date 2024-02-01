@@ -7,8 +7,8 @@ from generate import star_num_per_sample, num_classes
 
 
 # training setting
-batch_size = 4
-n_iters = 3000
+batch_size = 10
+n_iters = 6000
 learning_rate = 0.1
 
 # define datasets for training & validation
@@ -20,36 +20,31 @@ train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bat
 test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False)
 
 # print split sizes
-print('Training set has {} instances'.format(len(train_dataset)))
+print(f'Training set has {len(train_dataset)} instances')
 
 class FeedforwardNeuralNetModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim):
+    # model structure refers to https://www.mdpi.com/1424-8220/20/13/3684
+    def __init__(self, input_dim: int, output_dim: int, hidden_dims: list[int] = [300, 100]):
         super(FeedforwardNeuralNetModel, self).__init__()
-        # Linear function
-        self.fc1 = nn.Linear(input_dim, hidden_dim) 
-
-        # Non-linearity
-        self.sigmoid = nn.Sigmoid()
-
-        # Linear function (readout)
-        self.fc2 = nn.Linear(hidden_dim, output_dim)  
+        self.layer = nn.Sequential(
+            nn.BatchNorm1d(input_dim),
+            nn.Linear(input_dim, hidden_dims[0]),
+            nn.ReLU(),
+            nn.BatchNorm1d(hidden_dims[0]),
+            nn.Dropout1d(0.2),
+            nn.Linear(hidden_dims[0], hidden_dims[1]),
+            nn.ReLU(),
+            nn.BatchNorm1d(hidden_dims[1]),
+            nn.Dropout1d(0.2),
+            nn.Linear(hidden_dims[1], output_dim)
+        )
 
     def forward(self, x):
-        # Linear function
-        out = self.fc1(x)
-
-        # Non-linearity
-        out = self.sigmoid(out)
-
-        # Linear function (readout)
-        out = self.fc2(out)
+        out = self.layer(x)
         return out
     
-input_dim = star_num_per_sample * 2
-hidden_dim = 100
-output_dim = num_classes
 
-model = FeedforwardNeuralNetModel(input_dim, hidden_dim, output_dim)
+model = FeedforwardNeuralNetModel(star_num_per_sample * 2, num_classes)
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)  
 
@@ -61,21 +56,15 @@ for epoch in range(num_epochs):
     for points, labels in train_loader:
         # Clear gradients w.r.t. parameters
         optimizer.zero_grad()
-
         # Forward pass to get output/logits
         scores = model(points)
-
         # Calculate Loss: softmax --> cross entropy loss
         loss = criterion(scores, labels)
-
         # Getting gradients w.r.t. parameters
         loss.backward()
-
         # Updating parameters
         optimizer.step()
-
         iter += 1
-
         if iter % 500 == 0:
             # Calculate Accuracy         
             correct = 0
@@ -84,17 +73,12 @@ for epoch in range(num_epochs):
             for points, labels in test_loader:
                 # Forward pass only to get logits/output
                 outputs = model(points)
-
                 # Get predictions from the maximum value
                 _, predicted = torch.max(outputs.data, 1)
-
                 # Total number of labels
-                total += labels.size(0)
-
+                total += batch_size
                 # Total correct predictions
-                correct += (predicted == labels).sum()
-
-            accuracy = 100 * correct / total
-
+                correct += (predicted == labels).sum().item()
+            accuracy = round(100.0 * correct / total, 2)
             # Print Loss
-            print('Iteration: {}. Loss: {}. Accuracy: {}'.format(iter, loss.item(), accuracy))
+            print(f'Iteration: {iter}. Loss: {loss.item()}. Accuracy: {accuracy}%')
