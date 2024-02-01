@@ -1,29 +1,45 @@
+import os
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt, matplotlib.axes._axes as axes
 from math import radians, sqrt, cos
 from simulate import FOVx, FOVy
 
 
-def draw_star_distribution(catalogue: pd.DataFrame):
-    ras, des = catalogue['RA'], catalogue['DE']
-    plt.scatter(ras, des, s=1)
-    plt.show()
+def draw_star_distribution(catalogue: pd.DataFrame, ax: axes.Axes, title: str):
+    '''
+    Draw the distribution of stars in the celestial sphere.
+   
+    Args:
+        catalogue: the star catalogue
+        ax: the axes to draw
+        title: the title of the plot
+    '''
+    
+    ras, des = np.degrees(catalogue['RA']), np.degrees(catalogue['DE'])
+    ax.scatter(ras, des, s=1)
+    ax.set_title(title)
+    ax.set_xlim(-180, 180)
+    ax.set_ylim(-90, 90)
+    ax.set_xlabel('RA')
+    ax.set_ylabel('DE')
 
 
-def draw_propability_versus_star_num_within_FOV(catalogue: pd.DataFrame, num_vector: int=10000):
+def draw_probability_versus_star_num_within_FOV(catalogue: pd.DataFrame, ax: axes.Axes, title: str, num_vector: int=10000):
     '''
     Draw the probability distribution of the number of stars within FOV.
 
     Args:
         catalogue: the original catalogue
+        ax: the axes to draw
+        title: the title of the plot
         num_vector: the number of vectors to be generated
     '''
     # calculate the half of FOV diagonal distance
     R = sqrt((radians(FOVx)**2)+(radians(FOVy)**2))/2
     
-    # generate random right ascension[0, 360] and declination[-90, 90]
-    ras = np.random.randint(0, 360, num_vector)
+    # generate random right ascension[-180, 180] and declination[-90, 90]
+    ras = np.random.randint(-180, 180, num_vector)
     des = np.random.randint(-90, 90, num_vector)
     
     # record the result: star_num -> sample_num
@@ -40,9 +56,17 @@ def draw_propability_versus_star_num_within_FOV(catalogue: pd.DataFrame, num_vec
         stars_within_FOV = pd.merge(stars_in_ra_range, stars_in_de_range, on="Star ID")
         star_num = len(stars_within_FOV)
         table[star_num] = table.get(star_num, 0) + 1
-    print(table)
-    plt.plot(table.keys(), table.values())
-    plt.show()
+    
+    # sort table items by key
+    num_stars = sorted(table.keys())
+    probability = [(table[num_star]*100.0)/num_vector for num_star in num_stars]
+    print(num_stars, probability)
+    ax.plot(num_stars, probability)
+    ax.set_title(title)
+    ax.set_xlim(0, 100)
+    ax.set_ylim(0, 100)
+    ax.set_xlabel('Number of stars within FOV')
+    ax.set_ylabel('Probability%')
 
 
 def filter_catalogue(catalogue: pd.DataFrame, limit_mv: float=6.0, num_vector: int=10000, num_star_per_region_limit: int=12, angular_distance_limit: float=1) -> pd.DataFrame:
@@ -64,7 +88,7 @@ def filter_catalogue(catalogue: pd.DataFrame, limit_mv: float=6.0, num_vector: i
     catalogue = catalogue[catalogue['Magnitude'] <= limit_mv]
 
     # generate uniform distributed random vectors, which seperate the celestial sphere into multiple regions
-    ras = np.random.uniform(0, 360, num_vector)
+    ras = np.random.uniform(-180, 180, num_vector)
     des = np.random.uniform(-90, 90, num_vector)
 
     # filtered star ids
@@ -107,7 +131,7 @@ def filter_catalogue(catalogue: pd.DataFrame, limit_mv: float=6.0, num_vector: i
 
         # screen the top star_num_per_region_limit brightest stars in each region
         if len(stars_within_FOV) > num_star_per_region_limit:
-            stars_within_FOV = stars_within_FOV.nlargest(num_star_per_region_limit, 'Magnitude')
+            stars_within_FOV = stars_within_FOV.nsmallest(num_star_per_region_limit, 'Magnitude')
 
         filtered_stars_id.update(stars_within_FOV['Star ID'])
 
@@ -116,12 +140,19 @@ def filter_catalogue(catalogue: pd.DataFrame, limit_mv: float=6.0, num_vector: i
 
 
 if __name__ == '__main__':
-    df = pd.read_csv("catalogues/Below_6.0_SAO.csv", usecols=["Star ID", "RA", "DE", "Magnitude"])
-    # before filter
-    
-    # draw_propability_versus_star_num_within_FOV(df)
-    filtered_df = filter_catalogue(df)
-    # after filter
-    print(len(filtered_df))
-    filtered_df.to_csv('catalogues/new.csv')
-    draw_star_distribution(filtered_df)
+    df = pd.read_csv('catalogues/Below_6.0_SAO.csv', usecols=["Star ID", "RA", "DE", "Magnitude"])
+    if os.path.exists('catalogues/Filtered_Below_6.0_SAO.csv'):
+        filtered_df = pd.read_csv('catalogues/Filtered_Below_6.0_SAO.csv')
+    else:
+        filtered_df = filter_catalogue(df)
+        filtered_df.to_csv('catalogues/Filtered_Below_6.0_SAO.csv')
+
+    fig1, axs1 = plt.subplots(2)
+    draw_star_distribution(df, axs1[0], "Original")
+    draw_star_distribution(filtered_df, axs1[1], "Filtered")
+
+    fig2, axs2 = plt.subplots(2)
+    draw_probability_versus_star_num_within_FOV(df, axs2[0], "Original")
+    draw_probability_versus_star_num_within_FOV(filtered_df, axs2[1], "Filtered")
+
+    plt.show()
