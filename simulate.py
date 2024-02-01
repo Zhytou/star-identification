@@ -29,7 +29,7 @@ xpixel = w/xtot
 ypixel = h/ytot
 
 # star catalogue path
-catalogue_path = 'catalogues/Below_6.0_SAO.csv'
+catalogue_path = 'catalogues/Filtered_Below_6.0_SAO.csv'
 
 # the standard deviation of white noise 
 noise_std = 10
@@ -123,14 +123,14 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
     star_catalogue = pd.read_csv(catalogue_path, usecols=col_list)
 
     # search for image-able stars
-    R = (sqrt((radians(FOVx)**2)+(radians(FOVy)**2))/2)
+    R = sqrt((radians(FOVx)**2)+(radians(FOVy)**2))/2
     ra1, ra2 = (ra - (R/cos(de))), (ra + (R/cos(de)))
     de1, de2 = (de - R), (de + R)
 
-    star_in_ra = star_catalogue[(ra1 <= star_catalogue['RA']) & (star_catalogue['RA'] <= ra2)]
-    star_in_de = star_catalogue[(de1 <= star_catalogue['DE']) & (star_catalogue['DE'] <= de2)]
-    star_in_de = star_in_de[['Star ID']].copy()
-    stars_within_FOV = pd.merge(star_in_ra, star_in_de, on="Star ID")
+    stars_in_ra_range = star_catalogue[(ra1 <= star_catalogue['RA']) & (star_catalogue['RA'] <= ra2)]
+    stars_in_de_range = star_catalogue[(de1 <= star_catalogue['DE']) & (star_catalogue['DE'] <= de2)]
+    stars_in_de_range = stars_in_de_range[['Star ID']].copy()
+    stars_within_FOV = pd.merge(stars_in_ra_range, stars_in_de_range, on="Star ID")
 
     # convert to celestial rectangular coordinate system
     stars_within_FOV['X1'] = np.cos(stars_within_FOV['RA'])*np.cos(stars_within_FOV['DE'])
@@ -174,6 +174,6 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
 
 
 if __name__ == '__main__':
-    img, stars = create_star_image(69, -12, -13)
-    cv2.imwrite("test2.png", img)
-    json.dump(stars, open("test2.json", "w"))
+    img, stars = create_star_image(15.3782, 85.9900, 0)
+    cv2.imwrite("test.png", img)
+    json.dump(stars, open("test.json", "w"))
