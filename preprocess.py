@@ -97,9 +97,9 @@ if __name__ == '__main__':
     error_num = 0
     num_test = 1000
     
-    # generate random right ascension[-180, 180] and declination[-90, 90]
+    # generate random right ascension[0, 360] and declination[-90, 90]
     ras = np.random.randint(-180, 180, num_test)
-    des = np.random.uniform(-90, 90, num_test)
+    des = np.random.randint(-90, 90, num_test)
 
     # generate the star image
     for i in range(num_test):
