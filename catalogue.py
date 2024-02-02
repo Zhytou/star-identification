@@ -15,7 +15,6 @@ def draw_star_distribution(catalogue: pd.DataFrame, ax: axes.Axes, title: str):
         ax: the axes to draw
         title: the title of the plot
     '''
-    
     ras, des = np.degrees(catalogue['RA']), np.degrees(catalogue['DE'])
     ax.scatter(ras, des, s=1)
     ax.set_title(title)
@@ -39,8 +38,8 @@ def draw_probability_versus_star_num_within_FOV(catalogue: pd.DataFrame, ax: axe
     R = sqrt((radians(FOVx)**2)+(radians(FOVy)**2))/2
     
     # generate random right ascension[-180, 180] and declination[-90, 90]
-    ras = np.random.randint(-180, 180, num_vector)
-    des = np.random.randint(-90, 90, num_vector)
+    ras = np.random.uniform(-180, 180, num_vector)
+    des = np.random.uniform(-90, 90, num_vector)
     
     # record the result: star_num -> sample_num
     table = {}
@@ -138,14 +137,17 @@ def filter_catalogue(catalogue: pd.DataFrame, limit_mv: float=6.0, num_vector: i
     return catalogue[catalogue['Star ID'].isin(filtered_stars_id)]
 
 
-
 if __name__ == '__main__':
-    df = pd.read_csv('catalogues/Below_6.0_SAO.csv', usecols=["Star ID", "RA", "DE", "Magnitude"])
-    if os.path.exists('catalogues/Filtered_Below_6.0_SAO.csv'):
-        filtered_df = pd.read_csv('catalogues/Filtered_Below_6.0_SAO.csv')
+    file = 'catalogues/Below_6.0_SAO.csv'
+    limit_mv = 5.7
+    filtered_file = f'catalogues/Filtered_Below_{limit_mv}_SAO.csv'
+
+    df = pd.read_csv(file, usecols=["Star ID", "RA", "DE", "Magnitude"])
+    if os.path.exists(filtered_file):
+        filtered_df = pd.read_csv(filtered_file)
     else:
-        filtered_df = filter_catalogue(df)
-        filtered_df.to_csv('catalogues/Filtered_Below_6.0_SAO.csv')
+        filtered_df = filter_catalogue(df, 5.7).reset_index(drop=True)
+        filtered_df.to_csv(filtered_file)
 
     fig1, axs1 = plt.subplots(2)
     draw_star_distribution(df, axs1[0], "Original")
