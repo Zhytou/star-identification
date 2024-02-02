@@ -1,4 +1,5 @@
 import os
+import uuid
 from datetime import datetime
 import cv2
 import numpy as np
@@ -16,13 +17,13 @@ catalogue = pd.read_csv(catalogue_path, usecols= ["Star ID", "RA", "DE", "Magnit
 num_classes = len(catalogue)
 # star number limit per sample
 star_num_per_sample = 7
-label_file = 'labels.csv'
 
 # image dataset setting
 img_dataset_sub_path = 'star_images'
 
 # point dataset setting
-point_dataset_sub_path = 'star_points'
+catalogue_name = os.path.basename(catalogue_path).rsplit('.', 1)[0]
+point_dataset_sub_path = f'star_points/{catalogue_name}'
 
 
 def get_rotation_angle(neighbor_star: np.ndarray, reference_star: np.ndarray) -> float:
@@ -78,9 +79,9 @@ def generate_image_dataset(num_sample: int, h: int=224, w: int=224):
     des = np.random.randint(-90, 90, num_sample)
 
     # generate the star image
-    for i in range(num_sample):
+    for ra, de in zip(ras, des):
         # star_info is a list of [star_ids[i], (row, col), star_magnitudes[i]]
-        img, star_info = create_star_image(ras[i], des[i], 0)
+        img, star_info = create_star_image(ra, de, 0)
         if len(star_info) < star_num_per_sample + 1:
             continue
         # generate star_table: (row, col) -> star_id
@@ -88,7 +89,6 @@ def generate_image_dataset(num_sample: int, h: int=224, w: int=224):
 
         # get the centroids of the stars in the image
         stars = get_star_centroids(img)
-        # assert len(stars) == len(star_info), f'{ras[i], des[i]}'
         # data structure for fast nearest neighbour search
         tree = KDTree(stars)
 
@@ -125,8 +125,8 @@ def generate_image_dataset(num_sample: int, h: int=224, w: int=224):
             # generate label information for training and testing
             labels.append({
                 'img_name': img_name,
-                'ra': ras[i],
-                'de': des[i],
+                'ra': ra,
+                'de': de,
                 'star_id': star_id
             })
 
@@ -134,10 +134,10 @@ def generate_image_dataset(num_sample: int, h: int=224, w: int=224):
     df = pd.DataFrame(labels)
 
     # read the old label information
-    if os.path.exists(os.path.join(dataset_path, label_file)):
-        odf = pd.read_csv(os.path.join(dataset_path, label_file), usecols=['img_name', 'ra', 'de', 'star_id'])
+    if os.path.exists(os.path.join(dataset_path, 'labels.csv')):
+        odf = pd.read_csv(os.path.join(dataset_path, 'labels.csv'), usecols=['img_name', 'ra', 'de', 'star_id'])
         df = pd.concat([df, odf], ignore_index=True)
-    df.to_csv(os.path.join(dataset_path, label_file))
+    df.to_csv(os.path.join(dataset_path, 'labels.csv'))
 
 
 def generate_point_dataset(num_sample: int):
@@ -158,23 +158,22 @@ def generate_point_dataset(num_sample: int):
     labels = []
 
     # generate random right ascension[-180, 180] and declination[-90, 90]
-    ras = np.random.randint(-180, 180, num_sample)
-    des = np.random.randint(-90, 90, num_sample)
+    ras = np.random.uniform(-180, 180, num_sample)
+    des = np.random.uniform(-90, -90, num_sample)
 
     # generate the star image
-    for i in range(num_sample):
+    for ra, de in zip(ras, des):
         # star_info is a list of [star_ids[i], (row, col), star_magnitudes[i]]
-        img, star_info = create_star_image(ras[i], des[i], 0)
-        if len(star_info) < star_num_per_sample + 1:
+        img, star_info = create_star_image(ra, de, 0)
+        if len(star_info) < 4:
             continue
         # generate star_table: (row, col) -> star_id
         star_table = dict(map(lambda x: (x[1], x[0]), star_info))
 
         # get the centroids of the stars in the image
         stars = get_star_centroids(img)
-        if len(stars) < star_num_per_sample + 1:
+        if len(stars) < 4:
             continue
-        # assert len(stars) == len(star_info), f'{ras[i], des[i]}'
         # data structure for fast nearest neighbour search
         tree = KDTree(stars)
 
@@ -188,7 +187,7 @@ def generate_point_dataset(num_sample: int):
             # get catalogue index of the guide star
             catalogue_idx = catalogue[catalogue['Star ID'] == star_id].index.to_list()[0]
             # find the top star_num_per_sample nearest neighbor star to the reference one
-            _, idxs = tree.query(guide_star, star_num_per_sample + 1)
+            _, idxs = tree.query(guide_star, min(len(stars), star_num_per_sample + 1))
             assert i == idxs[0]
             # find the nearest neighbor star
             nearest_star = stars[idxs[1]]
@@ -205,25 +204,23 @@ def generate_point_dataset(num_sample: int):
             rotated_stars = np.round(np.dot(neighbor_stars, M.T), 5)
             # generate label information for training and testing
             label = {
-                'ra': ras[i],
-                'de': des[i],
+                'ra': ra,
+                'de': de,
                 'star_id': star_id,
                 'catalogue_idx': catalogue_idx
             }
-            for i, rotated_star in enumerate(rotated_stars):
-                label[f'point{i}_x'], label[f'point{i}_y'] = rotated_star[0], rotated_star[1]
+            for j, rotated_star in enumerate(rotated_stars):
+                label[f'point{j}_x'], label[f'point{j}_y'] = rotated_star[0], rotated_star[1]
+            for j in range(len(rotated_stars), star_num_per_sample):
+                label[f'point{j}_x'], label[f'point{j}_y'] = 0, 0
+            
             labels.append(label)
 
     # save the label information
     df = pd.DataFrame(labels)
-
-    # read the old label information
-    if os.path.exists(os.path.join(dataset_path, label_file)):
-        odf = pd.read_csv(os.path.join(dataset_path, label_file))
-        df = pd.concat([df, odf], ignore_index=True)
-    df.to_csv(os.path.join(dataset_path, label_file))
+    df.to_csv(os.path.join(dataset_path, str(uuid.uuid1())))
 
 
 if __name__ == '__main__':
-    generate_point_dataset(1000)
-    # generate_image_dataset(100)
+    for i in range(5):
+        generate_point_dataset(80)
