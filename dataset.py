@@ -1,7 +1,6 @@
 import os
 import torch
 import cv2
-import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import torchvision.transforms as transforms
@@ -65,9 +64,9 @@ class StarPointDataset(Dataset):
             cols.append(f'point{i}_y')
 
         points = self.label_df.loc[idx, cols].values
-        star_id = self.label_df.loc[idx, 'star_id']
+        catalogue_idx = self.label_df.loc[idx, 'catalogue_idx'].astype(int)
         
-        return torch.from_numpy(points).float(), torch.tensor([star_id])
+        return torch.from_numpy(points).float(), catalogue_idx
 
 
 if __name__ == '__main__':
@@ -84,5 +83,10 @@ if __name__ == '__main__':
 
     pt_dataset = StarPointDataset('data/star_points/labels.csv')
     pt_loader = DataLoader(pt_dataset, batch_size=4, shuffle=True)
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
     for points, labels in pt_loader:
-        print(points)
+        print(points.shape, points.dtype, points.device)
+        points.to(device)
+        print(points.shape, points.dtype, points.device)
+        break

@@ -8,8 +8,7 @@ from simulate import FOVx, FOVy
 
 def draw_star_distribution(catalogue: pd.DataFrame, ax: axes.Axes, title: str):
     '''
-    Draw the distribution of stars in the celestial sphere.
-   
+        Draw the distribution of stars in the celestial sphere.
     Args:
         catalogue: the star catalogue
         ax: the axes to draw
@@ -26,8 +25,7 @@ def draw_star_distribution(catalogue: pd.DataFrame, ax: axes.Axes, title: str):
 
 def draw_probability_versus_star_num_within_FOV(catalogue: pd.DataFrame, ax: axes.Axes, title: str, num_vector: int=10000):
     '''
-    Draw the probability distribution of the number of stars within FOV.
-
+        Draw the probability distribution of the number of stars within FOV.
     Args:
         catalogue: the original catalogue
         ax: the axes to draw
@@ -70,7 +68,7 @@ def draw_probability_versus_star_num_within_FOV(catalogue: pd.DataFrame, ax: axe
 
 def filter_catalogue(catalogue: pd.DataFrame, limit_mv: float=6.0, num_vector: int=10000, num_star_per_region_limit: int=12, angular_distance_limit: float=1) -> pd.DataFrame:
     '''
-    Filter navigation stars using method from http://www.opticsjournal.net/Articles/Abstract?aid=OJbf48ddeef697ba09.
+        Filter navigation stars using method from http://www.opticsjournal.net/Articles/Abstract?aid=OJbf48ddeef697ba09.
     Args:
         catalogue: the original catalogue
         limit_mv: the magnitude limit
@@ -138,9 +136,9 @@ def filter_catalogue(catalogue: pd.DataFrame, limit_mv: float=6.0, num_vector: i
 
 
 if __name__ == '__main__':
-    file = 'catalogues/Below_6.0_SAO.csv'
+    file = 'catalogue/Below_6.0_SAO.csv'
     limit_mv = 5.7
-    filtered_file = f'catalogues/Filtered_Below_{limit_mv}_SAO.csv'
+    filtered_file = f'catalogue/Filtered_Below_{limit_mv}_SAO.csv'
 
     df = pd.read_csv(file, usecols=["Star ID", "RA", "DE", "Magnitude"])
     if os.path.exists(filtered_file):
