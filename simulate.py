@@ -1,3 +1,4 @@
+import os
 from math import radians, degrees, sin, cos, tan, sqrt, atan, pi, exp
 import numpy as np
 import pandas as pd
@@ -29,10 +30,13 @@ xpixel = w/xtot
 ypixel = h/ytot
 
 # star catalogue path
-catalogue_path = 'catalogues/Filtered_Below_6.0_SAO.csv'
+catalogue_path = 'catalogue/Filtered_Below_5.7_SAO.csv'
 
 # the standard deviation of white noise 
 noise_std = 10
+
+# current simulate config
+config_name = f"{os.path.basename(catalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOVx}x{FOVy}_{f}_{noise_std}"
 
 
 def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, list]:
@@ -57,15 +61,15 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
         Returns:
             M: rotation matrix
         """
-        a1 = (sin(ra)*cos(roll)) - (cos(ra)*sin(de)*sin(roll))
-        a2 = -(sin(ra)*sin(roll)) - (cos(ra)*sin(de)*cos(roll))
-        a3 = -(cos(ra)*cos(de))
-        b1 = -(cos(ra)*cos(roll)) - (sin(ra)*sin(de)*sin(roll))
-        b2 = (cos(ra)*sin(roll)) - (sin(ra)*sin(de)*cos(roll))
-        b3 = -(sin(ra)*cos(de))
-        c1 = (cos(ra)*sin(roll))
-        c2 = (cos(ra)*cos(roll))
-        c3 = -(sin(de))
+        a1 = sin(ra)*cos(roll) - cos(ra)*sin(de)*sin(roll)
+        a2 = -sin(ra)*sin(roll) - cos(ra)*sin(de)*cos(roll)
+        a3 = -cos(ra)*cos(de)
+        b1 = -cos(ra)*cos(roll) - sin(ra)*sin(de)*sin(roll)
+        b2 = cos(ra)*sin(roll) - sin(ra)*sin(de)*cos(roll)
+        b3 = -sin(ra)*cos(de)
+        c1 = cos(ra)*sin(roll)
+        c2 = cos(de)*cos(roll)
+        c3 = -sin(de)
         M = np.array([[a1, a2, a3], [b1, b2, b3], [c1, c2, c3]])
             
         return M
@@ -126,11 +130,10 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
     R = sqrt((radians(FOVx)**2)+(radians(FOVy)**2))/2
     ra1, ra2 = (ra - (R/cos(de))), (ra + (R/cos(de)))
     de1, de2 = (de - R), (de + R)
+    assert ra1 < ra2 and de1 < de2
 
-    stars_in_ra_range = star_catalogue[(ra1 <= star_catalogue['RA']) & (star_catalogue['RA'] <= ra2)]
-    stars_in_de_range = star_catalogue[(de1 <= star_catalogue['DE']) & (star_catalogue['DE'] <= de2)]
-    stars_in_de_range = stars_in_de_range[['Star ID']].copy()
-    stars_within_FOV = pd.merge(stars_in_ra_range, stars_in_de_range, on="Star ID")
+    stars_within_FOV = star_catalogue[(ra1 <= star_catalogue['RA']) & (star_catalogue['RA'] <= ra2) & 
+                                      (de1 <= star_catalogue['DE']) & (star_catalogue['DE'] <= de2)].copy()
 
     # convert to celestial rectangular coordinate system
     stars_within_FOV['X1'] = np.cos(stars_within_FOV['RA'])*np.cos(stars_within_FOV['DE'])
@@ -174,6 +177,16 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
 
 
 if __name__ == '__main__':
-    img, stars = create_star_image(15.3782, 85.9900, 0)
-    cv2.imwrite("test.png", img)
-    json.dump(stars, open("test.json", "w"))
+    col_list = ["Star ID", "RA", "DE", "Magnitude"]
+    df = pd.read_csv(catalogue_path, usecols=col_list)
+
+    for i in range(10):
+        ra, de = df.loc[i, 'RA'], df.loc[i, 'DE']
+        print('ra:', round(degrees(ra), 2), 'de:', round(degrees(de), 2), 'f:',f)
+        img, stars = create_star_image(degrees(ra), degrees(de), 0)
+        cv2.imwrite(f"data/test/{i}.png", img)
+        star_table = dict(map(lambda x: (x[1], x[0]), stars))
+
+        if star_table.get((w/2, h/2), -1) != -1:
+            print('success!')
+        
