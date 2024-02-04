@@ -8,7 +8,7 @@ from math import degrees, radians, atan, cos, sin
 from concurrent.futures import ThreadPoolExecutor
 from scipy.spatial import KDTree
 
-from simulate import create_star_image, catalogue_path
+from simulate import create_star_image, catalogue_path, config_name
 from preprocess import get_star_centroids
 
 
@@ -23,8 +23,7 @@ star_num_per_sample = 7
 img_dataset_sub_path = 'star_images'
 
 # point dataset setting
-catalogue_name = os.path.basename(catalogue_path).rsplit('.', 1)[0]
-point_dataset_sub_path = f'star_points/{catalogue_name}'
+point_dataset_sub_path = f'star_points/{config_name}'
 
 
 def get_rotation_angle(neighbor_star: np.ndarray, reference_star: np.ndarray) -> float:
@@ -40,6 +39,10 @@ def get_rotation_angle(neighbor_star: np.ndarray, reference_star: np.ndarray) ->
         angle = 90
         if neighbor_star[0] > reference_star[0]:
             angle = 270
+    elif neighbor_star[0] == reference_star[0]:
+        angle = 0
+        if neighbor_star[1] < reference_star[1]:
+            angle = 180
     else:
         angle = abs(degrees(atan((neighbor_star[0] - reference_star[0]) / (neighbor_star[1] - reference_star[1]))))
         # (-90, 90) -> (0, 360)
@@ -195,12 +198,16 @@ def generate_point_dataset(num_sample: int):
             M = np.array([[cos(angle), -sin(angle)], [sin(angle), cos(angle)]])
             # get all the neighbor stars' coordinates
             neighbor_stars = stars[idxs[1:]] - guide_star
-            # calculate the angle of each neighbor star
-            angles = np.array(list(map(lambda x: get_rotation_angle(x, guide_star), neighbor_stars)))
-            # sort the neighbor stars by angle
-            neighbor_stars = neighbor_stars[np.argsort(angles)]
             # calculate the position of the neighbor stars after rotation
             rotated_stars = np.round(np.dot(neighbor_stars, M.T), 5)
+            # print(rotated_stars[0])
+
+            # # calculate the angle of each star
+            # angles = [get_rotation_angle(star, guide_star) for star in rotated_stars]
+            # # sort the neighbor stars by angle and number them in sequence of 0, 1, 2, ... num_per_sample
+            # rotated_stars = rotated_stars[np.argsort(angles)]
+            # print(rotated_stars[0])
+
             # generate label information for training and testing
             label = {
                 'ra': ra,
@@ -217,36 +224,60 @@ def generate_point_dataset(num_sample: int):
 
     # save the label information
     df = pd.DataFrame(labels)
-    df.to_csv(os.path.join(dataset_path, str(uuid.uuid1())))
+    df.to_csv(os.path.join(dataset_path, str(uuid.uuid1())), index=False)
 
 
-def aggregate_point_dataset(num_sample_limit: int = 15):
+def aggregate_point_dataset(num_sample_limit: int = 15, add_sample: bool = False):
     '''
         Aggregate the point dataset from the given star catalogue.
     Args:
         num_sample_limit: the number of samples per class limit
     '''
+
+    def check_num_sample_per_class(labels: pd.DataFrame):
+        '''
+            Check the number of samples per class.
+        Args:
+            labels: the label information
+        Returns:
+            
+            invalid class id(star_id)
+        '''
+
+        labels_info = labels['star_id'].value_counts()
+        # valid samples percentage
+        valid_p = len(labels_info[labels_info >= num_sample_limit]) / len(labels_info) * 100.0
+        # number of classes & samples in this dataset
+        num_class_in_sample = len(labels_info)
+        num_sample = len(labels)
+
+        print(f'valid samples percentage: {valid_p:.2f}%, number of classes in this dataset: {num_class_in_sample}, number of samples in this dataset: {num_sample}')
+        
+        return valid_p, labels_info[labels_info < num_sample_limit].index
+
     # load all points
     dataset_path = os.path.join(dataset_root_path, point_dataset_sub_path)
     files = os.listdir(dataset_path)
     labels = pd.concat([pd.read_csv(os.path.join(dataset_path, file)) for file in files if file != 'labels.csv'], ignore_index=True)
 
-    # count the number of samples per class
-    labels_info = labels['star_id'].value_counts()
-    print(labels_info)
-    valid_p = len(labels_info[labels_info >= num_sample_limit]) / len(labels_info) * 100.0
-    # number of classes in this dataset
-    num_classes_in_sample = len(labels_info)
-    print(f'valid samples percentage: {valid_p:.2f}%, number of classes in this dataset: {num_classes_in_sample}')
+    valid_p, invalid_star_ids = check_num_sample_per_class(labels)
 
-    if num_classes_in_sample > 0.8*num_classes and valid_p > 80:
+    if add_sample:
+        # copy and insert to make sure the number of samples per class is greater than the limit
+        labels_insert = labels[labels['star_id'].isin(invalid_star_ids)].copy()
+        for i in range(num_sample_limit):
+            labels = pd.concat([labels, labels_insert], ignore_index=True)
+    
+        valid_p, _ = check_num_sample_per_class(labels)
+
+    if valid_p > 80:
         labels.to_csv(f"{dataset_path}/labels.csv", index=False)
 
 
 if __name__ == '__main__':
     # generation parameters
-    num_thread = 3
-    num_sample = 700
+    num_thread = 2
+    num_sample = 170
 
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thread)
