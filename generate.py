@@ -4,11 +4,12 @@ from datetime import datetime
 import cv2
 import numpy as np
 import pandas as pd
+from typing import Optional
 from math import degrees, radians, atan, cos, sin
 from concurrent.futures import ThreadPoolExecutor
 from scipy.spatial import KDTree
 
-from simulate import create_star_image, catalogue_path, config_name
+from simulate import w, h, create_star_image, catalogue_path, config_name
 from preprocess import get_star_centroids
 
 
@@ -143,25 +144,33 @@ def generate_image_dataset(num_sample: int, h: int=224, w: int=224):
     df.to_csv(os.path.join(dataset_path, 'labels.csv'))
 
 
-def generate_point_dataset(num_sample: int):
+def generate_point_dataset(type: str, num_sample: Optional[int]=None):
     '''
         Generate the dataset from the given star catalogue.
     Args:
+        type: 'train', 'test', 'validate'
         num_sample: the number of samples to be generated
     '''
 
-    if not os.path.exists(dataset_root_path):
-        os.mkdir(dataset_root_path)
-    dataset_path = os.path.join(dataset_root_path, point_dataset_sub_path)
+    if type == 'train':
+        # generate right ascension and declination for every star in the catalogue
+        ras = np.degrees(catalogue['RA'])
+        des = np.degrees(catalogue['DE'])
+    elif (type == 'test' or type == 'validate') and num_sample != None and num_sample >= 1:
+        # generate random right ascension[-180, 180] and declination[-90, 90]
+        ras = np.random.uniform(-180, 180, num_sample)
+        des = np.random.uniform(-90, 90, num_sample)
+    else:
+        print(type, num_sample)
+        print('Wrong arguments for generate_point_dataset!')
+        return
+
+    dataset_path = os.path.join(dataset_root_path, point_dataset_sub_path, type)
     if not os.path.exists(dataset_path):
         os.mkdir(dataset_path)
 
     # store the label information
     labels = []
-
-    # generate random right ascension[-180, 180] and declination[-90, 90]
-    ras = np.random.uniform(-180, 180, num_sample)
-    des = np.random.uniform(-90, 90, num_sample)
 
     # generate the star image
     for ra, de in zip(ras, des):
@@ -180,8 +189,12 @@ def generate_point_dataset(num_sample: int):
         tree = KDTree(stars)
 
         stars = np.array(stars)
+        if type == 'train':
+            guide_stars = np.array([[h/2, w/2]])
+        else:
+            guide_stars = stars
         # choose a guide star as the reference star
-        for i, guide_star in enumerate(stars):
+        for i, guide_star in enumerate(guide_stars):
             # check if false star
             star_id = star_table.get(tuple(guide_star), -1)
             if star_id == -1:
@@ -190,7 +203,7 @@ def generate_point_dataset(num_sample: int):
             catalogue_idx = catalogue[catalogue['Star ID'] == star_id].index.to_list()[0]
             # find the top star_num_per_sample nearest neighbor star to the reference one
             _, idxs = tree.query(guide_star, min(len(stars), star_num_per_sample + 1))
-            assert i == idxs[0]
+            
             # find the nearest neighbor star
             nearest_star = stars[idxs[1]]
             # calculate rotation angle & matrix
@@ -227,64 +240,32 @@ def generate_point_dataset(num_sample: int):
     df.to_csv(os.path.join(dataset_path, str(uuid.uuid1())), index=False)
 
 
-def aggregate_point_dataset(num_sample_limit: int = 15, add_sample: bool = False):
-    '''
-        Aggregate the point dataset from the given star catalogue.
-    Args:
-        num_sample_limit: the number of samples per class limit
-    '''
-
-    def check_num_sample_per_class(labels: pd.DataFrame):
-        '''
-            Check the number of samples per class.
-        Args:
-            labels: the label information
-        Returns:
-            
-            invalid class id(star_id)
-        '''
-
-        labels_info = labels['star_id'].value_counts()
-        # valid samples percentage
-        valid_p = len(labels_info[labels_info >= num_sample_limit]) / len(labels_info) * 100.0
-        # number of classes & samples in this dataset
-        num_class_in_sample = len(labels_info)
-        num_sample = len(labels)
-
-        print(f'valid samples percentage: {valid_p:.2f}%, number of classes in this dataset: {num_class_in_sample}, number of samples in this dataset: {num_sample}')
-        
-        return valid_p, labels_info[labels_info < num_sample_limit].index
-
-    # load all points
-    dataset_path = os.path.join(dataset_root_path, point_dataset_sub_path)
-    files = os.listdir(dataset_path)
-    labels = pd.concat([pd.read_csv(os.path.join(dataset_path, file)) for file in files if file != 'labels.csv'], ignore_index=True)
-
-    valid_p, invalid_star_ids = check_num_sample_per_class(labels)
-
-    if add_sample:
-        # copy and insert to make sure the number of samples per class is greater than the limit
-        labels_insert = labels[labels['star_id'].isin(invalid_star_ids)].copy()
-        for i in range(num_sample_limit):
-            labels = pd.concat([labels, labels_insert], ignore_index=True)
-    
-        valid_p, _ = check_num_sample_per_class(labels)
-
-    if valid_p > 80:
-        labels.to_csv(f"{dataset_path}/labels.csv", index=False)
-
-
 if __name__ == '__main__':
-    # generation parameters
-    num_thread = 2
-    num_sample = 170
+    num_thread = 3
 
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thread)
     # generate dataset
-    all_task=[pool.submit(generate_point_dataset, (i+1)*num_sample) for i in range(2*num_thread)]
+    all_task=[]
+    for i in range(num_thread * 2):
+        # if i%3 == 0:    
+        task = pool.submit(generate_point_dataset, 'train')
+        # elif i%3 == 1:
+        #     task = pool.submit(generate_point_dataset, 'validate', int(num_classes*0.4))
+        # else:
+        #     task = pool.submit(generate_point_dataset, 'test', int(num_classes*0.2))
+        all_task.append(task)
+
     # wait for all tasks to be done
-    for future in all_task:
-        future.result()
+    for task in all_task:
+        task.result()
     # after all tasks are done, aggregate the dataset
-    aggregate_point_dataset()
+    for type in ['train', 'validate', 'test']:
+        dataset_path = os.path.join(dataset_root_path, point_dataset_sub_path, type)
+        files = os.listdir(dataset_path)
+        labels = pd.concat([pd.read_csv(os.path.join(dataset_path, file)) for file in files if file != 'labels.csv'], ignore_index=True)
+
+        labels_info = labels['star_id'].value_counts()
+        print(type, len(labels_info), labels_info.head(5), labels_info.tail(5))
+
+        labels.to_csv(f"{dataset_path}/labels.csv", index=False)
