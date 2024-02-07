@@ -1,10 +1,11 @@
+import os
 import torch
 import torch.nn as nn, torch.optim as optim
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 
 from dataset import StarPointDataset
-from generate import star_num_per_sample, num_classes
+from generate import star_num_per_sample, num_classes, dataset_root_path, point_dataset_sub_path
 
 
 class FeedforwardNeuralNetModel(nn.Module):
@@ -42,6 +43,9 @@ def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader:
         test_loader: the data loader for testing
     '''
     for epoch in range(num_epochs):
+        # set the model into train model
+        model.train()
+
         for points, labels in loader:
             # points.to(device)
             # labels.to(device)
@@ -61,7 +65,7 @@ def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader:
         
         if test_loader:
             accuracy = check_accuracy(model, test_loader)
-            print(f'Epoch: {epoch}, Accuracy: {accuracy}')
+            print(f'Epoch: {epoch}, Accuracy: {accuracy}%')
         
         
 def check_accuracy(model: nn.Module, loader: DataLoader):
@@ -71,7 +75,9 @@ def check_accuracy(model: nn.Module, loader: DataLoader):
         model: the model to be checked
         loader: the data loader for validation or testing
     '''
-    # Calculate Accuracy         
+    # set the model into evaluation model
+    model.eval()
+    # initialize the number of correct predictions
     correct = 0
     total = 0
     # Iterate through test dataset
@@ -83,7 +89,7 @@ def check_accuracy(model: nn.Module, loader: DataLoader):
         # Get predictions from the maximum value
         _, predicted = torch.max(outputs.data, 1)
         # Total number of labels
-        total += batch_size
+        total += labels.size(0)
         # Total correct predictions
         correct += (predicted == labels).sum().item()
     return round(100.0 * correct / total, 2)
@@ -92,16 +98,16 @@ def check_accuracy(model: nn.Module, loader: DataLoader):
 if __name__ == '__main__':
     # training setting
     batch_size = 100
-    n_iters = 6000
+    num_epochs = 15
     learning_rate = 0.1
     # use gpu if available
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f'Using device: {device}')
 
     # define datasets for training & validation
-    dataset = StarPointDataset('data/star_points/Filtered_Below_5.7_SAO/labels.csv')
-    train_dataset, validate_dataset, test_dataset = random_split(dataset, [0.7, 0.2, 0.1])
-    # print split sizes
+    dataset_path = os.path.join(dataset_root_path, point_dataset_sub_path)
+    train_dataset, validate_dataset, test_dataset = [StarPointDataset(os.path.join(dataset_path, name)) for name in ['train', 'validate', 'test']]
+    # print datasets' sizes
     print(f'Training set: {len(train_dataset)}, Validation set: {len(validate_dataset)}, Test set: {len(test_dataset)}')
 
     # create data loaders for our datasets
@@ -109,22 +115,28 @@ if __name__ == '__main__':
     validate_loader = DataLoader(validate_dataset, batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size, shuffle=False)
 
-    num_epochs = int(n_iters / (len(train_dataset) / batch_size))
-    hidden_dimss = [[20, 10], [40, 20], [60, 30]]
-    best_model = None
-    best_accuracy = 0.0
+    # load old model
+    best_model = FeedforwardNeuralNetModel(star_num_per_sample*2, num_classes)
+    best_model.load_state_dict(torch.load('model/fnn_model.pth'))
+    best_accuracy = check_accuracy(best_model, validate_loader)
+    print(f'Original model accuracy {best_accuracy}%')
+
+    # tune hyperparameters
+    hidden_dimss = [[10, 20]]
     for hidden_dims in hidden_dimss:  
         model = FeedforwardNeuralNetModel(star_num_per_sample*2, num_classes)
-        optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)  
+        optimizer = optim.SGD(model.parameters(), lr=learning_rate)  
 
-        train(model, optimizer, num_epochs, train_loader)
+        print(f'train model with {hidden_dims}')
+        train(model, optimizer, num_epochs, train_loader, test_loader)
         val_accuracy = check_accuracy(model, validate_loader)
-        print(val_accuracy)
+        print(f'validate accurracy {val_accuracy}')
+
         if val_accuracy > best_accuracy:
             best_model = model
             best_accuracy = val_accuracy
     
-    print(f'Best validate accuracy: {best_accuracy}')
+    print(f'Best model validate accuracy: {best_accuracy}%')
     test_accuray = check_accuracy(best_model, test_loader)
-    print(f'Test accuracy: {test_accuray}')
+    print(f'Best model test accuracy: {test_accuray}%')
     torch.save(best_model.state_dict(), 'model/fnn_model.pth')
