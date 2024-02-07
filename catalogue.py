@@ -87,15 +87,16 @@ def filter_catalogue(catalogue: pd.DataFrame, limit_mv: float=6.0, num_vector: i
     R = sqrt((radians(FOVx)**2)+(radians(FOVy)**2))/2
 
     # eliminate the stars with magnitude > limit_mv
-    catalogue = catalogue[catalogue['Magnitude'] <= limit_mv].copy().reset_index(drop=True)
+    catalogue = catalogue[catalogue['Magnitude'] <= limit_mv].reset_index(drop=True)
 
     # convert to celestial rectangular coordinate system
-    catalogue['X'] = np.cos(catalogue['RA'])*np.cos(catalogue['DE'])
-    catalogue['Y'] = np.sin(catalogue['RA'])*np.cos(catalogue['DE'])
-    catalogue['Z'] = np.sin(catalogue['DE'])
+    positions = pd.DataFrame()
+    positions['X'] = np.cos(catalogue['RA'])*np.cos(catalogue['DE'])
+    positions['Y'] = np.sin(catalogue['RA'])*np.cos(catalogue['DE'])
+    positions['Z'] = np.sin(catalogue['DE'])
 
     # calculate the angular distance between each pair of stars
-    positions = catalogue[['X', 'Y', 'Z']].to_numpy()
+    positions = positions.to_numpy()
     norms = np.linalg.norm(positions, axis=1)
     inner_products = positions @ positions.T
     # do rounding because some cos_theta are slightly greater than 1 or less than -1 as a result of precision problem
@@ -124,7 +125,7 @@ def filter_catalogue(catalogue: pd.DataFrame, limit_mv: float=6.0, num_vector: i
             darker_idx.add(i2)
     darker_idx = list(darker_idx)
     # eliminate the darker stars from small angular distance star pairs
-    catalogue = catalogue[~catalogue.isin(darker_idx)]
+    catalogue = catalogue[~catalogue.index.isin(darker_idx)]
 
     # generate uniform distributed random vectors, which seperate the celestial sphere into multiple regions
     ras = np.random.uniform(-pi, pi, num_vector)
