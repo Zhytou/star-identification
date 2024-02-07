@@ -4,12 +4,11 @@ from datetime import datetime
 import cv2
 import numpy as np
 import pandas as pd
-from typing import Optional
 from math import degrees, radians, atan, cos, sin
 from concurrent.futures import ThreadPoolExecutor
 from scipy.spatial import KDTree
 
-from simulate import w, h, create_star_image, catalogue_path, config_name
+from simulate import create_star_image, catalogue_path, config_name
 from preprocess import get_star_centroids
 
 
@@ -69,18 +68,16 @@ def generate_image_dataset(num_sample: int, h: int=224, w: int=224):
         w: the length of the image
     '''
 
-    if not os.path.exists(dataset_root_path):
-        os.mkdir(dataset_root_path)
     dataset_path = os.path.join(dataset_root_path, img_dataset_sub_path)
     if not os.path.exists(dataset_path):
-        os.mkdir(dataset_path)
+        os.makedirs(dataset_path)
 
     # store the label information
     labels = []
 
     # generate random right ascension[-180, 180] and declination[-90, 90]
     ras = np.random.randint(-180, 180, num_sample)
-    des = np.random.randint(-90, 90, num_sample)
+    des = np.degrees(np.acrsin(np.random.randint(-1, 1, num_sample)))
 
     # generate the star image
     for ra, de in zip(ras, des):
@@ -144,7 +141,7 @@ def generate_image_dataset(num_sample: int, h: int=224, w: int=224):
     df.to_csv(os.path.join(dataset_path, 'labels.csv'))
 
 
-def generate_point_dataset(type: str, num_sample: Optional[int]=None):
+def generate_point_dataset(type: str, num_sample: int):
     '''
         Generate the dataset from the given star catalogue.
     Args:
@@ -152,25 +149,16 @@ def generate_point_dataset(type: str, num_sample: Optional[int]=None):
         num_sample: the number of samples to be generated
     '''
 
-    if type == 'train':
-        # generate right ascension and declination for every star in the catalogue
-        ras = np.degrees(catalogue['RA'])
-        des = np.degrees(catalogue['DE'])
-    elif (type == 'test' or type == 'validate') and num_sample != None and num_sample >= 1:
-        # generate random right ascension[-180, 180] and declination[-90, 90]
-        ras = np.random.uniform(-180, 180, num_sample)
-        des = np.random.uniform(-90, 90, num_sample)
-    else:
-        print(type, num_sample)
-        print('Wrong arguments for generate_point_dataset!')
-        return
-
     dataset_path = os.path.join(dataset_root_path, point_dataset_sub_path, type)
     if not os.path.exists(dataset_path):
-        os.mkdir(dataset_path)
+        os.makedirs(dataset_path)
 
     # store the label information
     labels = []
+
+    # generate random right ascension[-180, 180] and declination[-90, 90]
+    ras = np.random.uniform(-180, 180, num_sample)
+    des = np.degrees(np.arcsin(np.random.uniform(-1, 1, num_sample)))
 
     # generate the star image
     for ra, de in zip(ras, des):
@@ -189,12 +177,8 @@ def generate_point_dataset(type: str, num_sample: Optional[int]=None):
         tree = KDTree(stars)
 
         stars = np.array(stars)
-        if type == 'train':
-            guide_stars = np.array([[h/2, w/2]])
-        else:
-            guide_stars = stars
         # choose a guide star as the reference star
-        for i, guide_star in enumerate(guide_stars):
+        for guide_star in stars:
             # check if false star
             star_id = star_table.get(tuple(guide_star), -1)
             if star_id == -1:
@@ -212,14 +196,12 @@ def generate_point_dataset(type: str, num_sample: Optional[int]=None):
             # get all the neighbor stars' coordinates
             neighbor_stars = stars[idxs[1:]] - guide_star
             # calculate the position of the neighbor stars after rotation
-            rotated_stars = np.round(np.dot(neighbor_stars, M.T), 5)
-            # print(rotated_stars[0])
+            rotated_stars = np.round(np.dot(neighbor_stars, M.T), 5) + guide_star
 
-            # # calculate the angle of each star
-            # angles = [get_rotation_angle(star, guide_star) for star in rotated_stars]
-            # # sort the neighbor stars by angle and number them in sequence of 0, 1, 2, ... num_per_sample
-            # rotated_stars = rotated_stars[np.argsort(angles)]
-            # print(rotated_stars[0])
+            # calculate the angle of each star
+            angles = [get_rotation_angle(star, guide_star) for star in rotated_stars]
+            # sort the neighbor stars by angle and number them in sequence of 0, 1, 2, ... num_per_sample
+            rotated_stars = rotated_stars[np.argsort(angles)] - guide_star
 
             # generate label information for training and testing
             label = {
@@ -241,21 +223,19 @@ def generate_point_dataset(type: str, num_sample: Optional[int]=None):
 
 
 if __name__ == '__main__':
-    num_thread = 3
-
+    num_thread = 6
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thread)
     # generate dataset
     all_task=[]
-    for i in range(num_thread * 2):
-        # if i%3 == 0:    
-        task = pool.submit(generate_point_dataset, 'train')
-        # elif i%3 == 1:
-        #     task = pool.submit(generate_point_dataset, 'validate', int(num_classes*0.4))
-        # else:
-        #     task = pool.submit(generate_point_dataset, 'test', int(num_classes*0.2))
+    for i in range(num_thread):
+        if i%3 == 0:    
+            task = pool.submit(generate_point_dataset, 'train', 2000)
+        elif i%3 == 1:
+            task = pool.submit(generate_point_dataset, 'validate', 200)
+        else:
+            task = pool.submit(generate_point_dataset, 'test', 100)
         all_task.append(task)
-
     # wait for all tasks to be done
     for task in all_task:
         task.result()
@@ -264,8 +244,9 @@ if __name__ == '__main__':
         dataset_path = os.path.join(dataset_root_path, point_dataset_sub_path, type)
         files = os.listdir(dataset_path)
         labels = pd.concat([pd.read_csv(os.path.join(dataset_path, file)) for file in files if file != 'labels.csv'], ignore_index=True)
-
         labels_info = labels['star_id'].value_counts()
         print(type, len(labels_info), labels_info.head(5), labels_info.tail(5))
-
+        # labels = labels.groupby('star_id', as_index=False).head(19)
+        # labels_info = labels['star_id'].value_counts()
+        # print(type, len(labels_info), labels_info.head(5), labels_info.tail(5))
         labels.to_csv(f"{dataset_path}/labels.csv", index=False)
