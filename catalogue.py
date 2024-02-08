@@ -70,7 +70,7 @@ def draw_probability_versus_star_num_within_FOV(catalogue: pd.DataFrame, ax: axe
     ax.set_ylabel('Probability%')
 
 
-def filter_catalogue(catalogue: pd.DataFrame, limit_mv: float=6.0, num_vector: int=100000, num_star_per_region_limit: int=12, angular_distance_limit: float=2) -> pd.DataFrame:
+def filter_catalogue(catalogue: pd.DataFrame, limit_mv: float=6.0, num_vector: int=100000, num_star_per_region_limit: int=10, angular_distance_limit: float=0.5) -> pd.DataFrame:
     '''
         Filter navigation stars using method from http://www.opticsjournal.net/Articles/Abstract?aid=OJbf48ddeef697ba09.
     Args:

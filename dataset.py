@@ -43,11 +43,14 @@ class StarImageDataset(Dataset):
 class StarPointDataset(Dataset):
     '''Star point dataset'''
 
-    def __init__(self, label_file_path: str):
+    def __init__(self, root_dir: str):
         '''
         Args:
-            label_file_path: name of the csv file with annotations
+            root_dir: name of the dataset directory
         '''
+        label_file_path = os.path.join(root_dir, 'labels.csv')
+        if not os.path.exists(label_file_path):
+            raise FileNotFoundError(f'{label_file_path}does not exist')
         
         self.label_df = pd.read_csv(label_file_path)
 
