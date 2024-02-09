@@ -6,8 +6,7 @@ import matplotlib.pyplot as plt
 import torchvision.transforms as transforms
 from torch.utils.data import Dataset, DataLoader
 
-from generate import star_num_per_sample
-
+from generate import num_ring, num_sector
 
 class StarImageDataset(Dataset):
     '''Star image dataset'''
@@ -61,11 +60,7 @@ class StarPointDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        cols = []
-        for i in range(star_num_per_sample):
-            cols.append(f'point{i}_x')
-            cols.append(f'point{i}_y')
-
+        cols = [f'ring_{i}' for i in range(num_ring)] + [f'sector_{i}' for i in range(num_sector)]
         points = self.label_df.loc[idx, cols].values
         catalogue_idx = self.label_df.loc[idx, 'catalogue_idx'].astype(int)
         

@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from dataset import StarPointDataset
-from generate import star_num_per_sample, num_classes, dataset_root_path, point_dataset_sub_path
+from generate import num_input, num_class, point_dataset_path, generate_config
 
 
 class FeedforwardNeuralNetModel(nn.Module):
@@ -105,8 +105,7 @@ if __name__ == '__main__':
     print(f'Using device: {device}')
 
     # define datasets for training & validation
-    dataset_path = os.path.join(dataset_root_path, point_dataset_sub_path)
-    train_dataset, validate_dataset, test_dataset = [StarPointDataset(os.path.join(dataset_path, name)) for name in ['train', 'validate', 'test']]
+    train_dataset, validate_dataset, test_dataset = [StarPointDataset(os.path.join(point_dataset_path, name)) for name in ['train', 'validate', 'test']]
     # print datasets' sizes
     print(f'Training set: {len(train_dataset)}, Validation set: {len(validate_dataset)}, Test set: {len(test_dataset)}')
 
@@ -116,15 +115,20 @@ if __name__ == '__main__':
     test_loader = DataLoader(test_dataset, batch_size, shuffle=False)
 
     # load old model
-    best_model = FeedforwardNeuralNetModel(star_num_per_sample*2, num_classes)
-    best_model.load_state_dict(torch.load('model/fnn_model.pth'))
+    model_dir = f'model/{generate_config}'
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)
+    best_model = FeedforwardNeuralNetModel(num_input, num_class)
+    model_path = os.path.join(model_dir, 'best_fnn_model.pth')
+    if os.path.exists(model_path):
+        best_model.load_state_dict(torch.load(model_path))
     best_accuracy = check_accuracy(best_model, validate_loader)
     print(f'Original model accuracy {best_accuracy}%')
 
     # tune hyperparameters
-    hidden_dimss = [[10, 20]]
+    hidden_dimss = [[100, 200], [300, 600]]
     for hidden_dims in hidden_dimss:  
-        model = FeedforwardNeuralNetModel(star_num_per_sample*2, num_classes)
+        model = FeedforwardNeuralNetModel(num_input, num_class)
         optimizer = optim.SGD(model.parameters(), lr=learning_rate)  
 
         print(f'train model with {hidden_dims}')
@@ -139,4 +143,4 @@ if __name__ == '__main__':
     print(f'Best model validate accuracy: {best_accuracy}%')
     test_accuray = check_accuracy(best_model, test_loader)
     print(f'Best model test accuracy: {test_accuray}%')
-    torch.save(best_model.state_dict(), 'model/fnn_model.pth')
+    torch.save(best_model.state_dict(), model_path)
