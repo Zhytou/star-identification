@@ -1,10 +1,10 @@
 import os
-from math import radians, degrees, sin, cos, tan, sqrt, atan, pi, exp
+from math import radians, degrees, sin, cos, tan, sqrt, exp
 import numpy as np
 import pandas as pd
-import cv2
-import json
 
+# region of interest for point spread function
+ROI = 2
 
 # star sensor pixel num
 w = 1024
@@ -14,8 +14,8 @@ h = 1024
 f = 58e-3
 
 # field of view angle in degrees
-FOVx = 12
-FOVy = 12
+FOVx = 20
+FOVy = 20
 
 # camera total length and width in metres
 xtot = 2*tan(radians(FOVx/2))*f
@@ -30,13 +30,18 @@ xpixel = w/xtot
 ypixel = h/ytot
 
 # star catalogue path
-catalogue_path = 'catalogue/Filtered_Below_5.7_SAO.csv'
+catalogue_path = 'catalogue/Filtered_Below_5.6_SAO.csv'
 
 # the standard deviation of white noise 
 noise_std = 10
 
+# max number of false stars per image
+max_num_false_star = 4
+# max magnitude of false stars
+max_mv_false_star = 5
+
 # current simulate config
-config_name = f"{os.path.basename(catalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOVx}x{FOVy}_{f}_{noise_std}"
+simulate_config = f"{os.path.basename(catalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOVx}x{FOVy}_{f}_{noise_std}"
 
 
 def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, list]:
@@ -74,7 +79,7 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
             
         return M
 
-    def draw_star(x: int, y: int, magnitude: float, img: np.ndarray, ROI: int=2) -> np.ndarray:
+    def draw_star(x: int, y: int, magnitude: float, img: np.ndarray) -> np.ndarray:
         """
             Draw star at yth row and xth column in the image.
         Args:
@@ -82,18 +87,19 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
             y: the y coordinate in pixel (starting from top to bottom)
             magnitude: the stellar magnitude
             img: background image
-            ROI: The region of interest for each star in pixel radius
         Returns:
             img: the image with the star drawn
         """
         # stellar magnitude to intensity
-        H = 20 * (6-magnitude) + 128
+        H = 30/(2.51**(magnitude-6))
 
         for u in range(x-ROI, x+ROI+1):
             if u < 0 or u >= len(img[0]):
                 continue
             for v in range(y-ROI, y+ROI+1):
                 if v < 0 or v >= len(img):
+                    continue
+                if (u-x)**2+(v-y)**2 > ROI**2:
                     continue
                 raw_intensity = int(H*exp(-((u-x)**2+(v-y)**2)/(2*ROI**2)))
                 img[v ,u] = raw_intensity
@@ -152,7 +158,7 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
     stars_within_FOV['Y4'] = np.round(h/2 - stars_within_FOV['Y3']*ypixel).astype(int)
 
     # exclude stars beyond range
-    stars_within_FOV = stars_within_FOV[stars_within_FOV['X4'].between(0, w) & stars_within_FOV['Y4'].between(0, h)]
+    stars_within_FOV = stars_within_FOV[stars_within_FOV['X4'].between(ROI, w-ROI+1) & stars_within_FOV['Y4'].between(ROI, h-ROI+1)]
 
     star_positions = list(zip(stars_within_FOV['X4'], stars_within_FOV['Y4']))
     star_magnitudes = list(stars_within_FOV['Magnitude'])
@@ -177,16 +183,14 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
 
 
 if __name__ == '__main__':
+    # simulation accuracy check
     col_list = ["Star ID", "RA", "DE", "Magnitude"]
     df = pd.read_csv(catalogue_path, usecols=col_list)
-
-    for i in range(10):
+    for i in range(len(df)):
         ra, de = df.loc[i, 'RA'], df.loc[i, 'DE']
-        print('ra:', round(degrees(ra), 2), 'de:', round(degrees(de), 2), 'f:',f)
         img, stars = create_star_image(degrees(ra), degrees(de), 0)
-        cv2.imwrite(f"data/test/{i}.png", img)
         star_table = dict(map(lambda x: (x[1], x[0]), stars))
-
-        if star_table.get((w/2, h/2), -1) != -1:
-            print('success!')
-        
+        # when using the ra & de in star catalogue, one star must be placed in the center of image
+        if star_table.get((w/2, h/2), -1) == -1:
+            print(i, 'ra:', round(degrees(ra), 2), 'de:', round(degrees(de), 2), 'f:',f)
+            break
