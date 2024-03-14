@@ -4,7 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt, matplotlib.axes._axes as axes
 from math import radians, sqrt, cos, pi
 
-from simulate import FOVx, FOVy
+from config import FOVx, FOVy
 
 
 def draw_star_distribution(catalogue: pd.DataFrame, ax: axes.Axes, title: str):

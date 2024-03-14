@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import torchvision.transforms as transforms
 from torch.utils.data import Dataset, DataLoader
 
-from generate import num_ring, num_sector
+from generate import num_ring, num_sector, num_neighbor_limit
 
 class StarImageDataset(Dataset):
     '''Star image dataset'''
@@ -60,7 +60,7 @@ class StarPointDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        cols = [f'ring_{i}' for i in range(num_ring)] + [f'sector_{i}' for i in range(num_sector)]
+        cols = [f'ring_{i}' for i in range(num_ring)] + [f'neighbor_{i}_sector_{j}' for i in range(num_neighbor_limit) for j in range(num_sector)]
         points = self.label_df.loc[idx, cols].values
         catalogue_idx = self.label_df.loc[idx, 'catalogue_idx'].astype(int)
         
