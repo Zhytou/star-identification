@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 from config import config_name, num_false_star
 from generate import point_dataset_path, num_class, num_input
 from dataset import StarPointDataset
-from train_fnn import FeedforwardNeuralNetModel
+from models import FeedforwardNeuralNetModel
 
 
 def check_accuracy(model: nn.Module, loader: DataLoader, device=torch.device('cpu')):
@@ -45,7 +45,7 @@ if __name__ == '__main__':
     # define datasets
     pos_test_dataset, mv_test_dataset, fs_test_dataset = [StarPointDataset(os.path.join(point_dataset_path, name)) for name in ['positional_noise_test', 'magnitude_noise_test', f'false_star_test/{num_false_star}']]
     # print datasets' sizes
-    print(f'Training set: {len(pos_test_dataset)}, Validation set: {len(mv_test_dataset)}, Test set: {len(fs_test_dataset)}')
+    print(f'Positional noise set: {len(pos_test_dataset)}, Magnitude noise set: {len(mv_test_dataset)}, False star set: {len(fs_test_dataset)}')
 
     # define data loaders
     pos_test_loader = DataLoader(pos_test_dataset, batch_size, shuffle=True)

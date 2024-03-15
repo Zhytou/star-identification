@@ -9,26 +9,21 @@ from concurrent.futures import ThreadPoolExecutor
 from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist
 
-from simulate import create_star_image, catalogue_path, simulate_config
+import config
+from config import catalogue_path, config_name, num_ring, num_sector, num_neighbor_limit, region_r, num_false_star
+from simulate import create_star_image
 from preprocess import get_star_centroids
 
 
 dataset_root_path = 'data'
-# number of classes
 catalogue = pd.read_csv(catalogue_path, usecols= ["Star ID", "RA", "DE", "Magnitude"])
+num_input = num_ring + num_sector * num_neighbor_limit
 num_class = len(catalogue)
-region_r = 300
 
 # image dataset setting
-num_star_per_img = 3
-img_dataset_sub_path = 'star_images'
-
+img_dataset_sub_path = os.path.join(dataset_root_path, f'star_images/{config_name}')
 # point dataset setting
-num_ring = 30
-num_sector = 30
-num_input = num_ring + num_sector
-generate_config = f"{simulate_config}_R{region_r}_Ring{num_ring}_Sector{num_sector}"
-point_dataset_path = os.path.join(dataset_root_path, f'star_points/{generate_config}')
+point_dataset_path = os.path.join(dataset_root_path, f'star_points/{config_name}')
 
 
 def get_rotation_angle(neighbor_star: np.ndarray, reference_star: np.ndarray) -> float:
@@ -88,7 +83,7 @@ def generate_image_dataset(num_sample: int, h: int=224, w: int=224):
     for ra, de in zip(ras, des):
         # star_info is a list of [star_ids[i], (row, col), star_magnitudes[i]]
         img, star_info = create_star_image(ra, de, 0)
-        if len(star_info) < num_star_per_img + 1:
+        if len(star_info) < 3 + 1:
             continue
         # generate star_table: (row, col) -> star_id
         star_table = dict(map(lambda x: (x[1], x[0]), star_info))
@@ -112,7 +107,7 @@ def generate_image_dataset(num_sample: int, h: int=224, w: int=224):
                 continue
             
             # find the top star_num_per_img nearest neighbor star to the reference one
-            distances, idxs = tree.query(guide_star, num_star_per_img + 1)
+            distances, idxs = tree.query(guide_star, 3 + 1)
             # make sure at least star_num_per_img neighbor stars are located in the region
             if distances[-1] >= min(h, w) / 2:
                 continue
@@ -150,11 +145,20 @@ def generate_point_dataset(type: str, num_sample: int):
     '''
         Generate the dataset from the given star catalogue.
     Args:
-        type: 'train', 'test', 'validate'
+        type: 'train', 'validate', 'test', 'positional_noise_test', 'magnitude_noise_test', 'false_star_test'
         num_sample: the number of samples to be generated
     '''
-
+    
     dataset_path = os.path.join(point_dataset_path, type)
+    if type == 'positional_noise_test':
+        config.type_noise = 'pos'
+    elif type == 'magnitude_noise_test':
+        config.type_noise = 'mv'
+    elif type == 'false_star_test':
+        config.type_noise = 'false_star'
+        dataset_path = os.path.join(dataset_path, f'{num_false_star}')
+    else:
+        config.type_noise = 'none'
     if not os.path.exists(dataset_path):
         os.makedirs(dataset_path)
 
@@ -169,14 +173,11 @@ def generate_point_dataset(type: str, num_sample: int):
     for ra, de in zip(ras, des):
         # star_info is a list of [star_ids[i], (row, col), star_magnitudes[i]]
         img, star_info = create_star_image(ra, de, 0)
-        if len(star_info) < 4:
-            continue
         # generate star_table: (row, col) -> star_id
         star_table = dict(map(lambda x: (x[1], x[0]), star_info))
-
         # get the centroids of the stars in the image
         stars = np.array(get_star_centroids(img))
-        if len(stars) < 4:
+        if len(stars) < num_neighbor_limit+1:
             continue
 
         distances = cdist(stars, stars, 'euclidean')
@@ -189,7 +190,6 @@ def generate_point_dataset(type: str, num_sample: int):
                 continue
             # get catalogue index of the guide star
             catalogue_idx = catalogue[catalogue['Star ID'] == star_id].index.to_list()[0]
-            
             # generate label information for training and testing
             label = {
                 'ra': ra,
@@ -198,20 +198,29 @@ def generate_point_dataset(type: str, num_sample: int):
                 'catalogue_idx': catalogue_idx
             }
 
-            # print(len(ds), len(ags))
+            # angles is sorted by distance with accending order
             ags = ags[np.argsort(ds)]
             ds = np.sort(ds)
             ags = ags[ds < region_r]
-            # print(len(ds), len(ags))
-
-            ring_counts, _ = np.histogram(ds, bins=num_ring, range=(1, region_r))
-            sector_counts, _ = np.histogram(ags, bins=num_sector, range=(-np.pi, np.pi))
-
+            # remove the first element of ags & ds, which is reference star
+            ds, ags = ds[1:], ags[1:]
+            # make sure several neighbor stars are located in the region
+            if len(ags) < num_neighbor_limit:
+                continue
+        
+            ring_counts, _ = np.histogram(ds, bins=num_ring, range=(0, region_r))
             for i, rc in enumerate(ring_counts):
                 label[f'ring_{i}'] = rc
-            for i, sc in enumerate(sector_counts):
-                label[f'sector_{i}'] = sc
 
+            # uses several neighbor stars as the starting angle to obtain the cyclic features
+            for i, ag in enumerate(ags[:num_neighbor_limit]):
+                rotated_ags = ags - ag
+                rotated_ags %= 2*np.pi
+                rotated_ags[rotated_ags > np.pi] -= 2*np.pi
+                rotated_ags[rotated_ags < -np.pi] += 2*np.pi
+                sector_counts, _ = np.histogram(ags, bins=num_sector, range=(-np.pi, np.pi))
+                for j, sc in enumerate(sector_counts):
+                    label[f'neighbor_{i}_sector_{j}'] = sc
             labels.append(label)
 
     # save the label information
@@ -227,37 +236,48 @@ if __name__ == '__main__':
     # all_task=[]
     # for i in range(num_thread):
     #     task = pool.submit(generate_point_dataset, 'train', 2000)
-    #     # if i%3 == 0:
+    #     # if i%6 == 0:
     #     #     task = pool.submit(generate_point_dataset, 'train', 2000)
-    #     # elif i%3 == 1:
+    #     # elif i%6 == 1:
     #     #     task = pool.submit(generate_point_dataset, 'validate', 2000)
-    #     # else:
+    #     # elif i%6 == 2:
     #     #     task = pool.submit(generate_point_dataset, 'test', 1000)
+    #     # elif i%6 == 3:
+    #     #     task = pool.submit(generate_point_dataset, 'positional_noise_test', 1000)
+    #     # elif i%6 == 4:
+    #     #     task = pool.submit(generate_point_dataset, 'magnitude_noise_test', 1000)
+    #     # else:
+    #     #     task = pool.submit(generate_point_dataset, 'false_star_test', 1000)
     #     all_task.append(task)
     # # wait for all tasks to be done
     # for task in all_task:
     #     task.result()
+
+    generate_point_dataset('false_star_test', 1000)
+    # generate_point_dataset('positional_noise_test', 1000)
+    # generate_point_dataset('magnitude_noise_test', 1000)
+
     # after all tasks are done, aggregate the dataset
-    for type in ['train', 'validate', 'test']:
+    for type in ['train', 'validate', 'test', 'positional_noise_test', 'magnitude_noise_test', 'false_star_test']:
         dataset_path = os.path.join(point_dataset_path, type)
+        if type == 'false_star_test':
+            dataset_path = os.path.join(dataset_path, f'{num_false_star}')
         files = os.listdir(dataset_path)
         labels = pd.concat([pd.read_csv(os.path.join(dataset_path, file)) for file in files if file != 'labels.csv'], ignore_index=True)
         labels_info = labels['star_id'].value_counts()
         print(type, len(labels_info), labels_info.head(5), labels_info.tail(5))
         
-        if type == 'train':
-            labels = labels.groupby('star_id').head(70)
-        elif type == 'validate':
-            labels = labels.groupby('star_id').head(20)
-        else:
-            labels = labels.groupby('star_id').head(10)
+    # #     if type == 'train':
+    # #         labels = labels.groupby('star_id').head(70)
+    # #     elif type == 'validate':
+    # #         labels = labels.groupby('star_id').head(20)
+    # #     else:
+    # #         labels = labels.groupby('star_id').head(20)
 
         labels.to_csv(f"{dataset_path}/labels.csv", index=False)
     
-    for type in ['train', 'validate', 'test']:
-        dataset_path = os.path.join(point_dataset_path, type)
-        labels = pd.read_csv(os.path.join(dataset_path, 'labels.csv'))
-        labels_info = labels['star_id'].value_counts()
-        print(type, len(labels_info), labels_info.head(5), labels_info.tail(5))
-        
-    
+    # # for type in ['train', 'validate', 'test']:
+    # #     dataset_path = os.path.join(point_dataset_path, type)
+    # #     labels = pd.read_csv(os.path.join(dataset_path, 'labels.csv'))
+    # #     labels_info = labels['star_id'].value_counts()
+    # #     print(type, len(labels_info), labels_info.head(5), labels_info.tail(5))    

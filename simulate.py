@@ -3,19 +3,8 @@ from math import radians, degrees, sin, cos, tan, sqrt, exp
 import numpy as np
 import pandas as pd
 
-# region of interest for point spread function
-ROI = 2
-
-# star sensor pixel num
-w = 1024
-h = 1024
-
-# star sensor foucs in metres
-f = 58e-3
-
-# field of view angle in degrees
-FOVx = 20
-FOVy = 20
+import config
+from config import ROI, w, h, f, FOVx, FOVy, catalogue_path, white_noise_std, mv_noise_std, pos_noise_std, num_false_star
 
 # camera total length and width in metres
 xtot = 2*tan(radians(FOVx/2))*f
@@ -28,21 +17,6 @@ myuy = 2*tan(radians(FOVy/2))*f/h
 # pixel num per length
 xpixel = w/xtot
 ypixel = h/ytot
-
-# star catalogue path
-catalogue_path = 'catalogue/Filtered_Below_5.6_SAO.csv'
-
-# the standard deviation of white noise 
-noise_std = 10
-
-# max number of false stars per image
-max_num_false_star = 4
-# max magnitude of false stars
-max_mv_false_star = 5
-
-# current simulate config
-simulate_config = f"{os.path.basename(catalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOVx}x{FOVy}_{f}_{noise_std}"
-
 
 def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, list]:
     """
@@ -114,11 +88,22 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
         Returns:
             noised_img: the image with white noise
         """
-        # generate white noise whose mean is 0 and standard deviation is noise_std
-        noise = np.random.normal(0, noise_std, img.shape)
+        noise = np.random.normal(0, white_noise_std, img.shape)
         # make sure no pixel value is less than 0 or greater than 255
         noised_img = np.clip(img + noise, 0, 255).astype(np.uint8)
         return noised_img
+
+    def add_false_stars(img: np.ndarray, num: int) -> tuple[np.ndarray, list]:
+        '''
+            Add false stars to the image.
+        '''
+        false_stars = []
+        for _ in range(num):
+            x = np.random.randint(ROI, w-ROI)
+            y = np.random.randint(ROI, h-ROI)
+            img = draw_star(x, y, 5.7, img)
+            false_stars.append([-1, (y, x), 5.7])
+        return img, false_stars
 
     # right ascension, declination and roll in radians
     ra = radians(float(ra))
@@ -169,12 +154,19 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
     stars = []
     for i in range(len(star_magnitudes)):
         # draw imagable star at (row, col)
-        col, row = star_positions[i]       
+        col, row = star_positions[i]
+        if config.type_noise == 'pos':
+            col += np.random.randint(0, pos_noise_std+1)
+            row += np.random.randint(0, pos_noise_std+1)
+        elif config.type_noise == 'mv':
+            star_magnitudes[i] += np.random.normal(0, mv_noise_std)
         img = draw_star(col, row, star_magnitudes[i], img)
         stars.append([star_ids[i], (row, col), star_magnitudes[i]])
 
     # add false stars with random magitudes at random positions
-    # false_stars = add_false_stars(img, 5)
+    if config.type_noise == 'false_star':
+        img, false_stars = add_false_stars(img, num_false_star)
+        stars.extend(false_stars)
 
     # add white noise
     img = add_white_noise(img)
