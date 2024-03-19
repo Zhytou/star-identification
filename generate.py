@@ -59,8 +59,9 @@ def generate_pattern_database(method: int, use_preprocess: bool = False, grid_le
         # exclude stars out of region
         stars = stars[distances < region_r]
         # exclude the reference star (h/2, w/2)
-        stars = stars[1:]
-        if len(stars) < 4:
+        assert stars[0][0] == 0 and stars[0][1] == 0 and distances[0] == 0
+        stars, distances = stars[1:], distances[1:]
+        if len(stars) < 2:
             continue
         if method == 1:        
             # find the nearest neighbor star
@@ -69,21 +70,37 @@ def generate_pattern_database(method: int, use_preprocess: bool = False, grid_le
             angle = np.arctan2(nearest_star[1], nearest_star[0])
             M = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
             rotated_stars = np.dot(stars, M)
-            assert(round(rotated_stars[0][1])==0)
+            assert round(rotated_stars[0][1])==0
             # calculate the pattern
             grid_pattern = np.zeros((grid_len, grid_len), dtype=int)
             for star in rotated_stars:
                 row = int(star[0]/region_r*grid_len)
                 col = int(star[1]/region_r*grid_len)
                 grid_pattern[row][col] = 1
-            binary_grid_pattern = ''.join(map(str, grid_pattern.flatten()))
             database.append({
-                'pattern': binary_grid_pattern,
+                'pattern': ''.join(map(str, grid_pattern.flatten())),
                 'id': star_id
             })
         elif method == 2:
-            # calculate the distance between the star and the center of the image
+            # calculate the angles between the star and the center of the image
             angles = np.arctan2(stars[:, 1], stars[:, 0])
+            # rotate the stars until the nearest star lies on the horizontal axis
+            angles = angles - angles[0]
+            # make sure angles are in the range of [-pi, pi]
+            angles %= 2*np.pi
+            angles[angles > np.pi] -= 2*np.pi
+            angles[angles < -np.pi] += 2*np.pi
+            # get the radial and cyclic features
+            ring_counts, _ = np.histogram(distances, bins=num_ring, range=(0, region_r))
+            sector_counts, _ = np.histogram(angles, bins=num_sector, range=(-np.pi, np.pi))
+            pattern = ''.join(map(str, ring_counts))#np.concatenate([ring_counts, sector_counts])))
+            record = {
+                'pattern': pattern,
+                'id': star_id
+            }
+            for i, d in enumerate(distances):
+                record[f'd_{i}'] = d
+            database.append(record)
         else:
             print('Invalid method!')
 
@@ -115,7 +132,11 @@ def generate_pattern_test_case(method: int, num_sample: int, use_preprocess: boo
         else:
             stars = np.array(list(star_table.keys()))
 
-        distances = cdist(stars, stars, 'euclidean')
+        if len(stars) < 1:
+            continue
+
+        # distances = cdist(stars, stars, 'euclidean')
+        distances = np.linalg.norm(stars[:,None,:] - stars[None,:,:], axis=-1)
         angles = np.arctan2(stars[:, 1] - stars[:, 1][:, None], stars[:, 0] - stars[:, 0][:, None])
         # choose a guide star as the reference star
         for star, ds, ags in zip(stars, distances, angles):
@@ -123,19 +144,20 @@ def generate_pattern_test_case(method: int, num_sample: int, use_preprocess: boo
             star_id = star_table.get(tuple(star), -1)
             if star_id == -1:
                 continue
+            if star[0] < region_r or star[0] > h-region_r or star[1] < region_r or star[1] > w-region_r:
+                continue
 
             # angles is sorted by distance with accending order
             ss, ags = stars[np.argsort(ds)], ags[np.argsort(ds)]
             ds = np.sort(ds)
             ss, ags = ss[ds < region_r], ags[ds < region_r]
-            if len(ss) < 5:
-                continue
-
-            # remove the first element of ags & ds, which is reference star
-            assert(star[0] == ss[0][0] and star[1] == ss[0][1])
+            # remove the first element, which is reference star
+            assert star[0] == ss[0][0] and star[1] == ss[0][1] and ds[0] == 0 and ags[0] == 0
             ss, ds, ags = ss[1:], ds[1:], ags[1:]
             # calculate the relative coordinates
             ss = ss-star
+            if len(ss) < 2:
+                continue
 
             if method == 1:
                 ag = ags[0]
@@ -147,13 +169,28 @@ def generate_pattern_test_case(method: int, num_sample: int, use_preprocess: boo
                     row = int(s[0]/region_r*grid_len)
                     col = int(s[1]/region_r*grid_len)
                     grid_pattern[row][col] = 1
-                binary_grid_pattern = ''.join(map(str, grid_pattern.flatten()))
                 patterns.append({
-                    'pattern': binary_grid_pattern, 
+                    'pattern': ''.join(map(str, grid_pattern.flatten())), 
                     'id': star_id
                 })
             elif method == 2:
-                pass
+                # rotate the stars until the nearest star lies on the horizontal axis
+                ags = ags-ags[0]
+                # make sure angles are in the range of [-pi, pi]
+                ags %= 2*np.pi
+                ags[ags > np.pi] -= 2*np.pi
+                ags[ags < -np.pi] += 2*np.pi
+                # get the radial and cyclic features
+                ring_counts, _ = np.histogram(ds, bins=num_ring, range=(0, region_r))
+                sector_counts, _ = np.histogram(ags, bins=num_sector, range=(-np.pi, np.pi))
+                pattern = ''.join(map(str, ring_counts))#np.concatenate([ring_counts, sector_counts])))
+                record = {
+                    'pattern': pattern,
+                    'id': star_id
+                }
+                for i, d in enumerate(ds):
+                    record[f'd_{i}'] = d
+                patterns.append(record)
             else:
                 pass
     
@@ -296,5 +333,5 @@ if __name__ == '__main__':
     #     labels_info = labels['star_id'].value_counts()
     #     print(type, len(labels_info), labels_info.head(5), labels_info.tail(5))
 
-    generate_pattern_database(1)
-    generate_pattern_test_case(1, 100)
+    generate_pattern_database(1, grid_len=60)
+    generate_pattern_test_case(1, 500, grid_len=60)
