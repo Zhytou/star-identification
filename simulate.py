@@ -4,19 +4,14 @@ import numpy as np
 import pandas as pd
 
 import config
-from config import ROI, w, h, f, FOVx, FOVy, catalogue_path, white_noise_std, mv_noise_std, pos_noise_std, num_false_star
+from config import ROI, w, h, f, FOV, catalogue_path, white_noise_std, mv_noise_std, pos_noise_std, num_false_star
 
 # camera total length and width in metres
-xtot = 2*tan(radians(FOVx/2))*f
-ytot = 2*tan(radians(FOVy/2))*f
-
-# length and width per pixel in metres
-myux = 2*tan(radians(FOVx/2))*f/w
-myuy = 2*tan(radians(FOVy/2))*f/h
+mtot = 2*tan(radians(FOV/2))*f
 
 # pixel num per length
-xpixel = w/xtot
-ypixel = h/ytot
+xpixel = w/mtot
+ypixel = h/mtot
 
 def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, list]:
     """
@@ -118,7 +113,7 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
     star_catalogue = pd.read_csv(catalogue_path, usecols=col_list)
 
     # search for image-able stars
-    R = sqrt((radians(FOVx)**2)+(radians(FOVy)**2))/2
+    R = sqrt((radians(FOV)**2)+(radians(FOV)**2))/2
     ra1, ra2 = (ra - (R/cos(de))), (ra + (R/cos(de)))
     de1, de2 = (de - R), (de + R)
     assert ra1 < ra2 and de1 < de2
@@ -139,11 +134,11 @@ def create_star_image(ra: float, de: float, roll: float) -> tuple[np.ndarray, li
     stars_within_FOV['Y3'] = f*(stars_within_FOV['Y2']/stars_within_FOV['Z2'])
 
     # convert to pixel coordinate system
-    stars_within_FOV['X4'] = np.round(w/2 + stars_within_FOV['X3']*xpixel).astype(int)
-    stars_within_FOV['Y4'] = np.round(h/2 - stars_within_FOV['Y3']*ypixel).astype(int)
+    stars_within_FOV['X4'] = np.round(w/2+stars_within_FOV['X3']*xpixel).astype(int)
+    stars_within_FOV['Y4'] = np.round(h/2-stars_within_FOV['Y3']*ypixel).astype(int)
 
     # exclude stars beyond range
-    stars_within_FOV = stars_within_FOV[stars_within_FOV['X4'].between(ROI, w-ROI+1) & stars_within_FOV['Y4'].between(ROI, h-ROI+1)]
+    stars_within_FOV = stars_within_FOV[stars_within_FOV['X4'].between(ROI, w-ROI) & stars_within_FOV['Y4'].between(ROI, h-ROI)]
 
     star_positions = list(zip(stars_within_FOV['X4'], stars_within_FOV['Y4']))
     star_magnitudes = list(stars_within_FOV['Magnitude'])
