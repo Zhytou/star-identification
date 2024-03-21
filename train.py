@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from dataset import StarPointDataset
-from generate import num_input, num_class, point_dataset_path, config_name
+from generate import num_class, sim_cfg, point_dataset_path
 from models import FeedforwardNeuralNetModel, OneDimensionConvNeuralNetModel
 from test import check_accuracy
 
@@ -48,50 +48,53 @@ def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader:
 if __name__ == '__main__':
     # training setting
     batch_size = 100
-    num_epochs = 30
-    learning_rate = 0.03
+    num_epochs = 10
+    learning_rate = 0.1
     # use gpu if available
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f'Using device: {device}')
 
-    # define datasets for training & validation
-    train_dataset, validate_dataset, test_dataset = [StarPointDataset(os.path.join(point_dataset_path, name)) for name in ['train', 'validate', 'test']]
-    # print datasets' sizes
-    print(f'Training set: {len(train_dataset)}, Validation set: {len(validate_dataset)}, Test set: {len(test_dataset)}')
+    # iterate different generate configs under same simulate config
+    gen_cfgs = os.listdir(point_dataset_path)
+    for gen_cfg in gen_cfgs:
+        num_ring, num_sector, num_neighbor_limit = list(map(int, gen_cfg.split('_')))
+        num_input = num_ring+num_sector*num_neighbor_limit
+        # define datasets for training & validation
+        train_dataset, validate_dataset, = [StarPointDataset(os.path.join(point_dataset_path, gen_cfg, type)) for type in ['train', 'validate']]
+        test_dataset = StarPointDataset(os.path.join(point_dataset_path, gen_cfg, 'test', 'pos0_mv0_fs0_test'))
+        # print datasets' sizes
+        print(f'Training set: {len(train_dataset)}, Validation set: {len(validate_dataset)}, Test set: {len(test_dataset)}')
+        # create data loaders for our datasets
+        train_loader, validate_loader, test_loader = [DataLoader(dataset, batch_size, shuffle=True) for dataset in [train_dataset, validate_dataset, test_dataset]]
 
-    # create data loaders for our datasets
-    train_loader = DataLoader(train_dataset, batch_size, shuffle=True)
-    validate_loader = DataLoader(validate_dataset, batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size, shuffle=False)
-
-    # load best model of last train
-    model_dir = f'model/{config_name}/fnn'
-    if not os.path.exists(model_dir):
-        os.makedirs(model_dir)
-    model_path = os.path.join(model_dir, 'best_model.pth')
-    if os.path.exists(model_path):
+        # load best model of last train
+        model_dir = f'model/{sim_cfg}/{gen_cfg}/fnn'
+        if not os.path.exists(model_dir):
+            os.makedirs(model_dir)
         best_model = FeedforwardNeuralNetModel(num_input, num_class)
-        best_model.load_state_dict(torch.load(model_path))
+        model_path = os.path.join(model_dir, 'best_model.pth')
+        if os.path.exists(model_path):
+            best_model.load_state_dict(torch.load(model_path))
         best_model.to(device)
         best_val_accuracy = check_accuracy(best_model, validate_loader, device)
         print(f'Original model accuracy {best_val_accuracy}%')
 
-    # tune hyperparameters
-    hidden_dimss = [[100, 200]]
-    for hidden_dims in hidden_dimss:  
-        model = FeedforwardNeuralNetModel(num_input, num_class)
-        model.to(device)
-        optimizer = optim.SGD(model.parameters(), lr=learning_rate)  
+        # tune hyperparameters
+        hidden_dimss = [[100, 200]]
+        for hidden_dims in hidden_dimss:  
+            model = FeedforwardNeuralNetModel(num_input, num_class)
+            model.to(device)
+            optimizer = optim.SGD(model.parameters(), lr=learning_rate)  
 
-        print(f'train model with {hidden_dims}')
-        train(model, optimizer, num_epochs, train_loader, test_loader, device)
-        val_accuracy = check_accuracy(model, validate_loader, device)
-        print(f'validate accurracy {val_accuracy}')
+            print(f'train model with {hidden_dims}')
+            train(model, optimizer, num_epochs, train_loader, test_loader, device)
+            val_accuracy = check_accuracy(model, validate_loader, device)
+            print(f'validate accurracy {val_accuracy}')
 
-        if val_accuracy > best_val_accuracy:
-            best_model = model
-            best_val_accuracy = val_accuracy
+            if val_accuracy > best_val_accuracy:
+                best_model = model
+                best_val_accuracy = val_accuracy
     
-    test_accuray = check_accuracy(best_model, test_loader, device)
-    print(f'Best model validate accuracy: {best_val_accuracy}%, test accuracy: {test_accuray}%')
-    torch.save(best_model.state_dict(), model_path)
+        test_accuray = check_accuracy(best_model, test_loader, device)
+        print(f'Best model validate accuracy: {best_val_accuracy}%, test accuracy: {test_accuray}%')
+        torch.save(best_model.state_dict(), model_path)
