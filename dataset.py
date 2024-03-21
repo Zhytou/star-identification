@@ -50,7 +50,6 @@ class StarPointDataset(Dataset):
             raise FileNotFoundError(f'{label_file_path}does not exist')
         
         dirs = root_dir.split('/')
-        print(dirs)
         assert len(dirs) <= 6 and dirs[0] == 'data' and dirs[1] == 'star_points'
         self.num_ring, self.num_sector, self.num_neighbor_limit = list(map(int, dirs[3].split('_')))
         

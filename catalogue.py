@@ -4,7 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt, matplotlib.axes._axes as axes
 from math import radians, sqrt, cos, pi
 
-from config import FOVx, FOVy
+from simulate import FOV
 
 
 def draw_star_distribution(catalogue: pd.DataFrame, ax: axes.Axes, title: str):
@@ -34,7 +34,7 @@ def draw_probability_versus_star_num_within_FOV(catalogue: pd.DataFrame, ax: axe
         num_vector: the number of vectors to be generated
     '''
     # calculate the half of FOV diagonal distance
-    R = sqrt((radians(FOVx)**2)+(radians(FOVy)**2))/2
+    R = sqrt((radians(FOV)**2)+(radians(FOV)**2))/2
     
     # generate random right ascension[-pi, pi] and declination[-pi/2, pi/2], method from http://www.opticsjournal.net/Articles/Abstract?aid=OJbf48ddeef697ba09
     ras = np.random.uniform(-pi, pi, num_vector)
@@ -84,7 +84,7 @@ def filter_catalogue(catalogue: pd.DataFrame, limit_mv: float=6.0, num_vector: i
     '''
 
     # calculate the half of FOV diagonal distance
-    R = sqrt((radians(FOVx)**2)+(radians(FOVy)**2))/2
+    R = sqrt((radians(FOV)**2)+(radians(FOV)**2))/2
 
     # eliminate the stars with magnitude > limit_mv
     catalogue = catalogue[catalogue['Magnitude'] <= limit_mv].reset_index(drop=True)
@@ -148,9 +148,9 @@ def filter_catalogue(catalogue: pd.DataFrame, limit_mv: float=6.0, num_vector: i
 
 
 if __name__ == '__main__':
-    file = 'catalogue/Below_6.0_SAO.csv'
+    file = 'catalogue/below_6.0_SAO.csv'
     limit_mv = 5.6
-    filtered_file = f'catalogue/Filtered_Below_{limit_mv}_SAO.csv'
+    filtered_file = f'catalogue/filtered_below_{limit_mv}_SAO.csv'
 
     df = pd.read_csv(file, usecols=["Star ID", "RA", "DE", "Magnitude"])
     if os.path.exists(filtered_file):
