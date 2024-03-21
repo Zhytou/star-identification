@@ -16,11 +16,14 @@ region_r = int(w/FOV*6)
 # star catalogue
 catalogue = pd.read_csv(catalogue_path, usecols= ["Star ID", "RA", "DE", "Magnitude"])
 
+# number of reference star
+num_class = len(catalogue)
+
 # define the path to store the database and pattern as well as dataset
-simulte_name = f"{os.path.basename(catalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOV}x{FOV}"
-database_path = f'database/{simulte_name}'
-pattern_path = f'pattern/{simulte_name}'
-point_dataset_path = f'data/star_points/{simulte_name}'
+sim_cfg = f"{os.path.basename(catalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOV}x{FOV}"
+database_path = f'database/{sim_cfg}'
+pattern_path = f'pattern/{sim_cfg}'
+point_dataset_path = f'data/star_points/{sim_cfg}'
 
 
 def generate_pattern_database(method: int, use_preprocess: bool = False, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30):
@@ -229,7 +232,7 @@ def generate_point_dataset(type: str, num_sample: int, num_ring: int = 200, num_
     '''
     dataset_path = os.path.join(point_dataset_path, f'{num_ring}_{num_sector}_{num_neighbor_limit}', type)
     if type == 'test':
-        database_path = os.path.join(database_path, f'pos{pos_noise_std}_mv{mv_noise_std}_fs{num_false_star}_test')
+        dataset_path = os.path.join(dataset_path, f'pos{pos_noise_std}_mv{mv_noise_std}_fs{num_false_star}_test')
     if not os.path.exists(dataset_path):
         os.makedirs(dataset_path)
 
@@ -299,40 +302,6 @@ def generate_point_dataset(type: str, num_sample: int, num_ring: int = 200, num_
     df.to_csv(os.path.join(dataset_path, str(uuid.uuid1())), index=False)
 
 
-def aggregate_point_dataset(num_round: int, types: list = ['train', 'validate', 'test'], num_sample: int = 1000, num_ring: int = 200, num_sector: int = 30, pos_noise_stds: list = [0, 1, 2], mv_noise_stds: list = [0, 0.1, 0.2], num_false_stars: list = [0, 1, 2, 3, 4, 5], num_neighbor_limit: int = 4):
-    '''
-        Aggregate the dataset.
-    Args:
-        num_round: the number of rounds to generate the dataset
-        types: the types of the dataset
-        num_ring: the number of rings
-        num_sector: the number of sectors
-        num_neighbor_limit: the number of neighbor stars
-    '''
-    # use thread pool
-    num_thread = num_round*len(types)
-    pool = ThreadPoolExecutor(max_workers=num_thread)
-    # generate dataset
-    all_task=[]
-    for i in range(num_thread):
-        task = pool.submit(generate_point_dataset, 'train', num_sample, num_ring, num_sector)
-        all_task.append(task)
-    # wait for all tasks to be done
-    for task in all_task:
-        task.result()
-
-    # after all tasks are done, aggregate the dataset
-    for type in ['train', 'validate', 'test', 'positional_noise_test', 'magnitude_noise_test', 'false_star_test']:
-        dataset_path = os.path.join(point_dataset_path, type)
-        
-        files = os.listdir(dataset_path)
-        df = pd.concat([pd.read_csv(os.path.join(dataset_path, file)) for file in files if file != 'labels.csv'], ignore_index=True)
-        df_info = df['star_id'].value_counts()
-        print(type, len(df_info), df_info.head(5), df_info.tail(5))
-
-        df.to_csv(f"{dataset_path}/labels.csv", index=False)
-
-
 def aggregate_pattern_test(num_round: int, methods: list = [1, 2], num_sample: int = 1000, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_stds: list = [0, 1, 2], mv_noise_stds: list = [0, 0.1, 0.2], num_false_stars: list = [0, 1, 2, 3, 4, 5]):
     '''
         Aggregate the pattern test.
@@ -400,10 +369,72 @@ def aggregate_pattern_test(num_round: int, methods: list = [1, 2], num_sample: i
                 merge_test(os.path.join(pattern_path, f'db{method}_{num_ring}_{num_sector}_pos{0}_mv{0}_fs{num_false_star}_test'))
         else:
             continue
+
+
+def aggregate_point_dataset(num_round: int, types: list = ['train', 'validate', 'test'], num_sample: int = 1000, num_ring: int = 200, num_sector: int = 30, pos_noise_stds: list = [0, 1, 2], mv_noise_stds: list = [0, 0.1, 0.2], num_false_stars: list = [0, 1, 2, 3, 4, 5], num_neighbor_limit: int = 4):
+    '''
+        Aggregate the dataset.
+    Args:
+        num_round: the number of rounds to generate the dataset
+        types: the types of the dataset
+        num_ring: the number of rings
+        num_sector: the number of sectors
+        num_neighbor_limit: the number of neighbor stars
+    '''
+
+    def merge_dataset(dataset_path: str):
+        '''
+            Merge the test cases into a single file.
+        Args:
+            path: the path to the test cases
+        '''
+        files = os.listdir(dataset_path)
+        df = pd.concat([pd.read_csv(os.path.join(dataset_path, file)) for file in files if file != 'labels.csv'], ignore_index=True)
+        df.to_csv(f"{dataset_path}/labels.csv", index=False)
+
+    # use thread pool
+    num_thread = len(types)-1+len(pos_noise_stds)+len(mv_noise_stds)+len(num_false_stars)
+    pool = ThreadPoolExecutor(max_workers=num_thread)
+    # generate dataset
+    all_task=[]
+    for _ in range(num_round):
+        for type in types:
+            if type == 'test':
+                for pos_noise_std in pos_noise_stds:
+                    task = pool.submit(generate_point_dataset, 'test', num_sample, num_ring=num_ring, num_sector=num_sector, num_neighbor_limit=num_neighbor_limit, pos_noise_std=pos_noise_std)
+                    all_task.append(task)
+                for mv_noise_std in mv_noise_stds:
+                    task = pool.submit(generate_point_dataset, 'test', num_sample, num_ring=num_ring, num_sector=num_sector, num_neighbor_limit=num_neighbor_limit, mv_noise_std=mv_noise_std)
+                    all_task.append(task)
+                for num_false_star in num_false_stars:
+                    task = pool.submit(generate_point_dataset, 'test', num_sample, num_ring=num_ring, num_sector=num_sector, num_neighbor_limit=num_neighbor_limit, num_false_star=num_false_star)
+                    all_task.append(task)
+            else:
+                task = pool.submit(generate_point_dataset, type, num_sample, num_ring, num_sector)
+                all_task.append(task)
+    
+    # wait for all tasks to be done
+    for task in all_task:
+        task.result()
+
+    # after all tasks are done, aggregate the dataset
+    for type in types:
+        dataset_path = os.path.join(point_dataset_path, f'{num_ring}_{num_sector}_{num_neighbor_limit}', type)
+        if type != 'test':
+            merge_dataset(dataset_path)
+            continue
+
+        for pos_noise_std in pos_noise_stds:
+            merge_dataset(os.path.join(dataset_path, f'pos{pos_noise_std}_mv{0}_fs{0}_test'))
+        for mv_noise_std in mv_noise_stds:
+            merge_dataset(os.path.join(dataset_path, f'pos{0}_mv{mv_noise_std}_fs{0}_test'))
+        for num_false_star in num_false_stars:
+            merge_dataset(os.path.join(dataset_path, f'pos{0}_mv{0}_fs{num_false_star}_test'))
     
 
 if __name__ == '__main__':
     # generate_pattern_database(1, grid_len=60)
     # generate_pattern_database(2)
-    aggregate_pattern_test(0, [2], grid_len = 60, num_sample=100)
+    # aggregate_pattern_test(0, [2], grid_len = 60, num_sample=100)
+    aggregate_point_dataset(4, types=['train'], num_sample=500)
     
