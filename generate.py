@@ -116,7 +116,7 @@ def generate_pattern_database(method: int, use_preprocess: bool = False, grid_le
         df.to_csv(f"{database_path}/db{method}_{num_ring}_{num_sector}.csv", index=False)
 
 
-def generate_pattern_test_case(method: int, num_sample: int, use_preprocess: bool = False, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_std: int = 0, mv_noise_std: float = 0, num_false_star: int = 0):
+def generate_pattern_test_case(method: int, num_sample: int, use_preprocess: bool = False, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0):
     '''
         Generate pattern match test case.
     Args:
@@ -218,7 +218,7 @@ def generate_pattern_test_case(method: int, num_sample: int, use_preprocess: boo
     df.to_csv(os.path.join(pattern_test_path, str(uuid.uuid1())),index=False)
 
 
-def generate_point_dataset(type: str, num_sample: int, num_ring: int = 200, num_sector: int = 30, pos_noise_std: int = 0, mv_noise_std: float = 0, num_false_star: int = 0, num_neighbor_limit: int = 4):
+def generate_point_dataset(type: str, num_sample: int, num_ring: int = 200, num_sector: int = 30, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0, num_neighbor_limit: int = 4):
     '''
         Generate the dataset from the given star catalogue.
     Args:
@@ -391,6 +391,9 @@ def aggregate_point_dataset(num_round: int, types: list = ['train', 'validate', 
         files = os.listdir(dataset_path)
         df = pd.concat([pd.read_csv(os.path.join(dataset_path, file)) for file in files if file != 'labels.csv'], ignore_index=True)
         df.to_csv(f"{dataset_path}/labels.csv", index=False)
+        # print the information of the dataset
+        df_info = df['star_id'].value_counts()
+        print(type, len(df_info), df_info.head(5), df_info.tail(5))
 
     # use thread pool
     num_thread = len(types)-1+len(pos_noise_stds)+len(mv_noise_stds)+len(num_false_stars)

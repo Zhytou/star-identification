@@ -1,4 +1,3 @@
-import os
 from math import radians, degrees, sin, cos, tan, sqrt, exp
 import numpy as np
 import pandas as pd
@@ -28,7 +27,7 @@ ypixel = h/mtot
 catalogue_path = 'catalogue/filtered_below_5.6_SAO.csv'
 
 
-def create_star_image(ra: float, de: float, roll: float, white_noise_std: float = 10, pos_noise_std: int = 0, mv_noise_std: float = 0, num_false_star: int = 0) -> tuple[np.ndarray, list]:
+def create_star_image(ra: float, de: float, roll: float, white_noise_std: float = 10, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0) -> tuple[np.ndarray, list]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
@@ -153,8 +152,20 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
     stars_within_FOV['Y3'] = f*(stars_within_FOV['Y2']/stars_within_FOV['Z2'])
 
     # convert to pixel coordinate system
-    stars_within_FOV['X4'] = np.round(w/2+stars_within_FOV['X3']*xpixel).astype(int)
-    stars_within_FOV['Y4'] = np.round(h/2-stars_within_FOV['Y3']*ypixel).astype(int)
+    stars_within_FOV['X4'] = w/2+stars_within_FOV['X3']*xpixel
+    stars_within_FOV['Y4'] = h/2-stars_within_FOV['Y3']*ypixel
+    
+    # add positional noise if needed
+    if pos_noise_std > 0:
+        stars_within_FOV['X4'] += np.random.normal(0, pos_noise_std)
+        stars_within_FOV['Y4'] += np.random.normal(0, pos_noise_std)
+    
+    stars_within_FOV['X4'] = np.round(stars_within_FOV['X4']).astype(int)
+    stars_within_FOV['Y4'] = np.round(stars_within_FOV['Y4']).astype(int)
+
+    # add magnitude noise
+    if mv_noise_std > 0:
+        stars_within_FOV['Magnitude'] += np.random.normal(0, mv_noise_std)
 
     # exclude stars beyond range
     stars_within_FOV = stars_within_FOV[stars_within_FOV['X4'].between(ROI, w-ROI) & stars_within_FOV['Y4'].between(ROI, h-ROI)]
@@ -169,11 +180,6 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
     for i in range(len(star_magnitudes)):
         # draw imagable star at (row, col)
         col, row = star_positions[i]
-        if pos_noise_std > 0:
-            col += np.random.randint(0, pos_noise_std+1)
-            row += np.random.randint(0, pos_noise_std+1)
-        if mv_noise_std > 0:
-            star_magnitudes[i] += np.random.normal(0, mv_noise_std)
         img = draw_star(col, row, star_magnitudes[i], img)
         stars.append([star_ids[i], (row, col), star_magnitudes[i]])
 
