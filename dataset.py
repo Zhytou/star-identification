@@ -2,11 +2,9 @@ import os
 import torch
 import cv2
 import pandas as pd
-import matplotlib.pyplot as plt
 import torchvision.transforms as transforms
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 
-from generate import num_ring, num_sector, num_neighbor_limit
 
 class StarImageDataset(Dataset):
     '''Star image dataset'''
@@ -51,6 +49,11 @@ class StarPointDataset(Dataset):
         if not os.path.exists(label_file_path):
             raise FileNotFoundError(f'{label_file_path}does not exist')
         
+        dirs = root_dir.split('/')
+        print(dirs)
+        assert len(dirs) <= 6 and dirs[0] == 'data' and dirs[1] == 'star_points'
+        self.num_ring, self.num_sector, self.num_neighbor_limit = list(map(int, dirs[3].split('_')))
+        
         self.label_df = pd.read_csv(label_file_path)
 
     def __len__(self):
@@ -60,31 +63,9 @@ class StarPointDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        cols = [f'ring_{i}' for i in range(num_ring)] + [f'neighbor_{i}_sector_{j}' for i in range(num_neighbor_limit) for j in range(num_sector)]
+        cols = [f'ring_{i}' for i in range(self.num_ring)] + [f'neighbor_{i}_sector_{j}' for i in range(self.num_neighbor_limit) for j in range(self.num_sector)]
         points = self.label_df.loc[idx, cols].values
         catalogue_idx = self.label_df.loc[idx, 'catalogue_idx'].astype(int)
         
         return torch.from_numpy(points).float(), catalogue_idx
 
-
-if __name__ == '__main__':
-    img_dataset = StarImageDataset('data/star_images/', 'labels.csv')
-    fig = plt.figure(figsize=(8, 8))
-    col, row = 3, 3
-    for i in range(1, col * row + 1):
-        idx = torch.randint(len(img_dataset), size=(1,)).item()
-        img, label = img_dataset[idx]
-        fig.add_subplot(row, col, i)
-        plt.axis("off")
-        plt.imshow(img.squeeze(), cmap="gray")
-    plt.show()
-
-    pt_dataset = StarPointDataset('data/star_points/labels.csv')
-    pt_loader = DataLoader(pt_dataset, batch_size=4, shuffle=True)
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-    for points, labels in pt_loader:
-        print(points.shape, points.dtype, points.device)
-        points.to(device)
-        print(points.shape, points.dtype, points.device)
-        break
