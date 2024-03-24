@@ -63,8 +63,8 @@ class StarPointDataset(Dataset):
             idx = idx.tolist()
 
         cols = [f'ring_{i}' for i in range(self.num_ring)] + [f'neighbor_{i}_sector_{j}' for i in range(self.num_neighbor_limit) for j in range(self.num_sector)]
-        points = self.label_df.loc[idx, cols].values
-        catalogue_idx = self.label_df.loc[idx, 'catalogue_idx'].astype(int)
-        
+        points = self.label_df.loc[idx, cols].to_numpy().reshape(1, -1)
+        catalogue_idx = self.label_df.loc[idx, 'catalogue_idx']
+
         return torch.from_numpy(points).float(), catalogue_idx
 
