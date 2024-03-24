@@ -29,15 +29,15 @@ def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader:
             points = points.to(device)
             labels = labels.to(device)
 
-            # Clear gradients w.r.t. parameters
-            optimizer.zero_grad()
-            # Forward pass to get output/logits
+            # forward pass to get output/logits
             scores = model(points)
-            # Calculate Loss: softmax --> cross entropy loss
+            # calculate Loss: softmax --> cross entropy loss
             loss = F.cross_entropy(scores, labels)
-            # Getting gradients w.r.t. parameters
+            # clear gradients w.r.t. parameters
+            optimizer.zero_grad()
+            # getting gradients w.r.t. parameters
             loss.backward()
-            # Updating parameters
+            # updating parameters
             optimizer.step()
         
         if test_loader:
@@ -68,33 +68,40 @@ if __name__ == '__main__':
         train_loader, validate_loader, test_loader = [DataLoader(dataset, batch_size, shuffle=True) for dataset in [train_dataset, validate_dataset, test_dataset]]
 
         # load best model of last train
-        model_dir = f'model/{sim_cfg}/{gen_cfg}/fnn'
-        if not os.path.exists(model_dir):
-            os.makedirs(model_dir)
-        best_model = FeedforwardNeuralNetModel(num_input, num_class)
-        model_path = os.path.join(model_dir, 'best_model.pth')
-        if os.path.exists(model_path):
-            best_model.load_state_dict(torch.load(model_path))
-        best_model.to(device)
-        best_val_accuracy = check_accuracy(best_model, validate_loader, device)
-        print(f'Original model accuracy {best_val_accuracy}%')
+        for model_type in ['fnn', '1dcnn']:
+            model_dir = f'model/{sim_cfg}/{gen_cfg}/{model_type}'
+            if not os.path.exists(model_dir):
+                os.makedirs(model_dir)
+            if model_type == 'fnn':
+                best_model = FeedforwardNeuralNetModel(num_input, num_class)
+            else:
+                best_model = OneDimensionConvNeuralNetModel(num_input, num_class)
+            model_path = os.path.join(model_dir, 'best_model.pth')
+            if os.path.exists(model_path):
+                best_model.load_state_dict(torch.load(model_path))
+            best_model.to(device)
+            best_val_accuracy = check_accuracy(best_model, validate_loader, device)
+            print(f'Original {model_type} model accuracy {best_val_accuracy}%')
 
-        # tune hyperparameters
-        hidden_dimss = [[100, 200]]
-        for hidden_dims in hidden_dimss:  
-            model = FeedforwardNeuralNetModel(num_input, num_class)
-            model.to(device)
-            optimizer = optim.SGD(model.parameters(), lr=learning_rate)  
+            # tune hyperparameters
+            hidden_dimss = [[100, 200]]
+            for hidden_dims in hidden_dimss:
+                if model_type == 'fnn':
+                    model = FeedforwardNeuralNetModel(num_input, num_class)
+                else:
+                    model = OneDimensionConvNeuralNetModel(num_input, num_class)
+                model.to(device)
+                optimizer = optim.Adam(model.parameters(), lr=learning_rate)  
 
-            print(f'train model with {hidden_dims}')
-            train(model, optimizer, num_epochs, train_loader, test_loader, device)
-            val_accuracy = check_accuracy(model, validate_loader, device)
-            print(f'validate accurracy {val_accuracy}')
+                print(f'train {model_type} model with {hidden_dims}')
+                train(model, optimizer, num_epochs, train_loader, test_loader, device)
+                val_accuracy = check_accuracy(model, validate_loader, device)
+                print(f'validate accurracy {val_accuracy}')
 
-            if val_accuracy > best_val_accuracy:
-                best_model = model
-                best_val_accuracy = val_accuracy
+                if val_accuracy > best_val_accuracy:
+                    best_model = model
+                    best_val_accuracy = val_accuracy
     
-        test_accuray = check_accuracy(best_model, test_loader, device)
-        print(f'Best model validate accuracy: {best_val_accuracy}%, test accuracy: {test_accuray}%')
-        torch.save(best_model.state_dict(), model_path)
+            test_accuray = check_accuracy(best_model, test_loader, device)
+            print(f'Best {model_type} model validate accuracy: {best_val_accuracy}%, test accuracy: {test_accuray}%')
+            torch.save(best_model.state_dict(), model_path)
