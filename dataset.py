@@ -62,9 +62,11 @@ class StarPointDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        cols = [f'ring_{i}' for i in range(self.num_ring)] + [f'neighbor_{i}_sector_{j}' for i in range(self.num_neighbor_limit) for j in range(self.num_sector)]
-        points = self.label_df.loc[idx, cols].to_numpy().reshape(1, -1)
+        cols = [f'ring_{i}' for i in range(self.num_ring)]
+        rings = self.label_df.loc[idx, cols].to_numpy()
+        cols = [f'neighbor_{i}_sector_{j}' for i in range(self.num_neighbor_limit) for j in range(self.num_sector)]
+        sectors = self.label_df.loc[idx, cols].to_numpy().reshape(self.num_neighbor_limit, -1)
         catalogue_idx = self.label_df.loc[idx, 'catalogue_idx']
 
-        return torch.from_numpy(points).float(), catalogue_idx
+        return torch.from_numpy(rings).float(), torch.from_numpy(sectors).float(), catalogue_idx
 

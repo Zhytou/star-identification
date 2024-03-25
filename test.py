@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 
 from generate import database_path, pattern_path, point_dataset_path, sim_cfg, num_class
 from dataset import StarPointDataset
-from models import FeedforwardNeuralNetModel, OneDimensionConvNeuralNetModel
+from models import FNN, CNN
 
 
 def check_pattern_match_accuracy(method: int, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_std: int = 0, mv_noise_std: float = 0, num_false_star: int = 0):
@@ -73,16 +73,15 @@ def check_accuracy(model: nn.Module, loader: DataLoader, device=torch.device('cp
     correct = 0
     total = 0
     # Iterate through test dataset
-    for points, labels in loader:
-        points = points.to(device)
-        labels = labels.to(device)
-        # Forward pass only to get logits/output
-        outputs = model(points)
-        # Get predictions from the maximum value
+    for rings, sectors, labels in loader:
+        rings, sectors, labels = rings.to(device), sectors.to(device), labels.to(device)
+        # forward pass only to get logits/output
+        outputs = model(rings, sectors)
+        # get predictions from the maximum value
         predicted = torch.argmax(outputs.data, 1)
-        # Total number of labels
+        # total number of labels
         total += labels.size(0)
-        # Total correct predictions
+        # total correct predictions
         correct += (predicted == labels).sum().item()
     return round(100.0 * correct / total, 2)
 
@@ -105,9 +104,9 @@ if __name__ == '__main__':
                 print(f'{model_path} does not exist!')
                 continue
             if model_type == 'fnn':
-                best_model = FeedforwardNeuralNetModel(num_input, num_class)
+                best_model = FNN(num_input, num_class)
             else:
-                best_model = OneDimensionConvNeuralNetModel(num_input, num_class)
+                best_model = CNN(num_input, num_class)
             best_model.load_state_dict(torch.load(model_path))
             best_model.to(device)
 
