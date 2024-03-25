@@ -302,7 +302,7 @@ def generate_point_dataset(type: str, num_sample: int, num_ring: int = 200, num_
     df.to_csv(os.path.join(dataset_path, str(uuid.uuid1())), index=False)
 
 
-def aggregate_pattern_test(num_round: int, methods: list = [1, 2], num_sample: int = 1000, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_stds: list = [0, 1, 2], mv_noise_stds: list = [0, 0.1, 0.2], num_false_stars: list = [0, 1, 2, 3, 4, 5]):
+def aggregate_pattern_test(num_round: int, methods: list = [1, 2], num_sample: int = 1000, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_stds: list = [0, 0.5, 1, 1.5, 2], mv_noise_stds: list = [0, 0.1, 0.2], num_false_stars: list = [0, 1, 2, 3, 4, 5]):
     '''
         Aggregate the pattern test.
     Args:
@@ -371,7 +371,7 @@ def aggregate_pattern_test(num_round: int, methods: list = [1, 2], num_sample: i
             continue
 
 
-def aggregate_point_dataset(num_round: int, types: list = ['train', 'validate', 'test'], num_sample: int = 1000, num_ring: int = 200, num_sector: int = 30, pos_noise_stds: list = [0, 1, 2], mv_noise_stds: list = [0, 0.1, 0.2], num_false_stars: list = [0, 1, 2, 3, 4, 5], num_neighbor_limit: int = 4):
+def aggregate_point_dataset(num_round: int, types: list = ['train', 'validate', 'test'], num_sample: int = 1000, num_ring: int = 200, num_sector: int = 30, pos_noise_stds: list = [0, 0.5, 1, 1.5, 2], mv_noise_stds: list = [0, 0.1, 0.2], num_false_stars: list = [0, 1, 2, 3, 4, 5], num_neighbor_limit: int = 4):
     '''
         Aggregate the dataset.
     Args:
@@ -393,7 +393,7 @@ def aggregate_point_dataset(num_round: int, types: list = ['train', 'validate', 
         df.to_csv(f"{dataset_path}/labels.csv", index=False)
         # print the information of the dataset
         df_info = df['star_id'].value_counts()
-        print(type, len(df_info), df_info.head(5), df_info.tail(5))
+        print(os.path.basename(dataset_path), len(df_info), df_info.head(5), df_info.tail(5))
 
     # use thread pool
     num_thread = len(types)-1+len(pos_noise_stds)+len(mv_noise_stds)+len(num_false_stars)
@@ -413,7 +413,7 @@ def aggregate_point_dataset(num_round: int, types: list = ['train', 'validate', 
                     task = pool.submit(generate_point_dataset, 'test', num_sample, num_ring=num_ring, num_sector=num_sector, num_neighbor_limit=num_neighbor_limit, num_false_star=num_false_star)
                     all_task.append(task)
             else:
-                task = pool.submit(generate_point_dataset, type, num_sample, num_ring, num_sector)
+                task = pool.submit(generate_point_dataset, type, num_sample, num_ring=num_ring, num_sector=num_sector, num_neighbor_limit=num_neighbor_limit)
                 all_task.append(task)
     
     # wait for all tasks to be done
@@ -439,5 +439,5 @@ if __name__ == '__main__':
     # generate_pattern_database(1, grid_len=60)
     # generate_pattern_database(2)
     # aggregate_pattern_test(0, [2], grid_len = 60, num_sample=100)
-    aggregate_point_dataset(4, types=['train'], num_sample=500)
+    aggregate_point_dataset(3, ['train'], num_sample=200, num_neighbor_limit=3)
     

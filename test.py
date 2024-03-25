@@ -79,7 +79,7 @@ def check_accuracy(model: nn.Module, loader: DataLoader, device=torch.device('cp
         # Forward pass only to get logits/output
         outputs = model(points)
         # Get predictions from the maximum value
-        _, predicted = torch.max(outputs.data, 1)
+        predicted = torch.argmax(outputs.data, 1)
         # Total number of labels
         total += labels.size(0)
         # Total correct predictions
@@ -99,7 +99,7 @@ if __name__ == '__main__':
         num_ring, num_sector, num_neighbor_limit = list(map(int, gen_cfg.split('_')))
         num_input = num_ring+num_sector*num_neighbor_limit
         # iterate different model types
-        for model_type in ['fnn', 'cnn']:
+        for model_type in ['fnn', '1dcnn']:
             model_path = f'model/{sim_cfg}/{gen_cfg}/{model_type}/best_model.pth'
             if not os.path.exists(model_path):
                 print(f'{model_path} does not exist!')
@@ -147,15 +147,15 @@ if __name__ == '__main__':
     # conventional pattern match methods' accuracy
     for method in [1, 2]:
         pos_accs, mv_accs, fs_accs = [], [], []
-        for pos_noise_std in [1, 2]:
+        for pos_noise_std in [0, 1, 2]:
             acc = check_pattern_match_accuracy(method, grid_len=60, pos_noise_std=pos_noise_std)
             pos_accs.append(acc)
         
-        for mv_noise_std in [0.1, 0.2]:
+        for mv_noise_std in [0, 0.1, 0.2]:
             acc = check_pattern_match_accuracy(method, grid_len=60, mv_noise_std=mv_noise_std)
             mv_accs.append(acc)
 
-        for num_false_star in [1, 2, 3, 4, 5]:
+        for num_false_star in [0, 1, 2, 3, 4, 5]:
             acc = check_pattern_match_accuracy(method, grid_len=60, num_false_star=num_false_star)
             fs_accs.append(acc)
         
