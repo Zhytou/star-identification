@@ -24,16 +24,16 @@ xpixel = w/mtot
 ypixel = h/mtot
 
 # star catalogue path
-catalogue_path = 'catalogue/filtered_below_5.6_SAO.csv'
+catalogue_path = 'catalogue/filtered_below_5.7_SAO.csv'
 
 
 def create_star_image(ra: float, de: float, roll: float, white_noise_std: float = 10, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0) -> tuple[np.ndarray, list]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
-        ra: right ascension in degrees
-        de: declination in degrees
-        roll: roll in degrees
+        ra: right ascension in radians
+        de: declination in radians
+        roll: roll in radians
         white_noise_std: the standard deviation of white noise
         pos_noise_std: the standard deviation of positional noise
         mv_noise_std: the standard deviation of maginatitude noise
@@ -118,11 +118,6 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
             false_stars.append([-1, (y, x), 5.7])
         return img, false_stars
 
-    # right ascension, declination and roll in radians
-    ra = radians(float(ra))
-    de = radians(float(de))
-    roll = radians(float(roll))
-
     # get rotation matrix
     M = get_rotation_matrix(ra, de, roll)
 
@@ -200,7 +195,7 @@ if __name__ == '__main__':
     df = pd.read_csv(catalogue_path, usecols=col_list)
     for i in range(len(df)):
         ra, de = df.loc[i, 'RA'], df.loc[i, 'DE']
-        img, stars = create_star_image(degrees(ra), degrees(de), 0)
+        img, stars = create_star_image(ra, de, 0)
         star_table = dict(map(lambda x: (x[1], x[0]), stars))
         # when using the ra & de in star catalogue, one star must be placed in the center of image
         if star_table.get((w/2, h/2), -1) == -1:

@@ -100,8 +100,8 @@ if __name__ == '__main__':
     # random ra & de test
     num_test = 500
     # generate random right ascension[0, 360] and declination[-90, 90]
-    ras = np.random.uniform(-180, 180, num_test)
-    des = np.degrees(np.arcsin(np.random.uniform(-1, 1, num_test)))
+    ras = np.random.uniform(-np.pi, np.pi, num_test)
+    des = np.arcsin(np.random.uniform(-np.pi/2, np.pi, num_test))
     # centroid position error
     pos_error = 0
     cnt = 0
