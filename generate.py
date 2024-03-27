@@ -265,7 +265,7 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, num_ring: int = 200
         angles = np.arctan2(stars[:, 1] - stars[:, 1][:, None], stars[:, 0] - stars[:, 0][:, None])
         # choose a guide star as the reference star
         for star, ds, ags in zip(stars, distances, angles):
-            if star[0] < h/2-300 or star[0] > h/2+300 or star[1] < w/2-300 or star[1] > w/2+300:
+            if star[0] < region_r or star[0] > h-region_r or star[1] < region_r or star[1] > w-region_r:
                 continue
             # check if false star
             star_id = star_table.get(tuple(star), -1)
@@ -380,7 +380,7 @@ def aggregate_pm_test(num_round: int, methods: list = [1, 2], num_sample: int = 
             continue
 
 
-def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5}, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_stds: list = [0.5, 1, 1.5, 2], mv_noise_stds: list = [0.1, 0.2], num_false_stars: list = [1, 2, 3, 4, 5], num_thread: int = 20, num_round: int = 3):
+def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5}, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_stds: list = [0.5, 1, 1.5, 2], mv_noise_stds: list = [0.1, 0.2], num_false_stars: list = [1, 2, 3, 4, 5], num_thread: int = 20):
     '''
         Aggregate the dataset. Firstly, the number of samples for each class is counted. Then, roughly generate classes with too few samples using generate_nn_samples function's 'random' mode. Lastly, the rest are finely generated to ensure that the number of samples in each class in the entire dataset reaches the standard.
     Args:
@@ -390,93 +390,91 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
         num_neighbor: the number of neighbor stars
         pos_noise_stds: list of positional noise
         num_thread: the number of threads to generate the dataset
-        num_round: the number of rounds for rough generation
     '''
 
-    def get_cata_idxs():
+    def wait_tasks(tasks: dict):
         '''
-            Get the indexes of the catalogue.
+            Wait for all tasks to be done. Then, merge the result of async tasks and store it in labels.csv. 
+        Args:
+            tasks: the tasks to be done
         '''
-        df_info = df['star_id'].value_counts()
-        df_info = df_info[df_info < 20]
-        idxs = catalogue[catalogue['Star ID'].isin(df_info.index)].index.to_list()
-        idxs = []
+        for key in tasks.keys():
+            # make directory for every type of dataset
+            path = os.path.join(dataset_path, gen_cfg, key)
+            if not os.path.exists(path):
+                os.makedirs(path)
+            # store the samples        
+            dfs = []
+            for task in tasks[key]:
+                df = task.result()
+                df.to_csv(f"{path}/{uuid.uuid1()}", index=False)
+                dfs.append(df)
+            # remain the old samples in labels.csv
+            if os.path.exists(f'{path}/labels.csv'):
+                dfs.append(pd.read_csv(f'{path}/labels.csv'))
+            # aggregate the dataset
+            df = pd.concat(dfs, ignore_index=True)
+            df.to_csv(f'{path}/labels.csv', index=False)
+            # print dataset distribution
+            df = df['star_id'].value_counts()
+            print(len(df), df.head(3), df.tail(3))
+
 
     # generate config
     gen_cfg = f'{num_ring}_{num_sector}_{num_neighbor}'
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thread)
-    # iterate to roughly generate the dataset
-    all_task = defaultdict(list)
+    
+    # rough generation
+    tasks = defaultdict(list)
     for key in types.keys():
         # count the number of samples for each class
-        if os.path.exists(os.path.join(dataset_path, gen_cfg, key, 'labels.csv')):
-            df = pd.read_csv(os.path.join(dataset_path, gen_cfg, key, 'labels.csv'))
-            df_info = df['star_id'].value_counts()
-            pct = len(df_info[df_info < types[key]])/len(catalogue)
-            if pct < 0.5:
+        file = os.path.join(dataset_path, gen_cfg, key, 'labels.csv')
+        if os.path.exists(file):
+            df = pd.read_csv(file)
+            df = df['catalogue_idx'].value_counts()
+            pct = len(df[df > types[key]])/len(catalogue)
+            if pct > 0.5:
+                print('Skip rough generation!')
                 continue
-        # roughly generate using generate_nn_samples 'random' mode
-        num_vec = types[key]*10
-        for _ in range(num_round):
+        
+        # roughly generate the samples for each class
+        num_vec = types[key]*20
+        for _ in range(num_thread//2):
             # train, validate and default test
             task = pool.submit(generate_nn_samples, 'random', num_vec, [], num_ring, num_sector, num_neighbor)
-            all_task[key].append(task)
-            
-            # # positional noise test
-            # for pns in pos_noise_stds:
-            #     task = pool.submit(generate_nn_samples, 'random', num_vec, [], num_ring, num_sector, num_neighbor, pos_noise_std=pns)
-            #     all_task[f'{key}/pos{pns}'].append(task)
+            tasks[key].append(task)
 
-            # # magnitude noise test
-            # for mns in mv_noise_stds:
-            #     task = pool.submit(generate_nn_samples, 'random', num_vec, [], num_ring, num_sector, num_neighbor, mv_noise_std=mns)
-            #     all_task[f'{key}/mv{mns}'].append(task)
-                
-            # # false star test
-            # for nfs in num_false_stars:
-            #     task = pool.submit(generate_nn_samples, 'random', num_vec, [], num_ring, num_sector, num_neighbor, num_false_star=nfs)
-            #     all_task[f'{key}/fs{nfs}'].append(task)
+    # wait for all tasks to be done and merge the results
+    wait_tasks(tasks)
 
-    # wait for all tasks to be done
-    for key in all_task.keys():
-        # make directory for every type of dataset
-        path = os.path.join(dataset_path, gen_cfg, key)
-        if not os.path.exists(path):
-            os.makedirs(path)
-
-        # store the samples        
-        dfs = []
-        for task in all_task[key]:
-            df = task.result()
-            df.to_csv(f"{path}/{uuid.uuid1()}", index=False)
-            dfs.append(df)
-
-        # remain the old samples in labels.csv
-        if os.path.exists(f'{path}/labels.csv'):
-            dfs.append(pd.read_csv(f'{path}/labels.csv'))
-
-        # aggregate the dataset
-        df = pd.concat(dfs, ignore_index=True)
-        df.to_csv(f'{path}/labels.csv', index=False)
+    # fine generation
+    tasks = defaultdict(list)
+    for key in types.keys():
+        df = pd.read_csv(os.path.join(dataset_path, gen_cfg, key, 'labels.csv'))
+        # count the number of samples for each class
+        df = df['catalogue_idx'].value_counts()
+        # add those even unexisting class(catalogue idx)
+        df = df.reindex(catalogue.index, fill_value=0)
+        # count class whose samples less than limit
+        df = df[df < types[key]]
+        # repeat each the index of df (which is catalogue idx needed)
+        idxs = df.index.repeat(types[key]-df).to_list()
+        
+        print(len(idxs), idxs[:3], idxs[-3:])
+        # for class whose sample less than num_sample_per_class, generate the dataset til the number of samples reach the standard
+        len_td = len(idxs)//num_thread
+        for i in range(num_thread+1):
+            beg, end = i*len_td, min((i+1)*len_td, len(idxs))
+            task = pool.submit(generate_nn_samples, 'supplementary', 0, idxs[beg: end], num_ring, num_sector, num_neighbor)
+            tasks[key].append(task)
     
-    for 
-
-    # calculate samples less than limit
-    df_info = df['star_id'].value_counts()
-    df_info = df_info[df_info < 20]
-    idxs = catalogue[catalogue['Star ID'].isin(df_info.index)].index.to_list()
-    print(len(df_info), df_info.tail(50))
-
-    # for class whose sample less than num_sample_per_class, generate the dataset again
-    
-    
-    print(idxs)
+    wait_tasks(tasks)
 
 
 if __name__ == '__main__':
     # generate_pm_database(1, grid_len=60)
     # generate_pm_database(2)
     # aggregate_pm_test(0, [2], grid_len = 60, num_sample=100)
-    aggregate_nn_dataset({'train': 1}, num_neighbor=3)
+    aggregate_nn_dataset({'train': 15, 'validate': 6, 'test': 6}, num_neighbor=3)
     
