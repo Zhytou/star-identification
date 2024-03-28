@@ -106,14 +106,22 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
         noised_img = np.clip(img + noise, 0, 255).astype(np.uint8)
         return noised_img
 
-    def add_false_stars(img: np.ndarray, num: int) -> tuple[np.ndarray, list]:
+    def add_false_stars(img: np.ndarray, num: int, pos: np.array, min_d: int=4*ROI) -> tuple[np.ndarray, list]:
         '''
             Add false stars to the image.
+        Args:
+            img: the image to add false stars
+            num: the number of false stars
+            pos: the positions of true stars
+            min_d: the minimum distance between false stars and true stars
         '''
         false_stars = []
-        for _ in range(num):
+        while len(false_stars) < num:
             x = np.random.randint(ROI, w-ROI)
             y = np.random.randint(ROI, h-ROI)
+            ds = np.linalg.norm(pos-(x, y), axis=1)
+            if ds.min() < min_d:
+                continue
             img = draw_star(x, y, 5.7, img)
             false_stars.append([-1, (y, x), 5.7])
         return img, false_stars
@@ -180,7 +188,7 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
 
     # add false stars with random magitudes at random positions
     if num_false_star > 0:
-        img, false_stars = add_false_stars(img, num_false_star)
+        img, false_stars = add_false_stars(img, num_false_star, np.array(star_positions))
         stars.extend(false_stars)
 
     # add white noise
