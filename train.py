@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from dataset import StarPointDataset
-from generate import num_class, sim_cfg, point_dataset_path
+from generate import num_class, sim_cfg, dataset_path
 from models import FNN, CNN
 from test import check_accuracy
 
@@ -46,21 +46,21 @@ def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader:
         
 if __name__ == '__main__':
     # training setting
-    batch_size = 100
-    num_epochs = 10
+    batch_size = 101
+    num_epochs = 30
     learning_rate = 0.01
     # use gpu if available
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f'Using device: {device}')
 
     # iterate different generate configs under same simulate config
-    gen_cfgs = os.listdir(point_dataset_path)
+    gen_cfgs = os.listdir(dataset_path)
     for gen_cfg in gen_cfgs:
+        print(f'Generate config: {gen_cfg}')
         num_ring, num_sector, num_neighbor_limit = list(map(int, gen_cfg.split('_')))
         num_input = num_ring+num_sector*num_neighbor_limit
         # define datasets for training & validation
-        train_dataset, validate_dataset, = [StarPointDataset(os.path.join(point_dataset_path, gen_cfg, type)) for type in ['train', 'validate']]
-        test_dataset = StarPointDataset(os.path.join(point_dataset_path, gen_cfg, 'test', 'pos0_mv0_fs0_test'))
+        train_dataset, validate_dataset, test_dataset = [StarPointDataset(os.path.join(dataset_path, gen_cfg, type)) for type in ['train', 'validate', 'test']]
         # print datasets' sizes
         print(f'Training set: {len(train_dataset)}, Validation set: {len(validate_dataset)}, Test set: {len(test_dataset)}')
         # create data loaders for our datasets
@@ -79,16 +79,13 @@ if __name__ == '__main__':
             if os.path.exists(model_path):
                 best_model.load_state_dict(torch.load(model_path))
             best_model.to(device)
-            best_val_accuracy = 0 #check_accuracy(best_model, validate_loader, device)
+            best_val_accuracy = check_accuracy(best_model, validate_loader, device)
             print(f'Original {model_type} model accuracy {best_val_accuracy}%')
 
             # tune hyperparameters
             hidden_dimss = [[100, 200]]
             for hidden_dims in hidden_dimss:
-                if model_type == 'fnn':
-                    model = FNN(num_input, num_class)
-                else:
-                    model = CNN(num_ring, (num_neighbor_limit, num_sector), num_class)
+                model = best_model
                 model.to(device)
                 optimizer = optim.Adam(model.parameters(), lr=learning_rate)  
 
