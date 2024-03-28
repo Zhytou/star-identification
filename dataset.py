@@ -50,8 +50,8 @@ class StarPointDataset(Dataset):
             raise FileNotFoundError(f'{label_file_path}does not exist')
         
         dirs = root_dir.split('/')
-        assert len(dirs) <= 6 and dirs[0] == 'data' and dirs[1] == 'star_points'
-        self.num_ring, self.num_sector, self.num_neighbor_limit = list(map(int, dirs[3].split('_')))
+        assert len(dirs) <= 5 and dirs[0] == 'data'
+        self.num_ring, self.num_sector, self.num_neighbor_limit = list(map(int, dirs[2].split('_')))
         
         self.label_df = pd.read_csv(label_file_path)
 
@@ -62,11 +62,11 @@ class StarPointDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        cols = [f'ring_{i}' for i in range(self.num_ring)]
-        rings = self.label_df.loc[idx, cols].to_numpy()
-        cols = [f'neighbor_{i}_sector_{j}' for i in range(self.num_neighbor_limit) for j in range(self.num_sector)]
-        sectors = self.label_df.loc[idx, cols].to_numpy().reshape(self.num_neighbor_limit, -1)
-        catalogue_idx = self.label_df.loc[idx, 'catalogue_idx']
+        cols = [f'ring{i}' for i in range(self.num_ring)]
+        rings = self.label_df.loc[idx, cols].to_numpy(float)
+        cols = [f'n{i}_sector{j}' for i in range(self.num_neighbor_limit) for j in range(self.num_sector)]
+        sectors = self.label_df.loc[idx, cols].to_numpy(float).reshape(self.num_neighbor_limit, -1)
+        cata_idx = self.label_df.loc[idx, 'cata_idx'].astype(int)
 
-        return torch.from_numpy(rings).float(), torch.from_numpy(sectors).float(), catalogue_idx
+        return idx, torch.from_numpy(rings).float(), torch.from_numpy(sectors).float(), cata_idx
 

@@ -1,4 +1,5 @@
 import os
+import pandas as pd
 import torch
 import torch.nn as nn, torch.optim as optim
 import torch.nn.functional as F
@@ -10,7 +11,7 @@ from models import FNN, CNN
 from test import check_accuracy
 
 
-def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader: DataLoader, test_loader: DataLoader=None, device=torch.device('cpu')):
+def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader: DataLoader, test_loader: DataLoader=None, test_df: pd.DataFrame=None, device=torch.device('cpu')):
     '''
         Train the model.
     Args:
@@ -25,7 +26,7 @@ def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader:
         # set the model into train model
         model.train()
 
-        for rings, sectors, labels in loader:
+        for _, rings, sectors, labels in loader:
             rings, sectors, labels = rings.to(device), sectors.to(device), labels.to(device)
 
             # forward pass to get output/logits
@@ -40,7 +41,7 @@ def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader:
             optimizer.step()
         
         if test_loader:
-            accuracy = check_accuracy(model, test_loader, device)
+            accuracy = check_accuracy(model, test_loader, test_df, device)
             print(f'Epoch: {epoch}, Accuracy: {accuracy}%')
         
         
@@ -59,12 +60,14 @@ if __name__ == '__main__':
         print(f'Generate config: {gen_cfg}')
         num_ring, num_sector, num_neighbor_limit = list(map(int, gen_cfg.split('_')))
         num_input = num_ring+num_sector*num_neighbor_limit
-        # define datasets for training & validation
-        train_dataset, validate_dataset, test_dataset = [StarPointDataset(os.path.join(dataset_path, gen_cfg, type)) for type in ['train', 'validate', 'test']]
+        # define datasets for train validate and test
+        train_dataset, val_dataset, test_dataset = [StarPointDataset(os.path.join(dataset_path, gen_cfg, type)) for type in ['train', 'validate', 'test']]
+        # test dataframe that maps sample indexes to image ids
+        val_df, test_df = [pd.read_csv(os.path.join(dataset_path, gen_cfg, type, 'labels.csv')) for type in ['validate', 'test']]
         # print datasets' sizes
-        print(f'Training set: {len(train_dataset)}, Validation set: {len(validate_dataset)}, Test set: {len(test_dataset)}')
+        print(f'Training set: {len(train_dataset)}, Validation set: {len(val_dataset)}, Test set: {len(test_dataset)}')
         # create data loaders for our datasets
-        train_loader, validate_loader, test_loader = [DataLoader(dataset, batch_size, shuffle=True) for dataset in [train_dataset, validate_dataset, test_dataset]]
+        train_loader, val_loader, test_loader = [DataLoader(dataset, batch_size, shuffle=True) for dataset in [train_dataset, val_dataset, test_dataset]]
 
         # load best model of last train
         for model_type in ['1dcnn']:
@@ -79,7 +82,7 @@ if __name__ == '__main__':
             if os.path.exists(model_path):
                 best_model.load_state_dict(torch.load(model_path))
             best_model.to(device)
-            best_val_accuracy = check_accuracy(best_model, validate_loader, device)
+            best_val_accuracy = check_accuracy(best_model, val_loader, val_df['img_id'], device)
             print(f'Original {model_type} model accuracy {best_val_accuracy}%')
 
             # tune hyperparameters
@@ -90,14 +93,14 @@ if __name__ == '__main__':
                 optimizer = optim.Adam(model.parameters(), lr=learning_rate)  
 
                 print(f'train {model_type} model with {hidden_dims}')
-                train(model, optimizer, num_epochs, train_loader, test_loader, device)
-                val_accuracy = check_accuracy(model, validate_loader, device)
+                train(model, optimizer, num_epochs, train_loader, test_loader, test_df['img_id'], device)
+                val_accuracy = check_accuracy(model, val_loader, val_df['img_id'], device)
                 print(f'validate accurracy {val_accuracy}')
 
                 if val_accuracy > best_val_accuracy:
                     best_model = model
                     best_val_accuracy = val_accuracy
     
-            test_accuray = check_accuracy(best_model, test_loader, device)
+            test_accuray = check_accuracy(best_model, test_loader, test_df['img_id'], device)
             print(f'Best {model_type} model validate accuracy: {best_val_accuracy}%, test accuracy: {test_accuray}%')
             torch.save(best_model.state_dict(), model_path)

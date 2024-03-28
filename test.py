@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from generate import database_path, pattern_path, point_dataset_path, sim_cfg, num_class
+from generate import database_path, pattern_path, dataset_path, sim_cfg, num_class
 from dataset import StarPointDataset
 from models import FNN, CNN
 
@@ -60,30 +60,40 @@ def check_pattern_match_accuracy(method: int, grid_len: int = 8, num_ring: int =
     return 100.0*correct/len(test)
 
 
-def check_accuracy(model: nn.Module, loader: DataLoader, device=torch.device('cpu')):
+def check_accuracy(model: nn.Module, loader: DataLoader, df: pd.Series, device=torch.device('cpu')):
     '''
-        Check the accuracy of the model.
+        Evaluate the model's accuracy on the provided data loader. The accuracy is calculated based on the model's ability to correctly identify at least three stars in each star image.
     Args:
         model: the model to be checked
         loader: the data loader for validation or testing
+        df: the series that maps sample indices to image ids
+        device: the device to run the model
+    Returns:
+        the accuracy of the model
     '''
     # set the model into evaluation model
     model.eval()
-    # initialize the number of correct predictions
-    correct = 0
-    total = 0
-    # Iterate through test dataset
-    for rings, sectors, labels in loader:
-        rings, sectors, labels = rings.to(device), sectors.to(device), labels.to(device)
+    # dict to store the number of correctly predicted samples for each star image
+    freqs = {}
+
+    # iterate through test dataset
+    for idxs, rings, sectors, labels in loader:
+        idxs, rings, sectors, labels = idxs.to(device), rings.to(device), sectors.to(device), labels.to(device)
+        
         # forward pass only to get logits/output
         outputs = model(rings, sectors)
         # get predictions from the maximum value
         predicted = torch.argmax(outputs.data, 1)
-        # total number of labels
-        total += labels.size(0)
-        # total correct predictions
-        correct += (predicted == labels).sum().item()
-    return round(100.0 * correct / total, 2)
+        # correctly predicted sample indexes
+        idxs = idxs[predicted == labels].tolist()
+        df[idxs].apply(lambda x: freqs.update({x: freqs.get(x, 0)+1}))
+
+    # the number of star images that have at least three correctly predicted samples
+    cnt = sum(v >= 3 for v in freqs.values())
+    
+    
+
+    return round(100.0*cnt/len(freqs), 2)
 
 
 if __name__ == '__main__':
@@ -93,7 +103,7 @@ if __name__ == '__main__':
     print(f'Using device: {device}')
 
     # load best model
-    gen_cfgs = os.listdir(point_dataset_path)
+    gen_cfgs = os.listdir(dataset_path)
     for gen_cfg in gen_cfgs:
         num_ring, num_sector, num_neighbor_limit = list(map(int, gen_cfg.split('_')))
         num_input = num_ring+num_sector*num_neighbor_limit
@@ -113,7 +123,7 @@ if __name__ == '__main__':
             pos_accs, mv_accs, fs_accs = [], [], []
             # define pos_noise_test datasets
             for pos_noise_std in [0, 1, 2]:
-                pos_test_dataset = StarPointDataset(os.path.join(point_dataset_path, gen_cfg, 'test', f'pos{pos_noise_std}_mv0_fs0_test'))
+                pos_test_dataset = StarPointDataset(os.path.join(dataset_path, gen_cfg, 'test', f'pos{pos_noise_std}_mv0_fs0_test'))
                 # print datasets' sizes
                 print(f'Positional noise set: {len(pos_test_dataset)}')
                 # define data loaders
@@ -123,7 +133,7 @@ if __name__ == '__main__':
 
             # define mv_noise_test datasets
             for mv_noise_std in [0, 0.1, 0.2]:
-                mv_test_dataset = StarPointDataset(os.path.join(point_dataset_path, gen_cfg, 'test', f'pos0_mv{mv_noise_std}_fs0_test'))
+                mv_test_dataset = StarPointDataset(os.path.join(dataset_path, gen_cfg, 'test', f'pos0_mv{mv_noise_std}_fs0_test'))
                 # print datasets' sizes
                 print(f'Magnitude noise set: {len(mv_test_dataset)}')
                 # define data loaders
@@ -133,7 +143,7 @@ if __name__ == '__main__':
 
             # define false_star_test datasets
             for num_false_star in [0, 1, 2, 3, 4, 5]:
-                fs_test_dataset = StarPointDataset(os.path.join(point_dataset_path, gen_cfg, 'test', f'pos0_mv0_fs{num_false_star}_test'))
+                fs_test_dataset = StarPointDataset(os.path.join(dataset_path, gen_cfg, 'test', f'pos0_mv0_fs{num_false_star}_test'))
                 # print datasets' sizes
                 print(f'False star set: {len(fs_test_dataset)}')
                 # define data loaders

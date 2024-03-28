@@ -260,6 +260,8 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, num_ring: int = 200
         stars = np.array(get_star_centroids(img))
         if len(stars) < num_neighbor+1:
             continue
+        # generate a unique img id for later accuracy calculation
+        img_id = uuid.uuid1()
 
         distances = cdist(stars, stars, 'euclidean')
         angles = np.arctan2(stars[:, 1] - stars[:, 1][:, None], stars[:, 0] - stars[:, 0][:, None])
@@ -272,13 +274,14 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, num_ring: int = 200
             if star_id == -1:
                 continue
             # get catalogue index of the guide star
-            catalogue_idx = catalogue[catalogue['Star ID'] == star_id].index.to_list()[0]
+            cata_idx = catalogue[catalogue['Star ID'] == star_id].index.to_list()[0]
             # generate label information for training and testing
             label = {
                 'ra': ra,
                 'de': de,
                 'star_id': star_id,
-                'catalogue_idx': catalogue_idx
+                'cata_idx': cata_idx,
+                'img_id': img_id
             }
 
             # angles is sorted by distance with accending order
@@ -293,7 +296,7 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, num_ring: int = 200
         
             ring_counts, _ = np.histogram(ds, bins=num_ring, range=(0, region_r))
             for i, rc in enumerate(ring_counts):
-                label[f'ring_{i}'] = rc
+                label[f'ring{i}'] = rc
 
             # uses several neighbor stars as the starting angle to obtain the cyclic features
             for i, ag in enumerate(ags[:num_neighbor]):
@@ -303,7 +306,7 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, num_ring: int = 200
                 rotated_ags[rotated_ags < -np.pi] += 2*np.pi
                 sector_counts, _ = np.histogram(ags, bins=num_sector, range=(-np.pi, np.pi))
                 for j, sc in enumerate(sector_counts):
-                    label[f'neighbor_{i}_sector_{j}'] = sc
+                    label[f'n{i}_sector{j}'] = sc
             labels.append(label)
 
     # return the label information
@@ -414,10 +417,14 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
                 dfs.append(pd.read_csv(f'{path}/labels.csv'))
             # aggregate the dataset
             df = pd.concat(dfs, ignore_index=True)
-            df.to_csv(f'{path}/labels.csv', index=False)
             # print dataset distribution
-            df = df['star_id'].value_counts()
-            print(len(df), df.head(3), df.tail(3))
+            df_info = df['cata_idx'].value_counts()
+            print(key, len(df_info), df_info.head(3), df_info.tail(3))
+
+            # truncate and store the dataset
+            # df = df.groupby('cata_idx').apply(lambda x: x.sample(min(len(x), types[key])))
+            df.to_csv(f'{path}/labels.csv', index=False)
+            
 
 
     # generate config
@@ -432,14 +439,14 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
         file = os.path.join(dataset_path, gen_cfg, key, 'labels.csv')
         if os.path.exists(file):
             df = pd.read_csv(file)
-            df = df['catalogue_idx'].value_counts()
+            df = df['cata_idx'].value_counts()
             pct = len(df[df > types[key]])/len(catalogue)
             if pct > 0.5:
                 print('Skip rough generation!')
                 continue
         
         # roughly generate the samples for each class
-        num_vec = types[key]*20
+        num_vec = types[key]*100
         for _ in range(num_thread//2):
             # train, validate and default test
             task = pool.submit(generate_nn_samples, 'random', num_vec, [], num_ring, num_sector, num_neighbor)
@@ -453,7 +460,7 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
     for key in types.keys():
         df = pd.read_csv(os.path.join(dataset_path, gen_cfg, key, 'labels.csv'))
         # count the number of samples for each class
-        df = df['catalogue_idx'].value_counts()
+        df = df['cata_idx'].value_counts()
         # add those even unexisting class(catalogue idx)
         df = df.reindex(catalogue.index, fill_value=0)
         # count class whose samples less than limit
@@ -476,5 +483,5 @@ if __name__ == '__main__':
     # generate_pm_database(1, grid_len=60)
     # generate_pm_database(2)
     # aggregate_pm_test(0, [2], grid_len = 60, num_sample=100)
-    aggregate_nn_dataset({'train': 15, 'validate': 6, 'test': 6}, num_neighbor=3)
+    aggregate_nn_dataset({'test': 8}, num_neighbor=3)
     
