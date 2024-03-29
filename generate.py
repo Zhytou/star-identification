@@ -39,8 +39,17 @@ def generate_pm_database(method: int, use_preprocess: bool = False, grid_len: in
         num_ring: the number of rings
         num_sector: the number of sectors
     '''
-    if not os.path.exists(database_path):
-        os.makedirs(database_path)
+
+    if method == 1:
+        path = f'{database_path}/{method}_{grid_len}'
+    elif method == 2:
+        path = f'{database_path}/{method}_{num_ring}_{num_sector}'
+    else:
+        print('Invalid method!')
+        return
+
+    if not os.path.exists(path):
+        os.makedirs(path)
     
     database = []
     for ra, de in zip(catalogue['RA'], catalogue['DE']):
@@ -90,7 +99,7 @@ def generate_pm_database(method: int, use_preprocess: bool = False, grid_len: in
                 'pattern': ''.join(map(str, grid_pattern.flatten())),
                 'id': star_id
             })
-        elif method == 2:
+        else:
             # calculate the angles between the star and the center of the image
             angles = np.arctan2(stars[:, 1], stars[:, 0])
             # rotate the stars until the nearest star lies on the horizontal axis
@@ -106,24 +115,19 @@ def generate_pm_database(method: int, use_preprocess: bool = False, grid_len: in
                 'pattern': ''.join(map(str, np.concatenate([ring_counts, sector_counts]))),
                 'id': star_id
             })
-        else:
-            print('Invalid method!')
-            return
 
     df = pd.DataFrame(database)
-    if method == 1:
-        df.to_csv(f"{database_path}/db{method}_{grid_len}x{grid_len}.csv", index=False)
-    else:
-        df.to_csv(f"{database_path}/db{method}_{num_ring}_{num_sector}.csv", index=False)
+    df.to_csv(f'{path}/db.csv', index=False)
 
 
-def generate_pm_samples(method: int, num_sample: int, use_preprocess: bool = False, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0):
+def generate_pm_samples(method: int, num_vec: int, use_preprocess: bool = False, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0):
     '''
         Generate pattern match test case.
     Args:
         method: the method to generate the pattern
                 1: grid algorithm
                 2: radial and cyclic algorithm
+        num_vec: the number of vectors to be generated
         use_preprocess: whether to avoid the error resulted from get_star_centroids function in preprocess stage
         grid_len: the length of the grid
         num_ring: the number of rings
@@ -131,20 +135,13 @@ def generate_pm_samples(method: int, num_sample: int, use_preprocess: bool = Fal
         pos_noise_std: the standard deviation of the positional noise
         mv_noise_std: the standard deviation of the magnitude noise
         num_false_star: the number of false stars
+    Returns:
+        df: the test case
     '''
-    if method == 1:
-        pattern_test_path = os.path.join(pattern_path, f'db{method}_{grid_len}x{grid_len}_pos{pos_noise_std}_mv{mv_noise_std}_fs{num_false_star}_test')
-    elif method == 2:
-        pattern_test_path = os.path.join(pattern_path, f'db{method}_{num_ring}_{num_sector}_pos{pos_noise_std}_mv{mv_noise_std}_fs{num_false_star}_test')
-    else:
-        print('Invalid method!')
-        return
-    if not os.path.exists(pattern_test_path):
-        os.makedirs(pattern_test_path)
 
     # generate random right ascension[-180, 180] and declination[-90, 90]
-    ras = np.random.uniform(-np.pi, np.pi, num_sample)
-    des = np.arcsin(np.random.uniform(-1, 1, num_sample))
+    ras = np.random.uniform(-np.pi, np.pi, num_vec)
+    des = np.arcsin(np.random.uniform(-1, 1, num_vec))
 
     patterns = []
     # generate the star image
@@ -159,8 +156,12 @@ def generate_pm_samples(method: int, num_sample: int, use_preprocess: bool = Fal
         else:
             stars = np.array(list(star_table.keys()))
 
-        if len(stars) < 1:
+        # too few stars for quest algorithm to identify satellite attitude
+        if len(stars) < 3:
             continue
+        
+        # generate a unique img id for later accuracy calculation
+        img_id = uuid.uuid1()
 
         # distances = cdist(stars, stars, 'euclidean')
         distances = np.linalg.norm(stars[:,None,:] - stars[None,:,:], axis=-1)
@@ -197,6 +198,7 @@ def generate_pm_samples(method: int, num_sample: int, use_preprocess: bool = Fal
                     col = int(s[1]/region_r*grid_len)
                     grid_pattern[row][col] = 1
                 patterns.append({
+                    'img_id': img_id,
                     'pattern': ''.join(map(str, grid_pattern.flatten())), 
                     'id': star_id
                 })
@@ -211,12 +213,13 @@ def generate_pm_samples(method: int, num_sample: int, use_preprocess: bool = Fal
                 ring_counts, _ = np.histogram(ds, bins=num_ring, range=(0, region_r))
                 sector_counts, _ = np.histogram(ags, bins=num_sector, range=(-np.pi, np.pi))
                 patterns.append({
+                    'img_id': img_id,
                     'pattern': ''.join(map(str, np.concatenate([ring_counts, sector_counts]))),
                     'id': star_id
                 })
             
     df = pd.DataFrame(patterns)
-    df.to_csv(os.path.join(pattern_test_path, str(uuid.uuid1())),index=False)
+    return df
 
 
 def generate_nn_samples(mode: str, num_vec: int, idxs: list, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0):
@@ -316,14 +319,86 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, num_ring: int = 200
     return df
 
 
-def aggregate_pm_test(num_round: int, methods: list = [1, 2], num_sample: int = 1000, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_stds: list = [0, 0.5, 1, 1.5, 2], mv_noise_stds: list = [0, 0.1, 0.2], num_false_stars: list = [0, 1, 2, 3, 4, 5]):
+def wait_tasks(tasks: dict, root_path: str, file_name: str, col_name: str = None, num_sample_per_class: int = -1):
+    '''
+        Wait for all tasks to be done. Then, merge the result of async tasks and store it in labels.csv. 
+    Args:
+        tasks: the tasks to be done
+        root_path: the root path to store the dataset
+        col_name: the column name of the label
+        num_sample_per_class: the minumum number for each class
+                            if num_sample_per_class is -1, the function will not truncate the dataset
+    Returns:
+        tasks: the tasks done(reserved keys and empty list for values)
+    '''
+    for key in tasks.keys():
+        if len(tasks[key]) == 0:
+            continue
+
+        # make directory for every type of dataset
+        path = os.path.join(root_path, key)
+        if not os.path.exists(path):
+            os.makedirs(path)
+
+        # store the samples        
+        dfs = []
+        for task in tasks[key]:
+            df = task.result()
+            df.to_csv(f"{path}/{uuid.uuid1()}", index=False)
+            dfs.append(df)
+        
+        # remain the old samples
+        if os.path.exists(f'{path}/{file_name}'):
+            dfs.append(pd.read_csv(f'{path}/{file_name}'))
+        
+        # aggregate the dataset
+        df = pd.concat(dfs, ignore_index=True)
+
+        # print dataset distribution
+        if col_name:
+            df_info = df[col_name].value_counts()
+            print(len(df_info), df_info.head(3), df_info.tail(3))
+
+        # truncate and store the dataset
+        # if num_sample_per_class > 0:
+        #     df = df.groupby(col_name).apply(lambda x: x.sample(min(len(x), num_sample_per_class)))
+        df.to_csv(f'{path}/{file_name}', index=False)
+
+        # clear tasks[key] after aggregation
+        tasks[key] = []
+
+    return tasks
+
+
+def parse_params(s: str):
+    '''
+        Parse special test parameters.
+    Args:
+        s: the string to be parsed
+    Returns:
+        pns: the positional noise standard deviation
+        mns: the magnitude noise standard deviation
+        nfs: the number of false stars
+    '''
+    pns, mns, nfs = 0, 0, 0
+    match = re.match('.+\/(pos|mv|fs)([0-9]+\.?[0-9]*)', s)
+    if match:
+        test_type, number = match.groups()
+        if test_type == 'pos':
+            pns = float(number)
+        elif test_type == 'mv':
+            mns = float(number)
+        else:  # test_type == 'fs'
+            nfs = int(number)
+    return pns, mns, nfs
+
+
+def aggregate_pm_test(num_sample_per_class: int, methods: list = [1, 2], grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_stds: list = [0.5, 1, 1.5, 2], mv_noise_stds: list = [0.1, 0.2], num_false_stars: list = [1, 2, 3, 4, 5], num_thread: int = 20):
     '''
         Aggregate the pattern test.
     Args:
-        num_round: the number of rounds to generate the test
-                    if num_round == 0: only aggregate the test cases
+        num_sample_per_class: the number of samples for each class
         methods: the methods to generate the pattern
-        num_sample: the number of samples to be generated
         grid_len: the length of the grid
         num_ring: the number of rings
         num_sector: the number of sectors
@@ -332,60 +407,52 @@ def aggregate_pm_test(num_round: int, methods: list = [1, 2], num_sample: int = 
         num_false_stars: the number of false stars
     '''
 
-    def merge_test(test_path: str):
-        '''
-            Merge the test cases into a single file.
-        Args:
-            path: the path to the test cases
-        '''
-        files = os.listdir(test_path)
-        df = pd.concat([pd.read_csv(os.path.join(test_path, file)) for file in files if file != 'test.csv'], ignore_index=True)
-        df.to_csv(f"{test_path}/test.csv", index=False)
-
     # use thread pool
-    num_thread = len(pos_noise_stds)+len(mv_noise_stds)+len(num_false_stars)
     pool = ThreadPoolExecutor(max_workers=num_thread)
-    # iterate to generate the test cases
-    all_task = []
-    for _ in range(num_round):
-        for method in methods:
-            if method > 2:
-                continue
-            for pos_noise_std in pos_noise_stds:
-                task = pool.submit(generate_pm_samples, method, num_sample, grid_len=grid_len, um_ring=num_ring, num_sector=num_sector, pos_noise_std=pos_noise_std)
-                all_task.append(task)
-            for mv_noise_std in mv_noise_stds:
-                task = pool.submit(generate_pm_samples, method, num_sample, grid_len=grid_len, num_ring=num_ring, num_sector=num_sector, mv_noise_std=mv_noise_std)
-                all_task.append(task)
-            for num_false_star in num_false_stars:    
-                task = pool.submit(generate_pm_samples, method, num_sample, grid_len=grid_len, num_ring=num_ring, num_sector=num_sector, num_false_star=num_false_star)
-                all_task.append(task)
-    
-    # wait for all task done
-    for task in all_task:
-        task.result()
-    
-    # aggregate the test
+    tasks = {}
+
     for method in methods:
         if method == 1:
-            for pos_noise_std in pos_noise_stds:
-                merge_test(os.path.join(pattern_path, f'db{method}_{grid_len}x{grid_len}_pos{pos_noise_std}_mv{0}_fs{0}_test'))
-            for mv_noise_std in mv_noise_stds:
-                merge_test(os.path.join(pattern_path, f'db{method}_{grid_len}x{grid_len}_pos{0}_mv{mv_noise_std}_fs{0}_test'))
-            for num_false_star in num_false_stars:
-                merge_test(os.path.join(pattern_path, f'db{method}_{grid_len}x{grid_len}_pos{0}_mv{0}_fs{num_false_star}_test'))
+            key = f'{method}_{grid_len}'
         elif method == 2:
-            for pos_noise_std in pos_noise_stds:
-                merge_test(os.path.join(pattern_path, f'db{method}_{num_ring}_{num_sector}_pos{pos_noise_std}_mv{0}_fs{0}_test'))
-            for mv_noise_std in mv_noise_stds:
-                merge_test(os.path.join(pattern_path, f'db{method}_{num_ring}_{num_sector}_pos{0}_mv{mv_noise_std}_fs{0}_test'))
-            for num_false_star in num_false_stars:
-                merge_test(os.path.join(pattern_path, f'db{method}_{num_ring}_{num_sector}_pos{0}_mv{0}_fs{num_false_star}_test'))
+            key = f'{method}_{num_ring}_{num_sector}'
         else:
-            continue
+            print('Invalid method!')
+            return
+        
+        tasks[f'{key}/default'] = []
+        for pns in pos_noise_stds:
+            tasks[f'{key}/pos{pns}'] = []
+        for mns in mv_noise_stds:
+            tasks[f'{key}/mv{mns}'] = []
+        for nfs in num_false_stars:
+            tasks[f'{key}/fs{nfs}'] = []
+
+    # rough generation
+    for key in tasks.keys():
+        # count the number of samples for each class
+        file = os.path.join(pattern_path, key, 'patterns.csv')
+        if os.path.exists(file):
+            df = pd.read_csv(file)
+            df = df['id'].value_counts()
+            pct = len(df[df > num_sample_per_class])/len(catalogue)
+            if pct > 0.5:
+                print(f'{key} skip rough generation!')
+                continue
+
+        # parse parameters
+        method = int(key.split('/')[0].split('_')[0])
+        pos_noise_std, mv_noise_std, num_false_star = parse_params(key)
+        print(method, pos_noise_std, mv_noise_std, num_false_star)
+
+        # roughly generate the samples for each class
+        task = pool.submit(generate_pm_samples, method, num_sample_per_class*100, False, grid_len, num_ring, num_sector, pos_noise_std, mv_noise_std, num_false_star)
+        tasks[key].append(task)
+        
+    wait_tasks(tasks, pattern_path, 'patterns.csv', 'id', num_sample_per_class)
 
 
-def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5}, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_stds: list = [0.5, 1, 1.5, 2], mv_noise_stds: list = [0.1, 0.2], num_false_stars: list = [1, 2, 3, 4, 5], num_thread: int = 20):
+def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5}, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_stds: list = [0.5, 1, 1.5, 2], mv_noise_stds: list = [0.1, 0.2], num_false_stars: list = [1, 2, 3, 4, 5], num_round: int = 3, num_thread: int = 20):
     '''
         Aggregate the dataset. Firstly, the number of samples for each class is counted. Then, roughly generate classes with too few samples using generate_nn_samples function's 'random' mode. Lastly, the rest are finely generated to ensure that the number of samples in each class in the entire dataset reaches the standard.
     Args:
@@ -394,63 +461,10 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
         num_sector: the number of sectors
         num_neighbor: the number of neighbor stars
         pos_noise_stds: list of positional noise
+        num_round: the number of rounds to generate the dataset
         num_thread: the number of threads to generate the dataset
     '''
-
-    def wait_tasks(tasks: dict):
-        '''
-            Wait for all tasks to be done. Then, merge the result of async tasks and store it in labels.csv. 
-        Args:
-            tasks: the tasks to be done
-        '''
-        for key in tasks.keys():
-            # make directory for every type of dataset
-            path = os.path.join(dataset_path, gen_cfg, key)
-            if not os.path.exists(path):
-                os.makedirs(path)
-            # store the samples        
-            dfs = []
-            for task in tasks[key]:
-                df = task.result()
-                df.to_csv(f"{path}/{uuid.uuid1()}", index=False)
-                dfs.append(df)
-            # remain the old samples in labels.csv
-            if os.path.exists(f'{path}/labels.csv'):
-                dfs.append(pd.read_csv(f'{path}/labels.csv'))
-            # aggregate the dataset
-            df = pd.concat(dfs, ignore_index=True)
-            # print dataset distribution
-            df_info = df['cata_idx'].value_counts()
-            print(key, len(df_info), df_info.head(3), df_info.tail(3))
-
-            # truncate and store the dataset
-            # df = df.groupby('cata_idx').apply(lambda x: x.sample(min(len(x), types[key])))
-            df.to_csv(f'{path}/labels.csv', index=False)
     
-
-    def parse_params(s: str):
-        '''
-            Parse special test parameters.
-        Args:
-            s: the string to be parsed
-        Returns:
-            pns: the positional noise standard deviation
-            mns: the magnitude noise standard deviation
-            nfs: the number of false stars
-        '''
-        pns, mns, nfs = 0, 0, 0
-        match = re.match('test\/(pos|mv|fs)([0-9]+\.?[0-9]*)', key)
-        if match:
-            test_type, number = match.groups()
-            if test_type == 'pos':
-                pns = float(number)
-            elif test_type == 'mv':
-                mns = float(number)
-            else:  # test_type == 'fs'
-                nfs = int(number)
-
-        return pns, mns, nfs
-
     # generate config
     gen_cfg = f'{num_ring}_{num_sector}_{num_neighbor}'
     # use thread pool
@@ -487,17 +501,14 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
 
         # roughly generate the samples for each class
         num_vec = types[key]*100
-        for _ in range(num_thread//10):
-
-            # train, validate and default test
+        for _ in range(num_round):
             task = pool.submit(generate_nn_samples, 'random', num_vec, [], num_ring, num_sector, num_neighbor, pos_noise_std, mv_noise_std, num_false_star)
             tasks[key].append(task)
 
     # wait for all tasks to be done and merge the results
-    wait_tasks(tasks)
+    tasks = wait_tasks(tasks, os.path.join(dataset_path, gen_cfg), 'labels.csv', 'cata_idx')
 
     # fine generation
-    tasks = defaultdict(list)
     for key in types.keys():
         df = pd.read_csv(os.path.join(dataset_path, gen_cfg, key, 'labels.csv'))
         # count the number of samples for each class
@@ -513,18 +524,18 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
         pos_noise_std, mv_noise_std, num_false_star = parse_params(key)
 
         # for class whose sample less than num_sample_per_class, generate the dataset til the number of samples reach the standard
-        len_td = len(idxs)//num_thread
-        for i in range(num_thread+1):
+        len_td = len(idxs)//num_round
+        for i in range(num_round+1):
             beg, end = i*len_td, min((i+1)*len_td, len(idxs))
             task = pool.submit(generate_nn_samples, 'supplementary', 0, idxs[beg: end], num_ring, num_sector, num_neighbor, pos_noise_std, mv_noise_std, num_false_star)
             tasks[key].append(task)
     
-    wait_tasks(tasks)
+    wait_tasks(tasks, os.path.join(dataset_path, gen_cfg), 'labels.csv', 'cata_idx')
 
 
 if __name__ == '__main__':
     # generate_pm_database(1, grid_len=60)
     # generate_pm_database(2)
-    # aggregate_pm_test(0, [2], grid_len = 60, num_sample=100)
+    # aggregate_pm_test(1, [1], grid_len=60)
     aggregate_nn_dataset({'test': 1}, num_neighbor=3)
     
