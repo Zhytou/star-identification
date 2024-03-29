@@ -58,12 +58,12 @@ if __name__ == '__main__':
     gen_cfgs = os.listdir(dataset_path)
     for gen_cfg in gen_cfgs:
         print(f'Generate config: {gen_cfg}')
-        num_ring, num_sector, num_neighbor_limit = list(map(int, gen_cfg.split('_')))
-        num_input = num_ring+num_sector*num_neighbor_limit
+        num_ring, num_sector, num_neighbor = list(map(int, gen_cfg.split('_')))
+        num_input = num_ring+num_sector*num_neighbor
         # define datasets for train validate and test
-        train_dataset, val_dataset, test_dataset = [StarPointDataset(os.path.join(dataset_path, gen_cfg, type)) for type in ['train', 'validate', 'test']]
+        train_dataset, val_dataset, test_dataset = [StarPointDataset(os.path.join(dataset_path, gen_cfg, type)) for type in ['train', 'validate', 'test/default']]
         # test dataframe that maps sample indexes to image ids
-        val_df, test_df = [pd.read_csv(os.path.join(dataset_path, gen_cfg, type, 'labels.csv')) for type in ['validate', 'test']]
+        val_df, test_df = [pd.read_csv(os.path.join(dataset_path, gen_cfg, type, 'labels.csv')) for type in ['validate', 'test/default']]
         # print datasets' sizes
         print(f'Training set: {len(train_dataset)}, Validation set: {len(val_dataset)}, Test set: {len(test_dataset)}')
         # create data loaders for our datasets
@@ -77,7 +77,7 @@ if __name__ == '__main__':
             if model_type == 'fnn':
                 best_model = FNN(num_input, num_class)
             else:
-                best_model = CNN(num_ring, (num_neighbor_limit, num_sector), num_class)
+                best_model = CNN(num_ring, (num_neighbor, num_sector), num_class)
             model_path = os.path.join(model_dir, 'best_model.pth')
             if os.path.exists(model_path):
                 best_model.load_state_dict(torch.load(model_path))

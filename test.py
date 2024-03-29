@@ -105,8 +105,8 @@ if __name__ == '__main__':
     # load best model
     gen_cfgs = os.listdir(dataset_path)
     for gen_cfg in gen_cfgs:
-        num_ring, num_sector, num_neighbor_limit = list(map(int, gen_cfg.split('_')))
-        num_input = num_ring+num_sector*num_neighbor_limit
+        num_ring, num_sector, num_neighbor = list(map(int, gen_cfg.split('_')))
+        num_input = num_ring+num_sector*num_neighbor
         # iterate different model types
         for model_type in ['fnn', '1dcnn']:
             model_path = f'model/{sim_cfg}/{gen_cfg}/{model_type}/best_model.pth'
@@ -116,39 +116,42 @@ if __name__ == '__main__':
             if model_type == 'fnn':
                 best_model = FNN(num_input, num_class)
             else:
-                best_model = CNN(num_input, num_class)
+                best_model = CNN(num_ring, (num_neighbor, num_sector), num_class)
             best_model.load_state_dict(torch.load(model_path))
             best_model.to(device)
 
             pos_accs, mv_accs, fs_accs = [], [], []
             # define pos_noise_test datasets
-            for pos_noise_std in [0, 1, 2]:
-                pos_test_dataset = StarPointDataset(os.path.join(dataset_path, gen_cfg, 'test', f'pos{pos_noise_std}_mv0_fs0_test'))
+            for pns in [1, 2]:
+                pos_dataset = StarPointDataset(os.path.join(dataset_path, gen_cfg, 'test', f'pos{pns}'))
+                pos_df = pd.read_csv(os.path.join(dataset_path, gen_cfg, 'test', f'pos{pns}', 'labels.csv'))
                 # print datasets' sizes
-                print(f'Positional noise set: {len(pos_test_dataset)}')
+                print(f'Positional noise set: {len(pos_dataset)}')
                 # define data loaders
-                pos_test_loader = DataLoader(pos_test_dataset, batch_size)
-                pos_acc = check_accuracy(best_model, pos_test_loader, device)
+                pos_loader = DataLoader(pos_dataset, batch_size)
+                pos_acc = check_accuracy(best_model, pos_loader, pos_df['img_id'], device)
                 pos_accs.append(pos_acc)
 
             # define mv_noise_test datasets
-            for mv_noise_std in [0, 0.1, 0.2]:
-                mv_test_dataset = StarPointDataset(os.path.join(dataset_path, gen_cfg, 'test', f'pos0_mv{mv_noise_std}_fs0_test'))
+            for mns in [0.1, 0.2]:
+                mv_dataset = StarPointDataset(os.path.join(dataset_path, gen_cfg, 'test', f'mv{mns}'))
+                mv_df = pd.read_csv(os.path.join(dataset_path, gen_cfg, 'test', f'mv{mns}', 'labels.csv'))  
                 # print datasets' sizes
-                print(f'Magnitude noise set: {len(mv_test_dataset)}')
+                print(f'Magnitude noise set: {len(mv_dataset)}')
                 # define data loaders
-                mv_test_loader = DataLoader(mv_test_dataset, batch_size)
-                mv_acc = check_accuracy(best_model, mv_test_loader, device)
+                mv_loader = DataLoader(mv_dataset, batch_size)
+                mv_acc = check_accuracy(best_model, mv_loader, mv_df['img_id'], device)
                 mv_accs.append(mv_acc)
 
             # define false_star_test datasets
-            for num_false_star in [0, 1, 2, 3, 4, 5]:
-                fs_test_dataset = StarPointDataset(os.path.join(dataset_path, gen_cfg, 'test', f'pos0_mv0_fs{num_false_star}_test'))
+            for nfs in [1, 2, 3, 4, 5]:
+                fs_dataset = StarPointDataset(os.path.join(dataset_path, gen_cfg, 'test', f'fs{nfs}'))
+                fs_df = pd.read_csv(os.path.join(dataset_path, gen_cfg, 'test', f'fs{nfs}', 'labels.csv'))
                 # print datasets' sizes
-                print(f'False star set: {len(fs_test_dataset)}')
+                print(f'False star set: {len(fs_dataset)}')
                 # define data loaders
-                fs_test_loader = DataLoader(fs_test_dataset, batch_size)
-                fs_acc = check_accuracy(best_model, fs_test_loader, device)   
+                fs_loader = DataLoader(fs_dataset, batch_size)
+                fs_acc = check_accuracy(best_model, fs_loader, fs_df['img_id'], device)   
                 fs_accs.append(fs_acc)
             
             print(pos_accs, mv_accs, fs_accs)

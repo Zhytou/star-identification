@@ -1,5 +1,6 @@
 import os
 import uuid
+import re
 import numpy as np
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
@@ -260,6 +261,7 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, num_ring: int = 200
         stars = np.array(get_star_centroids(img))
         if len(stars) < num_neighbor+1:
             continue
+
         # generate a unique img id for later accuracy calculation
         img_id = uuid.uuid1()
 
@@ -424,14 +426,48 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
             # truncate and store the dataset
             # df = df.groupby('cata_idx').apply(lambda x: x.sample(min(len(x), types[key])))
             df.to_csv(f'{path}/labels.csv', index=False)
-            
+    
 
+    def parse_params(s: str):
+        '''
+            Parse special test parameters.
+        Args:
+            s: the string to be parsed
+        Returns:
+            pns: the positional noise standard deviation
+            mns: the magnitude noise standard deviation
+            nfs: the number of false stars
+        '''
+        pns, mns, nfs = 0, 0, 0
+        match = re.match('test\/(pos|mv|fs)([0-9]+\.?[0-9]*)', key)
+        if match:
+            test_type, number = match.groups()
+            if test_type == 'pos':
+                pns = float(number)
+            elif test_type == 'mv':
+                mns = float(number)
+            else:  # test_type == 'fs'
+                nfs = int(number)
+
+        return pns, mns, nfs
 
     # generate config
     gen_cfg = f'{num_ring}_{num_sector}_{num_neighbor}'
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thread)
     
+    # generate config for special test
+    if 'test' in types.keys():
+        for pns in pos_noise_stds:
+            types[f'test/pos{pns}'] = types['test']
+        for mns in mv_noise_stds:
+            types[f'test/mv{mns}'] = types['test']
+        for nfs in num_false_stars:
+            types[f'test/fs{nfs}'] = types['test']
+        types['test/default'] = types.pop('test')
+
+        print(types)
+
     # rough generation
     tasks = defaultdict(list)
     for key in types.keys():
@@ -442,14 +478,19 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
             df = df['cata_idx'].value_counts()
             pct = len(df[df > types[key]])/len(catalogue)
             if pct > 0.5:
-                print('Skip rough generation!')
+                print(f'{key} skip rough generation!')
                 continue
         
+        # parse parameters
+        pos_noise_std, mv_noise_std, num_false_star = parse_params(key)
+        print(key, pos_noise_std, mv_noise_std, num_false_star)
+
         # roughly generate the samples for each class
         num_vec = types[key]*100
-        for _ in range(num_thread//2):
+        for _ in range(num_thread//10):
+
             # train, validate and default test
-            task = pool.submit(generate_nn_samples, 'random', num_vec, [], num_ring, num_sector, num_neighbor)
+            task = pool.submit(generate_nn_samples, 'random', num_vec, [], num_ring, num_sector, num_neighbor, pos_noise_std, mv_noise_std, num_false_star)
             tasks[key].append(task)
 
     # wait for all tasks to be done and merge the results
@@ -467,13 +508,15 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
         df = df[df < types[key]]
         # repeat each the index of df (which is catalogue idx needed)
         idxs = df.index.repeat(types[key]-df).to_list()
-        
         print(len(idxs), idxs[:3], idxs[-3:])
+        # parse parameters
+        pos_noise_std, mv_noise_std, num_false_star = parse_params(key)
+
         # for class whose sample less than num_sample_per_class, generate the dataset til the number of samples reach the standard
         len_td = len(idxs)//num_thread
         for i in range(num_thread+1):
             beg, end = i*len_td, min((i+1)*len_td, len(idxs))
-            task = pool.submit(generate_nn_samples, 'supplementary', 0, idxs[beg: end], num_ring, num_sector, num_neighbor)
+            task = pool.submit(generate_nn_samples, 'supplementary', 0, idxs[beg: end], num_ring, num_sector, num_neighbor, pos_noise_std, mv_noise_std, num_false_star)
             tasks[key].append(task)
     
     wait_tasks(tasks)
@@ -483,5 +526,5 @@ if __name__ == '__main__':
     # generate_pm_database(1, grid_len=60)
     # generate_pm_database(2)
     # aggregate_pm_test(0, [2], grid_len = 60, num_sample=100)
-    aggregate_nn_dataset({'test': 8}, num_neighbor=3)
+    aggregate_nn_dataset({'test': 1}, num_neighbor=3)
     
