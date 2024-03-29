@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 from dataset import StarPointDataset
 from generate import num_class, sim_cfg, dataset_path
 from models import FNN, CNN
-from test import check_accuracy
+from test import check_nn_accuracy
 
 
 def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader: DataLoader, test_loader: DataLoader=None, test_df: pd.DataFrame=None, device=torch.device('cpu')):
@@ -41,7 +41,7 @@ def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader:
             optimizer.step()
         
         if test_loader:
-            accuracy = check_accuracy(model, test_loader, test_df, device)
+            accuracy = check_nn_accuracy(model, test_loader, test_df, device)
             print(f'Epoch: {epoch}, Accuracy: {accuracy}%')
         
         
@@ -82,7 +82,7 @@ if __name__ == '__main__':
             if os.path.exists(model_path):
                 best_model.load_state_dict(torch.load(model_path))
             best_model.to(device)
-            best_val_accuracy = check_accuracy(best_model, val_loader, val_df['img_id'], device)
+            best_val_accuracy = check_nn_accuracy(best_model, val_loader, val_df['img_id'], device)
             print(f'Original {model_type} model accuracy {best_val_accuracy}%')
 
             # tune hyperparameters
@@ -94,13 +94,13 @@ if __name__ == '__main__':
 
                 print(f'train {model_type} model with {hidden_dims}')
                 train(model, optimizer, num_epochs, train_loader, test_loader, test_df['img_id'], device)
-                val_accuracy = check_accuracy(model, val_loader, val_df['img_id'], device)
+                val_accuracy = check_nn_accuracy(model, val_loader, val_df['img_id'], device)
                 print(f'validate accurracy {val_accuracy}')
 
                 if val_accuracy > best_val_accuracy:
                     best_model = model
                     best_val_accuracy = val_accuracy
     
-            test_accuray = check_accuracy(best_model, test_loader, test_df['img_id'], device)
+            test_accuray = check_nn_accuracy(best_model, test_loader, test_df['img_id'], device)
             print(f'Best {model_type} model validate accuracy: {best_val_accuracy}%, test accuracy: {test_accuray}%')
             torch.save(best_model.state_dict(), model_path)
