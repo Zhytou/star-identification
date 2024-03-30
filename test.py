@@ -10,39 +10,43 @@ from dataset import StarPointDataset
 from models import FNN, CNN
 
 
-def check_pm_accuracy(db: pd.DataFrame, test: pd.DataFrame):
+def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame):
     '''
-        Check the accuracy of the pattern match method.
+        Evaluate the pattern match method's accuracy on the provided patterns. The accuracy is calculated based on the method's ability to correctly identify the closest pattern in the database.
     Args:
         db: the database of patterns
-        test: the patterns to be tested
+        df: the patterns to be tested
     Returns:
         the accuracy of the pattern match method
     '''
-
+    # convert patterns to numpy array
     db_patterns = db['pattern'].values
-    db_patterns = [np.array(list(map(int, pattern))) for pattern in db_patterns]
+    db_patterns = np.array([np.array(list(map(int, pattern))) for pattern in db_patterns])
 
-    # count the number of correct predictions & multiple match
-    correct = 0
-    multi_match = 0
+    # number of multi-match samples
+    multi_match = 0 
 
-    for i in range(len(test)):
-        pattern = test.loc[i, 'pattern']
-        id = test.loc[i, 'id']
+    # dict to store the number of correctly predicted samples for each star image
+    freqs = {}
+
+    for i in range(len(df)):
+        img_id, pattern, id = df.loc[i, ['img_id', 'pattern', 'id']]
         pattern = np.array(list(map(int, pattern)))
 
         # find the closest pattern in the database
-        match_result = np.sum(pattern&db_patterns, axis=1)
+        match_result = np.sum(pattern & db_patterns, axis=1)
         max_val = np.max(match_result)
         idxs = np.where(match_result == max_val)[0]
         if id in db.loc[idxs, 'id'].values:
             if len(idxs) == 1:
-                correct += 1
+                freqs.update({img_id: freqs.get(img_id, 0)+1})
             else:
                 multi_match += 1
 
-    return 100.0*correct/len(test)
+    # the number of star images that have at least three correctly predicted samples
+    cnt = sum(v >= 3 for v in freqs.values())
+
+    return round(100.0*cnt/len(freqs), 2)
 
 
 def check_nn_accuracy(model: nn.Module, loader: DataLoader, df: pd.Series, device=torch.device('cpu')):
@@ -76,20 +80,20 @@ def check_nn_accuracy(model: nn.Module, loader: DataLoader, df: pd.Series, devic
     # the number of star images that have at least three correctly predicted samples
     cnt = sum(v >= 3 for v in freqs.values())
     
-    
-
     return round(100.0*cnt/len(freqs), 2)
 
 
 if __name__ == '__main__':
-    test_pm, test_nn = True, False
+    test_pm, test_nn = False, True
     
     # conventional pattern match method accuracy
     if test_pm:
         gen_cfgs = os.listdir(pattern_path)
         for gen_cfg in gen_cfgs:
             db = pd.read_csv(os.path.join(database_path, gen_cfg, 'db.csv'))
-
+            test = pd.read_csv(os.path.join(pattern_path, gen_cfg, 'default', 'patterns.csv'))
+            defualt_acc = check_pm_accuracy(db, test)
+            
             pos_accs, mv_accs, fs_accs = [], [], []
             for pns in [0.5, 1, 1.5, 2]:
                 test = pd.read_csv(os.path.join(pattern_path, gen_cfg, f'pos{pns}', 'patterns.csv'))
@@ -106,7 +110,7 @@ if __name__ == '__main__':
                 acc = check_pm_accuracy(db, test)
                 fs_accs.append(acc)
             
-            print(gen_cfg, pos_accs, mv_accs, fs_accs)
+            print(gen_cfg, defualt_acc, pos_accs, mv_accs, fs_accs)
 
     # nn model accuracy
     if test_nn:
@@ -132,8 +136,14 @@ if __name__ == '__main__':
                 best_model.load_state_dict(torch.load(model_path))
                 best_model.to(device)
 
+                # default_test accuracy
+                default_dataset = StarPointDataset(os.path.join(dataset_path, gen_cfg, 'test', 'default'))
+                defualt_df = pd.read_csv(os.path.join(dataset_path, gen_cfg, 'test', 'default', 'labels.csv'))
+                default_loader = DataLoader(default_dataset, batch_size)
+                defualt_acc = check_nn_accuracy(best_model, default_loader, defualt_df['img_id'], device)
+
                 pos_accs, mv_accs, fs_accs = [], [], []
-                # define pos_noise_test datasets
+                # pos_noise_test accuracy
                 for pns in [0.5, 1, 1.5, 2]:
                     pos_dataset = StarPointDataset(os.path.join(dataset_path, gen_cfg, 'test', f'pos{pns}'))
                     pos_df = pd.read_csv(os.path.join(dataset_path, gen_cfg, 'test', f'pos{pns}', 'labels.csv'))
@@ -144,7 +154,7 @@ if __name__ == '__main__':
                     pos_acc = check_nn_accuracy(best_model, pos_loader, pos_df['img_id'], device)
                     pos_accs.append(pos_acc)
 
-                # define mv_noise_test datasets
+                # mv_noise_test accuracy
                 for mns in [0.1, 0.2]:
                     mv_dataset = StarPointDataset(os.path.join(dataset_path, gen_cfg, 'test', f'mv{mns}'))
                     mv_df = pd.read_csv(os.path.join(dataset_path, gen_cfg, 'test', f'mv{mns}', 'labels.csv'))  
@@ -155,7 +165,7 @@ if __name__ == '__main__':
                     mv_acc = check_nn_accuracy(best_model, mv_loader, mv_df['img_id'], device)
                     mv_accs.append(mv_acc)
 
-                # define false_star_test datasets
+                # false_star_test accuracy
                 for nfs in [1, 2, 3, 4, 5]:
                     fs_dataset = StarPointDataset(os.path.join(dataset_path, gen_cfg, 'test', f'fs{nfs}'))
                     fs_df = pd.read_csv(os.path.join(dataset_path, gen_cfg, 'test', f'fs{nfs}', 'labels.csv'))
@@ -166,6 +176,6 @@ if __name__ == '__main__':
                     fs_acc = check_nn_accuracy(best_model, fs_loader, fs_df['img_id'], device)   
                     fs_accs.append(fs_acc)
                 
-                print(gen_cfg, pos_accs, mv_accs, fs_accs)
+                print(gen_cfg, defualt_acc, pos_accs, mv_accs, fs_accs)
 
 
