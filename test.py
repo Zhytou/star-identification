@@ -10,7 +10,7 @@ from dataset import StarPointDataset
 from models import FNN, CNN
 
 
-def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame):
+def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, method:int=1):
     '''
         Evaluate the pattern match method's accuracy on the provided patterns. The accuracy is calculated based on the method's ability to correctly identify the closest pattern in the database.
     Args:
@@ -25,6 +25,8 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame):
 
     # number of multi-match samples
     multi_match = 0 
+    # num of correctly predicted samples
+    correct = 0
 
     # dict to store the number of correctly predicted samples for each star image
     freqs = {}
@@ -39,17 +41,25 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame):
         idxs = np.where(match_result == max_val)[0]
         if id in db.loc[idxs, 'id'].values:
             if len(idxs) == 1:
-                freqs.update({img_id: freqs.get(img_id, 0)+1})
+                if method == 1:
+                    correct += 1
+                else:
+                    freqs.update({img_id: freqs.get(img_id, 0)+1})
             else:
                 multi_match += 1
 
-    # the number of star images that have at least three correctly predicted samples
-    cnt = sum(v >= 3 for v in freqs.values())
+    acc = 0
+    if method == 1:
+        acc = round(100.0*correct/len(df), 2)
+    else: 
+        # the number of star images that have at least three correctly predicted samples
+        cnt = sum(v >= 3 for v in freqs.values())
+        acc = round(100.0*cnt/len(freqs), 2)
 
-    return round(100.0*cnt/len(freqs), 2)
+    return acc
 
 
-def check_nn_accuracy(model: nn.Module, loader: DataLoader, df: pd.Series, device=torch.device('cpu')):
+def check_nn_accuracy(model: nn.Module, loader: DataLoader, df: pd.Series=None, device=torch.device('cpu')):
     '''
         Evaluate the model's accuracy on the provided data loader. The accuracy is calculated based on the model's ability to correctly identify at least three stars in each star image.
     Args:
@@ -64,6 +74,9 @@ def check_nn_accuracy(model: nn.Module, loader: DataLoader, df: pd.Series, devic
     model.eval()
     # dict to store the number of correctly predicted samples for each star image
     freqs = {}
+    # num of correctly predicted samples
+    correct = 0
+    total = 0
 
     # iterate through test dataset
     for idxs, rings, sectors, labels in loader:
@@ -75,12 +88,22 @@ def check_nn_accuracy(model: nn.Module, loader: DataLoader, df: pd.Series, devic
         predicted = torch.argmax(outputs.data, 1)
         # correctly predicted sample indexes
         idxs = idxs[predicted == labels].tolist()
-        df[idxs].apply(lambda x: freqs.update({x: freqs.get(x, 0)+1}))
+        if df != None:
+            df[idxs].apply(lambda x: freqs.update({x: freqs.get(x, 0)+1}))
+        
+        correct += len(idxs)
+        total += len(labels)
 
-    # the number of star images that have at least three correctly predicted samples
-    cnt = sum(v >= 3 for v in freqs.values())
-    
-    return round(100.0*cnt/len(freqs), 2)
+    acc = 0
+
+    if df != None:
+        # the number of star images that have at least three correctly predicted samples
+        cnt = sum(v >= 3 for v in freqs.values())
+        acc = round(100.0*cnt/len(freqs), 2)
+    else:
+        acc = round(100.0*correct/total, 2)
+
+    return acc
 
 
 if __name__ == '__main__':
