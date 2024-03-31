@@ -10,10 +10,6 @@ from scipy.spatial.distance import cdist
 from simulate import w, h, FOV, catalogue_path, create_star_image
 from preprocess import get_star_centroids
 
-
-# region radius in pixels
-region_r = int(w/FOV*6)
-
 # star catalogue
 catalogue = pd.read_csv(catalogue_path, usecols= ["Star ID", "RA", "DE", "Magnitude"])
 
@@ -27,7 +23,7 @@ pattern_path = f'pattern/{sim_cfg}'
 dataset_path = f'data/{sim_cfg}'
 
 
-def generate_pm_database(method: int, use_preprocess: bool = False, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30):
+def generate_pm_database(method: int, use_preprocess: bool = False, region_r: float = 6, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30):
     '''
         Generate the pattern database for the given star catalogue.
     Args:
@@ -40,10 +36,13 @@ def generate_pm_database(method: int, use_preprocess: bool = False, grid_len: in
         num_sector: the number of sectors
     '''
 
+    # the radius of the region in pixels
+    R = region_r/FOV*w
+
     if method == 1:
-        path = f'{database_path}/{method}_{grid_len}'
+        path = f'{database_path}/{method}_{region_r}_{grid_len}'
     elif method == 2:
-        path = f'{database_path}/{method}_{num_ring}_{num_sector}'
+        path = f'{database_path}/{method}_{region_r}_{num_ring}_{num_sector}'
     else:
         print('Invalid method!')
         return
@@ -75,7 +74,7 @@ def generate_pm_database(method: int, use_preprocess: bool = False, grid_len: in
         stars = stars[distances.argsort()]
         distances = np.sort(distances)
         # exclude stars out of region
-        stars = stars[distances < region_r]
+        stars = stars[distances < R]
         # exclude the reference star (h/2, w/2)
         assert stars[0][0] == 0 and stars[0][1] == 0 and distances[0] == 0
         stars, distances = stars[1:], distances[1:]
@@ -92,8 +91,8 @@ def generate_pm_database(method: int, use_preprocess: bool = False, grid_len: in
             # calculate the pattern
             grid_pattern = np.zeros((grid_len, grid_len), dtype=int)
             for star in rotated_stars:
-                row = int(star[0]/region_r*grid_len)
-                col = int(star[1]/region_r*grid_len)
+                row = int(star[0]/R*grid_len)
+                col = int(star[1]/R*grid_len)
                 grid_pattern[row][col] = 1
             database.append({
                 'pattern': ''.join(map(str, grid_pattern.flatten())),
@@ -109,7 +108,7 @@ def generate_pm_database(method: int, use_preprocess: bool = False, grid_len: in
             angles[angles > np.pi] -= 2*np.pi
             angles[angles < -np.pi] += 2*np.pi
             # get the radial and cyclic features
-            ring_counts, _ = np.histogram(distances, bins=num_ring, range=(0, region_r))
+            ring_counts, _ = np.histogram(distances, bins=num_ring, range=(0, R))
             sector_counts, _ = np.histogram(angles, bins=num_sector, range=(-np.pi, np.pi))
             database.append({
                 'pattern': ''.join(map(str, np.concatenate([ring_counts, sector_counts]))),
@@ -120,7 +119,7 @@ def generate_pm_database(method: int, use_preprocess: bool = False, grid_len: in
     df.to_csv(f'{path}/db.csv', index=False)
 
 
-def generate_pm_samples(method: int, num_vec: int, use_preprocess: bool = False, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0):
+def generate_pm_samples(method: int, num_vec: int, use_preprocess: bool = False, R: int = 600, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0):
     '''
         Generate pattern match test case.
     Args:
@@ -129,6 +128,7 @@ def generate_pm_samples(method: int, num_vec: int, use_preprocess: bool = False,
                 2: radial and cyclic algorithm
         num_vec: the number of vectors to be generated
         use_preprocess: whether to avoid the error resulted from get_star_centroids function in preprocess stage
+        R: the radius of the region in pixels
         grid_len: the length of the grid
         num_ring: the number of rings
         num_sector: the number of sectors
@@ -172,13 +172,13 @@ def generate_pm_samples(method: int, num_vec: int, use_preprocess: bool = False,
             star_id = star_table.get(tuple(star), -1)
             if star_id == -1:
                 continue
-            if star[0] < region_r or star[0] > h-region_r or star[1] < region_r or star[1] > w-region_r:
+            if star[0] < R or star[0] > h-R or star[1] < R or star[1] > w-R:
                 continue
 
             # angles is sorted by distance with accending order
             ss, ags = stars[np.argsort(ds)], ags[np.argsort(ds)]
             ds = np.sort(ds)
-            ss, ags = ss[ds < region_r], ags[ds < region_r]
+            ss, ags = ss[ds < R], ags[ds < R]
             # remove the first element, which is reference star
             assert star[0] == ss[0][0] and star[1] == ss[0][1] and ds[0] == 0 and ags[0] == 0
             ss, ds, ags = ss[1:], ds[1:], ags[1:]
@@ -194,8 +194,8 @@ def generate_pm_samples(method: int, num_vec: int, use_preprocess: bool = False,
                 # calculate the pattern
                 grid_pattern = np.zeros((grid_len, grid_len), dtype=int)
                 for s in ss:
-                    row = int(s[0]/region_r*grid_len)
-                    col = int(s[1]/region_r*grid_len)
+                    row = int(s[0]/R*grid_len)
+                    col = int(s[1]/R*grid_len)
                     grid_pattern[row][col] = 1
                 patterns.append({
                     'img_id': img_id,
@@ -210,7 +210,7 @@ def generate_pm_samples(method: int, num_vec: int, use_preprocess: bool = False,
                 ags[ags > np.pi] -= 2*np.pi
                 ags[ags < -np.pi] += 2*np.pi
                 # get the radial and cyclic features
-                ring_counts, _ = np.histogram(ds, bins=num_ring, range=(0, region_r))
+                ring_counts, _ = np.histogram(ds, bins=num_ring, range=(0, R))
                 sector_counts, _ = np.histogram(ags, bins=num_sector, range=(-np.pi, np.pi))
                 patterns.append({
                     'img_id': img_id,
@@ -222,7 +222,7 @@ def generate_pm_samples(method: int, num_vec: int, use_preprocess: bool = False,
     return df
 
 
-def generate_nn_samples(mode: str, num_vec: int, idxs: list, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0):
+def generate_nn_samples(mode: str, num_vec: int, idxs: list, R: int = 600, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0):
     '''
         Generate radial and cyclic features dataset for NN model using the given star catalogue.
     Args:
@@ -231,6 +231,7 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, num_ring: int = 200
             2. 'supplementary', use catalogue index to generate samples for specific star
         num_vec: the number of vectors to be generated
         idxs: the indexes of star catalogue used to generate dataset
+        R: the radius of the region in pixels
         num_ring: the number of rings
         num_sector: the number of sectors
         num_neighbor: the minimum number of neighbor stars in the region
@@ -268,11 +269,21 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, num_ring: int = 200
         # generate a unique img id for later accuracy calculation
         img_id = uuid.uuid1()
 
+        # number of candidate primary stars in the region
+        in_rect  = np.logical_and(
+            np.logical_and(stars[:, 0] >= R, stars[:, 0] <= h-R),
+            np.logical_and(stars[:, 1] >= R, stars[:, 1] <= w-R)
+        )
+        # too few stars to identify satellite attitude
+        if np.sum(in_rect) < 3:
+            continue
+
+        # distances and angles between each star in FOV
         distances = cdist(stars, stars, 'euclidean')
         angles = np.arctan2(stars[:, 1] - stars[:, 1][:, None], stars[:, 0] - stars[:, 0][:, None])
         # choose a guide star as the reference star
         for star, ds, ags in zip(stars, distances, angles):
-            if star[0] < region_r or star[0] > h-region_r or star[1] < region_r or star[1] > w-region_r:
+            if star[0] < R or star[0] > h-R or star[1] < R or star[1] > w-R:
                 continue
             # check if false star
             star_id = star_table.get(tuple(star), -1)
@@ -292,14 +303,14 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, num_ring: int = 200
             # angles is sorted by distance with accending order
             ags = ags[np.argsort(ds)]
             ds = np.sort(ds)
-            ags = ags[ds < region_r]
+            ags = ags[ds < R]
             # remove the first element of ags & ds, which is reference star
             ds, ags = ds[1:], ags[1:]
             # make sure several neighbor stars are located in the region
             if len(ags) < num_neighbor+num_false_star:
                 continue
         
-            ring_counts, _ = np.histogram(ds, bins=num_ring, range=(0, region_r))
+            ring_counts, _ = np.histogram(ds, bins=num_ring, range=(0, R))
             for i, rc in enumerate(ring_counts):
                 label[f'ring{i}'] = rc
 
@@ -319,7 +330,7 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, num_ring: int = 200
     return df
 
 
-def wait_tasks(tasks: dict, root_path: str, file_name: str, col_name: str = None, num_sample_per_class: int = -1):
+def wait_tasks(tasks: dict, root_path: str, file_name: str, col_name: str = None, num_sample_per_class: dict = None):
     '''
         Wait for all tasks to be done. Then, merge the result of async tasks and store it in labels.csv. 
     Args:
@@ -344,8 +355,9 @@ def wait_tasks(tasks: dict, root_path: str, file_name: str, col_name: str = None
         dfs = []
         for task in tasks[key]:
             df = task.result()
-            df.to_csv(f"{path}/{uuid.uuid1()}", index=False)
-            dfs.append(df)
+            if len(df) > 0:
+                df.to_csv(f"{path}/{uuid.uuid1()}", index=False)
+                dfs.append(df)
         
         # remain the old samples
         if os.path.exists(f'{path}/{file_name}'):
@@ -354,15 +366,20 @@ def wait_tasks(tasks: dict, root_path: str, file_name: str, col_name: str = None
         # aggregate the dataset
         df = pd.concat(dfs, ignore_index=True)
 
-        # print dataset distribution
+        # print dataset distribution per class
         if col_name:
             df_info = df[col_name].value_counts()
-            print(len(df_info), df_info.head(3), df_info.tail(3))
-
+            print(col_name, len(df_info))
+            print(df_info.head(3), df_info.tail(3))
+        
         # truncate and store the dataset
-        # if num_sample_per_class > 0:
-        #     df = df.groupby(col_name).apply(lambda x: x.sample(min(len(x), num_sample_per_class)))
+        if num_sample_per_class !=  None:
+            df = df.groupby(col_name).apply(lambda x: x.sample(n=min(len(x), num_sample_per_class[key])))
         df.to_csv(f'{path}/{file_name}', index=False)
+
+        if col_name and num_sample_per_class != None:
+            df_info = df[col_name].value_counts()
+            print(col_name, len(df_info), len(df_info[df_info < num_sample_per_class[key]]), len(df_info[df_info < num_sample_per_class[key]//2]))
 
         # clear tasks[key] after aggregation
         tasks[key] = []
@@ -393,12 +410,13 @@ def parse_params(s: str):
     return pns, mns, nfs
 
 
-def aggregate_pm_test(num_sample_per_class: int, methods: list = [1, 2], grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_stds: list = [0.5, 1, 1.5, 2], mv_noise_stds: list = [0.1, 0.2], num_false_stars: list = [1, 2, 3, 4, 5], num_thread: int = 20):
+def aggregate_pm_test(num_sample_per_class: int, methods: list = [1, 2], region_r: float = 6, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_stds: list = [0.5, 1, 1.5, 2], mv_noise_stds: list = [0.1, 0.2], num_false_stars: list = [1, 2, 3, 4, 5], num_thread: int = 20):
     '''
         Aggregate the pattern test.
     Args:
         num_sample_per_class: the number of samples for each class
         methods: the methods to generate the pattern
+        region_r: the radius of the region in degrees
         grid_len: the length of the grid
         num_ring: the number of rings
         num_sector: the number of sectors
@@ -407,15 +425,17 @@ def aggregate_pm_test(num_sample_per_class: int, methods: list = [1, 2], grid_le
         num_false_stars: the number of false stars
     '''
 
+    # radius of the region in pixels
+    R = int(region_r/FOV*w)
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thread)
     tasks = {}
 
     for method in methods:
         if method == 1:
-            key = f'{method}_{grid_len}'
+            key = f'{method}_{region_r}_{grid_len}'
         elif method == 2:
-            key = f'{method}_{num_ring}_{num_sector}'
+            key = f'{method}_{region_r}_{num_ring}_{num_sector}'
         else:
             print('Invalid method!')
             return
@@ -446,27 +466,28 @@ def aggregate_pm_test(num_sample_per_class: int, methods: list = [1, 2], grid_le
         print(method, pos_noise_std, mv_noise_std, num_false_star)
 
         # roughly generate the samples for each class
-        task = pool.submit(generate_pm_samples, method, num_sample_per_class*100, False, grid_len, num_ring, num_sector, pos_noise_std, mv_noise_std, num_false_star)
+        task = pool.submit(generate_pm_samples, method, num_sample_per_class*100, False, R, grid_len, num_ring, num_sector, pos_noise_std, mv_noise_std, num_false_star)
         tasks[key].append(task)
         
-    wait_tasks(tasks, pattern_path, 'patterns.csv', 'id', num_sample_per_class)
+    wait_tasks(tasks, pattern_path, 'patterns.csv', 'id')
 
 
-def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5}, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_stds: list = [0.5, 1, 1.5, 2], mv_noise_stds: list = [0.1, 0.2], num_false_stars: list = [1, 2, 3, 4, 5], num_round: int = 3, num_thread: int = 20):
+def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5}, region_r: float = 6, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_stds: list = [0.5, 1, 1.5, 2], mv_noise_stds: list = [0.1, 0.2], num_false_stars: list = [1, 2, 3, 4, 5], num_thread: int = 20):
     '''
         Aggregate the dataset. Firstly, the number of samples for each class is counted. Then, roughly generate classes with too few samples using generate_nn_samples function's 'random' mode. Lastly, the rest are finely generated to ensure that the number of samples in each class in the entire dataset reaches the standard.
     Args:
         types: key->the types of the dataset, values->the minumin number of samples for each class
+        region_r: the radius of the region in degrees
         num_ring: the number of rings
         num_sector: the number of sectors
         num_neighbor: the number of neighbor stars
         pos_noise_stds: list of positional noise
-        num_round: the number of rounds to generate the dataset
         num_thread: the number of threads to generate the dataset
     '''
     
     # generate config
-    gen_cfg = f'{num_ring}_{num_sector}_{num_neighbor}'
+    gen_cfg = f'{region_r}_{num_ring}_{num_sector}_{num_neighbor}'
+    R = int(region_r/FOV*w)
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thread)
     
@@ -485,13 +506,17 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
     # rough generation
     tasks = defaultdict(list)
     for key in types.keys():
-        # count the number of samples for each class
-        file = os.path.join(dataset_path, gen_cfg, key, 'labels.csv')
-        if os.path.exists(file):
-            df = pd.read_csv(file)
+        # reuse old samples
+        files = os.listdir(os.path.join(dataset_path, gen_cfg, key))
+        print(files)
+        if len(files) > 0:
+            df = pd.concat([pd.read_csv(os.path.join(dataset_path, gen_cfg, key, file)) for file in files if file != 'labels.csv'])
+            df.to_csv(os.path.join(dataset_path, gen_cfg, key, 'labels.csv'), index=False)
+            # count the number of samples for each class
             df = df['cata_idx'].value_counts()
             pct = len(df[df > types[key]])/len(catalogue)
-            if pct > 0.5:
+            avg_num = np.sum(types[key]-df[df < types[key]])/len(catalogue)
+            if pct > 0.5 or avg_num < types[key]/2:
                 print(f'{key} skip rough generation!')
                 continue
         
@@ -500,9 +525,14 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
         print(key, pos_noise_std, mv_noise_std, num_false_star)
 
         # roughly generate the samples for each class
-        num_vec = types[key]*100
+        num_vec = types[key]*300
+        if num_vec > 900:
+            num_round = num_vec//900
+            num_vec = 900
+        else:
+            num_round = 1
         for _ in range(num_round):
-            task = pool.submit(generate_nn_samples, 'random', num_vec, [], num_ring, num_sector, num_neighbor, pos_noise_std, mv_noise_std, num_false_star)
+            task = pool.submit(generate_nn_samples, 'random', num_vec, [], R, num_ring, num_sector, num_neighbor, pos_noise_std, mv_noise_std, num_false_star)
             tasks[key].append(task)
 
     # wait for all tasks to be done and merge the results
@@ -524,18 +554,25 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
         pos_noise_std, mv_noise_std, num_false_star = parse_params(key)
 
         # for class whose sample less than num_sample_per_class, generate the dataset til the number of samples reach the standard
-        len_td = len(idxs)//num_round
+        if len(idxs) > 1000:
+            len_td = 1000
+            num_round = len(idxs)//len_td
+            if num_round > num_thread//4:
+                num_round = num_thread//4
+                len_td = len(idxs)//num_round
+        else:
+            len_td = len(idxs)
+            num_round = 1
         for i in range(num_round+1):
             beg, end = i*len_td, min((i+1)*len_td, len(idxs))
-            task = pool.submit(generate_nn_samples, 'supplementary', 0, idxs[beg: end], num_ring, num_sector, num_neighbor, pos_noise_std, mv_noise_std, num_false_star)
+            task = pool.submit(generate_nn_samples, 'supplementary', 0, idxs[beg: end], R, num_ring, num_sector, num_neighbor, pos_noise_std, mv_noise_std, num_false_star)
             tasks[key].append(task)
     
-    wait_tasks(tasks, os.path.join(dataset_path, gen_cfg), 'labels.csv', 'cata_idx')
+    wait_tasks(tasks, os.path.join(dataset_path, gen_cfg), 'labels.csv', 'cata_idx', types)
 
 
 if __name__ == '__main__':
-    # generate_pm_database(1, grid_len=60)
-    # generate_pm_database(2)
-    # aggregate_pm_test(1, [1], grid_len=60)
-    aggregate_nn_dataset({'test': 1}, num_neighbor=3)
+    # generate_pm_database(1, region_r=6, grid_len=60)
+    # aggregate_pm_test(1, [1], region_r=6, grid_len=60)
+    aggregate_nn_dataset({'train': 12}, num_neighbor=3)
     
