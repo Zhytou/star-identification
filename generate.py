@@ -119,7 +119,7 @@ def generate_pm_database(method: int, use_preprocess: bool = False, region_r: fl
     df.to_csv(f'{path}/db.csv', index=False)
 
 
-def generate_pm_samples(method: int, num_vec: int, use_preprocess: bool = False, R: int = 600, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0):
+def generate_pm_samples(method: int, mode: str, num_vec: int, idxs: list, use_preprocess: bool = False, R: int = 600, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0):
     '''
         Generate pattern match test case.
     Args:
@@ -139,9 +139,16 @@ def generate_pm_samples(method: int, num_vec: int, use_preprocess: bool = False,
         df: the test case
     '''
 
-    # generate random right ascension[-180, 180] and declination[-90, 90]
-    ras = np.random.uniform(-np.pi, np.pi, num_vec)
-    des = np.arcsin(np.random.uniform(-1, 1, num_vec))
+    # generate right ascension[-pi, pi] and declination[-pi/2, pi/2]
+    if mode == 'random':
+        ras = np.random.uniform(-np.pi, np.pi, num_vec)
+        des = np.arcsin(np.random.uniform(-1, 1, num_vec))
+    elif mode == 'supplementary':
+        ras = np.clip(catalogue.loc[idxs, 'RA']+np.radians(np.random.normal(0, 1)), -np.pi, np.pi)
+        des = np.clip(catalogue.loc[idxs, 'DE']+np.radians(np.random.normal(0, 1)), -np.pi/2, np.pi/2)
+    else:
+        print('Invalid mode!')
+        return
 
     patterns = []
     # generate the star image
@@ -249,8 +256,8 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, R: int = 600, num_r
         ras = np.random.uniform(-np.pi, np.pi, num_vec)
         des = np.arcsin(np.random.uniform(-1, 1, num_vec))
     elif mode == 'supplementary':
-        ras = np.clip(catalogue.loc[idxs, 'RA']+np.radians(np.random.normal(0, 1)), -np.pi, np.pi)
-        des = np.clip(catalogue.loc[idxs, 'DE']+np.radians(np.random.normal(0, 1)), -np.pi/2, np.pi/2)
+        ras = np.clip(catalogue.loc[idxs, 'RA']+np.radians(np.random.normal(0, 2, len(idxs))), -np.pi, np.pi)
+        des = np.clip(catalogue.loc[idxs, 'DE']+np.radians(np.random.normal(0, 2, len(idxs))), -np.pi/2, np.pi/2)
     else:
         print('Invalid mode!')
         return
@@ -307,7 +314,7 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, R: int = 600, num_r
             # remove the first element of ags & ds, which is reference star
             ds, ags = ds[1:], ags[1:]
             # make sure several neighbor stars are located in the region
-            if len(ags) < num_neighbor+num_false_star:
+            if len(ags) < num_neighbor:
                 continue
         
             ring_counts, _ = np.histogram(ds, bins=num_ring, range=(0, R))
@@ -369,17 +376,15 @@ def wait_tasks(tasks: dict, root_path: str, file_name: str, col_name: str = None
         # print dataset distribution per class
         if col_name:
             df_info = df[col_name].value_counts()
-            print(col_name, len(df_info))
-            print(df_info.head(3), df_info.tail(3))
+            print(df_info.tail(3))
         
         # truncate and store the dataset
         if num_sample_per_class !=  None:
             df = df.groupby(col_name).apply(lambda x: x.sample(n=min(len(x), num_sample_per_class[key])))
-        df.to_csv(f'{path}/{file_name}', index=False)
-
-        if col_name and num_sample_per_class != None:
             df_info = df[col_name].value_counts()
-            print(col_name, len(df_info), len(df_info[df_info < num_sample_per_class[key]]), len(df_info[df_info < num_sample_per_class[key]//2]))
+            print(key, col_name, len(df_info), len(df_info[df_info < num_sample_per_class[key]]), len(df_info[df_info < num_sample_per_class[key]//2]))
+        
+        df.to_csv(f'{path}/{file_name}', index=False)
 
         # clear tasks[key] after aggregation
         tasks[key] = []
@@ -466,13 +471,13 @@ def aggregate_pm_test(num_sample_per_class: int, methods: list = [1, 2], region_
         print(method, pos_noise_std, mv_noise_std, num_false_star)
 
         # roughly generate the samples for each class
-        task = pool.submit(generate_pm_samples, method, num_sample_per_class*100, False, R, grid_len, num_ring, num_sector, pos_noise_std, mv_noise_std, num_false_star)
+        task = pool.submit(generate_pm_samples, method, 'random', num_sample_per_class*100, [], False, R, grid_len, num_ring, num_sector, pos_noise_std, mv_noise_std, num_false_star)
         tasks[key].append(task)
         
     wait_tasks(tasks, pattern_path, 'patterns.csv', 'id')
 
 
-def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5}, region_r: float = 6, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_stds: list = [0.5, 1, 1.5, 2], mv_noise_stds: list = [0.1, 0.2], num_false_stars: list = [1, 2, 3, 4, 5], num_thread: int = 20):
+def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5}, region_r: float = 6, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_stds: list = [], mv_noise_stds: list = [], num_false_stars: list = [], num_thread: int = 20):
     '''
         Aggregate the dataset. Firstly, the number of samples for each class is counted. Then, roughly generate classes with too few samples using generate_nn_samples function's 'random' mode. Lastly, the rest are finely generated to ensure that the number of samples in each class in the entire dataset reaches the standard.
     Args:
@@ -507,15 +512,17 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
     tasks = defaultdict(list)
     for key in types.keys():
         # reuse old samples
-        files = os.listdir(os.path.join(dataset_path, gen_cfg, key))
-        print(files)
+        files = []
+        if os.path.exists(os.path.join(dataset_path, gen_cfg, key)):
+            files = os.listdir(os.path.join(dataset_path, gen_cfg, key))
         if len(files) > 0:
             df = pd.concat([pd.read_csv(os.path.join(dataset_path, gen_cfg, key, file)) for file in files if file != 'labels.csv'])
             df.to_csv(os.path.join(dataset_path, gen_cfg, key, 'labels.csv'), index=False)
             # count the number of samples for each class
             df = df['cata_idx'].value_counts()
             pct = len(df[df > types[key]])/len(catalogue)
-            avg_num = np.sum(types[key]-df[df < types[key]])/len(catalogue)
+            avg_num = np.sum(types[key]-df[df < types[key]])/len(df[df < types[key]])
+            print('pct: ', pct, ' len(df[df < types[key]]): ', len(df[df < types[key]]), ' avg_num:', avg_num)
             if pct > 0.5 or avg_num < types[key]/2:
                 print(f'{key} skip rough generation!')
                 continue
@@ -527,8 +534,11 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
         # roughly generate the samples for each class
         num_vec = types[key]*300
         if num_vec > 900:
-            num_round = num_vec//900
+            num_round = num_vec//900+1
             num_vec = 900
+            if num_round > num_thread//4:
+                num_round = num_thread//4
+                num_vec = types[key]*300//num_round
         else:
             num_round = 1
         for _ in range(num_round):
@@ -549,7 +559,7 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
         df = df[df < types[key]]
         # repeat each the index of df (which is catalogue idx needed)
         idxs = df.index.repeat(types[key]-df).to_list()
-        print(len(idxs), idxs[:3], idxs[-3:])
+        print(len(df), len(idxs), idxs[:3], idxs[-3:])
         # parse parameters
         pos_noise_std, mv_noise_std, num_false_star = parse_params(key)
 
@@ -574,5 +584,5 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
 if __name__ == '__main__':
     # generate_pm_database(1, region_r=6, grid_len=60)
     # aggregate_pm_test(1, [1], region_r=6, grid_len=60)
-    aggregate_nn_dataset({'train': 12}, num_neighbor=3)
+    aggregate_nn_dataset({'train': 35, 'test': 2,}, num_neighbor=3, pos_noise_stds=[3])
     

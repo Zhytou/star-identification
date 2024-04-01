@@ -160,15 +160,15 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
     
     # add positional noise if needed
     if pos_noise_std > 0:
-        stars_within_FOV['X4'] += np.random.normal(0, pos_noise_std)
-        stars_within_FOV['Y4'] += np.random.normal(0, pos_noise_std)
+        stars_within_FOV['X4'] += np.random.normal(0, pos_noise_std, size=len(stars_within_FOV['X4']))
+        stars_within_FOV['Y4'] += np.random.normal(0, pos_noise_std, size=len(stars_within_FOV['Y4']))
     
     stars_within_FOV['X4'] = np.round(stars_within_FOV['X4']).astype(int)
     stars_within_FOV['Y4'] = np.round(stars_within_FOV['Y4']).astype(int)
 
     # add magnitude noise
     if mv_noise_std > 0:
-        stars_within_FOV['Magnitude'] += np.random.normal(0, mv_noise_std)
+        stars_within_FOV['Magnitude'] += np.random.normal(0, mv_noise_std, size=len(stars_within_FOV['Magnitude']))
 
     # exclude stars beyond range
     stars_within_FOV = stars_within_FOV[stars_within_FOV['X4'].between(ROI, w-ROI) & stars_within_FOV['Y4'].between(ROI, h-ROI)]

@@ -143,7 +143,7 @@ if __name__ == '__main__':
         print(f'Using device: {device}')
         gen_cfgs = os.listdir(dataset_path)
         for gen_cfg in gen_cfgs:
-            num_ring, num_sector, num_neighbor = list(map(int, gen_cfg.split('_')))
+            _, num_ring, num_sector, num_neighbor = list(map(int, gen_cfg.split('_')))
             num_input = num_ring+num_sector*num_neighbor
             # iterate different model types
             for model_type in ['fnn', '1dcnn']:
@@ -163,18 +163,18 @@ if __name__ == '__main__':
                 default_dataset = StarPointDataset(os.path.join(dataset_path, gen_cfg, 'test', 'default'))
                 defualt_df = pd.read_csv(os.path.join(dataset_path, gen_cfg, 'test', 'default', 'labels.csv'))
                 default_loader = DataLoader(default_dataset, batch_size)
-                defualt_acc = check_nn_accuracy(best_model, default_loader, defualt_df['img_id'], device)
+                defualt_acc = check_nn_accuracy(best_model, default_loader, device=device)
 
                 pos_accs, mv_accs, fs_accs = [], [], []
                 # pos_noise_test accuracy
-                for pns in [0.5, 1, 1.5, 2]:
+                for pns in [0.5, 1, 1.5, 2, 3, 5]:
                     pos_dataset = StarPointDataset(os.path.join(dataset_path, gen_cfg, 'test', f'pos{pns}'))
                     pos_df = pd.read_csv(os.path.join(dataset_path, gen_cfg, 'test', f'pos{pns}', 'labels.csv'))
                     # print datasets' sizes
                     print(f'Positional noise set: {len(pos_dataset)}')
                     # define data loaders
                     pos_loader = DataLoader(pos_dataset, batch_size)
-                    pos_acc = check_nn_accuracy(best_model, pos_loader, pos_df['img_id'], device)
+                    pos_acc = check_nn_accuracy(best_model, pos_loader, device=device)
                     pos_accs.append(pos_acc)
 
                 # mv_noise_test accuracy
@@ -185,7 +185,7 @@ if __name__ == '__main__':
                     print(f'Magnitude noise set: {len(mv_dataset)}')
                     # define data loaders
                     mv_loader = DataLoader(mv_dataset, batch_size)
-                    mv_acc = check_nn_accuracy(best_model, mv_loader, mv_df['img_id'], device)
+                    mv_acc = check_nn_accuracy(best_model, mv_loader, device=device)
                     mv_accs.append(mv_acc)
 
                 # false_star_test accuracy
@@ -196,7 +196,7 @@ if __name__ == '__main__':
                     print(f'False star set: {len(fs_dataset)}')
                     # define data loaders
                     fs_loader = DataLoader(fs_dataset, batch_size)
-                    fs_acc = check_nn_accuracy(best_model, fs_loader, fs_df['img_id'], device)   
+                    fs_acc = check_nn_accuracy(best_model, fs_loader, device=device)   
                     fs_accs.append(fs_acc)
                 
                 print(gen_cfg, defualt_acc, pos_accs, mv_accs, fs_accs)
