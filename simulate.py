@@ -24,7 +24,7 @@ xpixel = w/mtot
 ypixel = h/mtot
 
 # star catalogue path
-catalogue_path = 'catalogue/filtered_below_5.7_SAO.csv'
+catalogue_path = f'catalogue/SAO5.6_15_20.csv'
 
 
 def create_star_image(ra: float, de: float, roll: float, white_noise_std: float = 10, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0) -> tuple[np.ndarray, list]:
@@ -163,9 +163,6 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
         stars_within_FOV['X4'] += np.random.normal(0, pos_noise_std, size=len(stars_within_FOV['X4']))
         stars_within_FOV['Y4'] += np.random.normal(0, pos_noise_std, size=len(stars_within_FOV['Y4']))
     
-    stars_within_FOV['X4'] = np.round(stars_within_FOV['X4']).astype(int)
-    stars_within_FOV['Y4'] = np.round(stars_within_FOV['Y4']).astype(int)
-
     # add magnitude noise
     if mv_noise_std > 0:
         stars_within_FOV['Magnitude'] += np.random.normal(0, mv_noise_std, size=len(stars_within_FOV['Magnitude']))
@@ -182,9 +179,9 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
     stars = []
     for i in range(len(star_magnitudes)):
         # draw imagable star at (row, col)
-        col, row = star_positions[i]
-        img = draw_star(col, row, star_magnitudes[i], img)
-        stars.append([star_ids[i], (row, col), star_magnitudes[i]])
+        x, y = star_positions[i]
+        img = draw_star(int(round(x)), int(round(y)), star_magnitudes[i], img)
+        stars.append([star_ids[i], (round(y, 3), round(x, 3)), star_magnitudes[i]])
 
     # add false stars with random magitudes at random positions
     if num_false_star > 0:
@@ -206,6 +203,7 @@ if __name__ == '__main__':
         img, stars = create_star_image(ra, de, 0)
         star_table = dict(map(lambda x: (x[1], x[0]), stars))
         # when using the ra & de in star catalogue, one star must be placed in the center of image
-        if star_table.get((w/2, h/2), -1) == -1:
+        if star_table.get((h/2, w/2), -1) == -1:
             print(i, 'ra:', round(degrees(ra), 2), 'de:', round(degrees(de), 2), 'f:',f)
+            print(stars)
             break

@@ -4,7 +4,7 @@ from skimage import measure
 
 from simulate import create_star_image
 
-def get_star_centroids(img: np.ndarray) -> list[tuple[int, int]]:
+def get_star_centroids(img: np.ndarray) -> list[tuple[float, float]]:
     '''
         Get the centroids of the stars in the image.
     Args:
@@ -71,12 +71,8 @@ def get_star_centroids(img: np.ndarray) -> list[tuple[int, int]]:
     # calaculate the threshold
     threshold = cal_multiwind_threshold(img1)
 
-    # if img[u, v] < threshold + 20: 0, else: img[u, v]
+    # if img[u, v] < threshold: 0, else: img[u, v]
     _, nimg = cv2.threshold(img1, threshold, 255, cv2.THRESH_TOZERO)
-
-    # cv2.imwrite('img.png', img)
-    # cv2.imwrite('img1.png', img1)
-    # cv2.imwrite('nimg.png', nimg)
 
     # rough group star using connectivity
     group_coords = group_star(nimg, 2)
@@ -91,7 +87,7 @@ def get_star_centroids(img: np.ndarray) -> list[tuple[int, int]]:
             row_sum += row * (img[row][col] - threshold)
             col_sum += col * (img[row][col] - threshold)
             gray_sum += img[row][col] - threshold
-        centroids.append((round(row_sum/gray_sum), round(col_sum/gray_sum)))
+        centroids.append((round(row_sum/gray_sum, 3), round(col_sum/gray_sum, 3)))
 
     return centroids
 
@@ -101,7 +97,7 @@ if __name__ == '__main__':
     num_test = 500
     # generate random right ascension[0, 360] and declination[-90, 90]
     ras = np.random.uniform(-np.pi, np.pi, num_test)
-    des = np.arcsin(np.random.uniform(-np.pi/2, np.pi, num_test))
+    des = np.arcsin(np.random.uniform(-1, 1, num_test))
     # centroid position error
     pos_error = 0
     cnt = 0
@@ -130,7 +126,7 @@ if __name__ == '__main__':
             real_stars = np.array(list(star_table.keys()))
             distances = np.linalg.norm(real_stars-np.array(list(star)), axis=1)
             idx = np.argmin(distances)
-            print(star, real_stars[idx])
+            # print(star, real_stars[idx])
             pos_error += np.sqrt((star[0] - real_stars[idx][0])**2 + (star[1] - real_stars[idx][1])**2)
             cnt += 1
     print(f'cnt: {cnt}, pos_error: {pos_error/cnt}')

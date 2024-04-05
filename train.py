@@ -48,8 +48,8 @@ def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader:
 if __name__ == '__main__':
     # training setting
     batch_size = 101
-    num_epochs = 30
-    learning_rate = 0.01
+    num_epochs = 10
+    learning_rate = 0.001
     # use gpu if available
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f'Using device: {device}')
@@ -58,7 +58,7 @@ if __name__ == '__main__':
     gen_cfgs = os.listdir(dataset_path)
     for gen_cfg in gen_cfgs:
         print(f'Generate config: {gen_cfg}')
-        _, num_ring, num_sector, num_neighbor = list(map(int, gen_cfg.split('_')))
+        _, _, num_ring, num_sector, num_neighbor = list(map(int, gen_cfg.split('_')))
         num_input = num_ring+num_sector*num_neighbor
         # define datasets for train validate and test
         train_dataset, val_dataset, test_dataset = [StarPointDataset(os.path.join(dataset_path, gen_cfg, type)) for type in ['train', 'validate', 'test/default']]
