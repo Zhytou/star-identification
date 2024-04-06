@@ -229,7 +229,7 @@ def generate_pm_samples(method: int, mode: str, num_vec: int, idxs: list, use_pr
     return df
 
 
-def generate_nn_samples(mode: str, num_vec: int, idxs: list, R: int = 600, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0):
+def generate_nn_samples(mode: str, num_vec: int, idxs: list, use_preprocess: bool = False, R: int = 600, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0):
     '''
         Generate radial and cyclic features dataset for NN model using the given star catalogue.
     Args:
@@ -256,8 +256,8 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, R: int = 600, num_r
         ras = np.random.uniform(-np.pi, np.pi, num_vec)
         des = np.arcsin(np.random.uniform(-1, 1, num_vec))
     elif mode == 'supplementary':
-        ras = np.clip(catalogue.loc[idxs, 'RA']+np.radians(np.random.normal(0, 2, len(idxs))), -np.pi, np.pi)
-        des = np.clip(catalogue.loc[idxs, 'DE']+np.radians(np.random.normal(0, 2, len(idxs))), -np.pi/2, np.pi/2)
+        ras = np.clip(catalogue.loc[idxs, 'RA']+np.radians(np.random.normal(0, 1, len(idxs))), -np.pi, np.pi)
+        des = np.clip(catalogue.loc[idxs, 'DE']+np.radians(np.random.normal(0, 1, len(idxs))), -np.pi/2, np.pi/2)
     else:
         print('Invalid mode!')
         return
@@ -268,8 +268,12 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, R: int = 600, num_r
         img, star_info = create_star_image(ra, de, 0, pos_noise_std=pos_noise_std, mv_noise_std=mv_noise_std, num_false_star=num_false_star)
         # generate star_table: (row, col) -> star_id
         star_table = dict(map(lambda x: (x[1], x[0]), star_info))
+        
         # get the centroids of the stars in the image
-        stars = np.array(get_star_centroids(img))
+        if use_preprocess:
+            stars = np.array(get_star_centroids(img))
+        else:
+            stars = np.array(list(star_table.keys()))
         if len(stars) < num_neighbor+1:
             continue
 
@@ -277,13 +281,13 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, R: int = 600, num_r
         img_id = uuid.uuid1()
 
         # number of candidate primary stars in the region
-        in_rect  = np.logical_and(
-            np.logical_and(stars[:, 0] >= R, stars[:, 0] <= h-R),
-            np.logical_and(stars[:, 1] >= R, stars[:, 1] <= w-R)
-        )
-        # too few stars to identify satellite attitude
-        if np.sum(in_rect) < 3:
-            continue
+        # in_rect  = np.logical_and(
+        #     np.logical_and(stars[:, 0] >= R, stars[:, 0] <= h-R),
+        #     np.logical_and(stars[:, 1] >= R, stars[:, 1] <= w-R)
+        # )
+        # # too few stars to identify satellite attitude
+        # if np.sum(in_rect) < 3:
+        #     continue
 
         # distances and angles between each star in FOV
         distances = cdist(stars, stars, 'euclidean')
@@ -310,7 +314,7 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, R: int = 600, num_r
             # angles is sorted by distance with accending order
             ags = ags[np.argsort(ds)]
             ds = np.sort(ds)
-            ags = ags[ds < R]
+            ags = ags[ds <= R]
             # remove the first element of ags & ds, which is reference star
             ds, ags = ds[1:], ags[1:]
             # make sure several neighbor stars are located in the region
@@ -369,14 +373,14 @@ def wait_tasks(tasks: dict, root_path: str, file_name: str, col_name: str = None
         # remain the old samples
         if os.path.exists(f'{path}/{file_name}'):
             dfs.append(pd.read_csv(f'{path}/{file_name}'))
-        
+
         # aggregate the dataset
         df = pd.concat(dfs, ignore_index=True)
 
         # print dataset distribution per class
         if col_name:
             df_info = df[col_name].value_counts()
-            print(df_info.tail(3))
+            print(len(df_info), df_info.tail(3))
         
         # truncate and store the dataset
         if num_sample_per_class !=  None:
@@ -415,7 +419,7 @@ def parse_params(s: str):
     return pns, mns, nfs
 
 
-def aggregate_pm_test(num_sample_per_class: int, methods: list = [1, 2], region_r: float = 6, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_stds: list = [0.5, 1, 1.5, 2], mv_noise_stds: list = [0.1, 0.2], num_false_stars: list = [1, 2, 3, 4, 5], num_thread: int = 20):
+def aggregate_pm_test(num_sample_per_class: int, methods: list = [1, 2], use_preprocess: bool = False, region_r: float = 6, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_stds: list = [0.5, 1, 1.5, 2], mv_noise_stds: list = [0.1, 0.2], num_false_stars: list = [1, 2, 3, 4, 5], num_thread: int = 20):
     '''
         Aggregate the pattern test.
     Args:
@@ -438,9 +442,9 @@ def aggregate_pm_test(num_sample_per_class: int, methods: list = [1, 2], region_
 
     for method in methods:
         if method == 1:
-            key = f'{method}_{region_r}_{grid_len}'
+            key = f'{method}_{use_preprocess}_{region_r}_{grid_len}'
         elif method == 2:
-            key = f'{method}_{region_r}_{num_ring}_{num_sector}'
+            key = f'{method}_{use_preprocess}_{region_r}_{num_ring}_{num_sector}'
         else:
             print('Invalid method!')
             return
@@ -471,13 +475,13 @@ def aggregate_pm_test(num_sample_per_class: int, methods: list = [1, 2], region_
         print(method, pos_noise_std, mv_noise_std, num_false_star)
 
         # roughly generate the samples for each class
-        task = pool.submit(generate_pm_samples, method, 'random', num_sample_per_class*100, [], False, R, grid_len, num_ring, num_sector, pos_noise_std, mv_noise_std, num_false_star)
+        task = pool.submit(generate_pm_samples, method, 'random', num_sample_per_class*100, [], use_preprocess, R, grid_len, num_ring, num_sector, pos_noise_std, mv_noise_std, num_false_star)
         tasks[key].append(task)
         
     wait_tasks(tasks, pattern_path, 'patterns.csv', 'id')
 
 
-def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5}, region_r: float = 6, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_stds: list = [], mv_noise_stds: list = [], num_false_stars: list = [], num_thread: int = 20):
+def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5}, use_preprocess: bool = False, region_r: float = 6, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_stds: list = [], mv_noise_stds: list = [], num_false_stars: list = [], num_thread: int = 20):
     '''
         Aggregate the dataset. Firstly, the number of samples for each class is counted. Then, roughly generate classes with too few samples using generate_nn_samples function's 'random' mode. Lastly, the rest are finely generated to ensure that the number of samples in each class in the entire dataset reaches the standard.
     Args:
@@ -491,7 +495,7 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
     '''
     
     # generate config
-    gen_cfg = f'{region_r}_{num_ring}_{num_sector}_{num_neighbor}'
+    gen_cfg = f'{int(use_preprocess)}_{region_r}_{num_ring}_{num_sector}_{num_neighbor}'
     R = int(region_r/FOV*w)
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thread)
@@ -523,7 +527,7 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
             pct = len(df[df > types[key]])/len(catalogue)
             avg_num = np.sum(types[key]-df[df < types[key]])/len(df[df < types[key]])
             print('pct: ', pct, ' len(df[df < types[key]]): ', len(df[df < types[key]]), ' avg_num:', avg_num)
-            if pct > 0.5 or avg_num < types[key]/2:
+            if pct > 0.5 or avg_num < types[key]/3:
                 print(f'{key} skip rough generation!')
                 continue
         
@@ -542,7 +546,7 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
         else:
             num_round = 1
         for _ in range(num_round):
-            task = pool.submit(generate_nn_samples, 'random', num_vec, [], R, num_ring, num_sector, num_neighbor, pos_noise_std, mv_noise_std, num_false_star)
+            task = pool.submit(generate_nn_samples, 'random', num_vec, [], use_preprocess, R, num_ring, num_sector, num_neighbor, pos_noise_std, mv_noise_std, num_false_star)
             tasks[key].append(task)
 
     # wait for all tasks to be done and merge the results
@@ -575,7 +579,9 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
             num_round = 1
         for i in range(num_round+1):
             beg, end = i*len_td, min((i+1)*len_td, len(idxs))
-            task = pool.submit(generate_nn_samples, 'supplementary', 0, idxs[beg: end], R, num_ring, num_sector, num_neighbor, pos_noise_std, mv_noise_std, num_false_star)
+            if beg >= end:
+                continue
+            task = pool.submit(generate_nn_samples, 'supplementary', 0, idxs[beg: end], use_preprocess, R, num_ring, num_sector, num_neighbor, pos_noise_std, mv_noise_std, num_false_star)
             tasks[key].append(task)
     
     wait_tasks(tasks, os.path.join(dataset_path, gen_cfg), 'labels.csv', 'cata_idx', types)
@@ -584,5 +590,5 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
 if __name__ == '__main__':
     # generate_pm_database(1, region_r=6, grid_len=60)
     # aggregate_pm_test(1, [1], region_r=6, grid_len=60)
-    aggregate_nn_dataset({'train': 35, 'test': 2,}, num_neighbor=3, pos_noise_stds=[3])
+    aggregate_nn_dataset({'train': 30, 'test': 5}, use_preprocess=False, region_r=6, num_neighbor=3,) #pos_noise_stds=[0.5, 1, 1.5, 2, 2.5, 3], num_false_stars=[1, 2, 3, 4, 5])
     
