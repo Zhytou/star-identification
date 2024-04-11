@@ -11,6 +11,11 @@ from models import FNN, CNN
 from test import check_nn_accuracy
 
 
+def weights_init(m: nn.Module):
+    if isinstance(m, nn.Conv2d):
+        nn.init.kaiming_uniform_(m.weight.data)
+
+
 def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader: DataLoader, test_loader: DataLoader=None, test_df: pd.DataFrame=None, device=torch.device('cpu')):
     '''
         Train the model.
@@ -21,7 +26,11 @@ def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader:
         loader: the data loader for training
         test_loader: the data loader for testing
         device: the device to run the model
+    Returns:
+        ls: the loss of each epoch
+        accs: the accuracy of each epoch
     '''
+    ls, accs = [], []
     for epoch in range(num_epochs):
         # set the model into train model
         model.train()
@@ -40,10 +49,14 @@ def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader:
             # updating parameters
             optimizer.step()
         
+        ls.append(loss.item())
+
         if test_loader:
             accuracy = check_nn_accuracy(model, test_loader, test_df, device)
             print(f'Epoch: {epoch}, Accuracy: {accuracy}%')
-        
+            accs.append(accuracy)
+
+    return ls, accs
         
 if __name__ == '__main__':
     # training setting
@@ -62,45 +75,27 @@ if __name__ == '__main__':
         num_input = num_ring+num_sector*num_neighbor
         # define datasets for train validate and test
         train_dataset, val_dataset, test_dataset = [StarPointDataset(os.path.join(dataset_path, gen_cfg, type)) for type in ['train', 'validate', 'test/default']]
-        # test dataframe that maps sample indexes to image ids
-        # val_df, test_df = [pd.read_csv(os.path.join(dataset_path, gen_cfg, type, 'labels.csv')) for type in ['validate', 'test/default']]
         # print datasets' sizes
         print(f'Training set: {len(train_dataset)}, Validation set: {len(val_dataset)}, Test set: {len(test_dataset)}')
         # create data loaders for our datasets
         train_loader, val_loader, test_loader = [DataLoader(dataset, batch_size, shuffle=True) for dataset in [train_dataset, val_dataset, test_dataset]]
 
         # load best model of last train
-        for model_type in ['1dcnn']:
-            model_dir = f'model/{sim_cfg}/{gen_cfg}/{model_type}'
-            if not os.path.exists(model_dir):
-                os.makedirs(model_dir)
-            if model_type == 'fnn':
-                best_model = FNN(num_input, num_class)
-            else:
-                best_model = CNN(num_ring, (num_neighbor, num_sector), num_class)
-            model_path = os.path.join(model_dir, 'best_model.pth')
-            if os.path.exists(model_path):
-                best_model.load_state_dict(torch.load(model_path))
-            best_model.to(device)
-            best_val_accuracy = check_nn_accuracy(best_model, val_loader, device=device)
-            print(f'Original {model_type} model accuracy {best_val_accuracy}%')
+        model_dir = f'model/{sim_cfg}/{gen_cfg}/1dcnn'
+        if not os.path.exists(model_dir):
+            os.makedirs(model_dir)
 
-            # tune hyperparameters
-            hidden_dimss = [[100, 200]]
-            for hidden_dims in hidden_dimss:
-                model = best_model
-                model.to(device)
-                optimizer = optim.Adam(model.parameters(), lr=learning_rate)  
+        model = CNN(num_ring, (num_neighbor, num_sector), num_class)
+        model_path = os.path.join(model_dir, 'best_model.pth')
+        if not os.path.exists(model_path):
+          model.apply(weights_init)  
+        # else:
+        #     model.load_state_dict(torch.load(model_path))
+        model.to(device)
+        
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate)  
+        ls, accs = train(model, optimizer, num_epochs, train_loader, test_loader, device=device)
+        torch.save(model.state_dict(), model_path)
 
-                print(f'train {model_type} model with {hidden_dims}')
-                train(model, optimizer, num_epochs, train_loader, test_loader, device=device)
-                val_accuracy = check_nn_accuracy(model, val_loader, device=device)
-                print(f'validate accurracy {val_accuracy}')
+        print(ls, accs)
 
-                if val_accuracy > best_val_accuracy:
-                    best_model = model
-                    best_val_accuracy = val_accuracy
-    
-            test_accuray = check_nn_accuracy(best_model, test_loader, device=device)
-            print(f'Best {model_type} model validate accuracy: {best_val_accuracy}%, test accuracy: {test_accuray}%')
-            torch.save(best_model.state_dict(), model_path)

@@ -51,7 +51,7 @@ class StarPointDataset(Dataset):
         
         dirs = root_dir.split('/')
         assert len(dirs) <= 5 and dirs[0] == 'data'
-        _, self.num_ring, self.num_sector, self.num_neighbor_limit = list(map(int, dirs[2].split('_')))
+        _, _, self.num_ring, self.num_sector, self.num_neighbor_limit = list(map(int, dirs[2].split('_')))
         
         self.label_df = pd.read_csv(label_file_path)
 
