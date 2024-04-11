@@ -317,10 +317,10 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, use_preprocess: boo
             ags = ags[ds <= R]
             # remove the first element of ags & ds, which is reference star
             ds, ags = ds[1:], ags[1:]
-            # make sure several neighbor stars are located in the region
-            if len(ags) < num_neighbor:
+            # skip if only the reference star in the region
+            if len(ags) == 0:
                 continue
-        
+
             ring_counts, _ = np.histogram(ds, bins=num_ring, range=(0, R))
             for i, rc in enumerate(ring_counts):
                 label[f'ring{i}'] = rc
@@ -334,6 +334,12 @@ def generate_nn_samples(mode: str, num_vec: int, idxs: list, use_preprocess: boo
                 sector_counts, _ = np.histogram(ags, bins=num_sector, range=(-np.pi, np.pi))
                 for j, sc in enumerate(sector_counts):
                     label[f'n{i}_sector{j}'] = sc
+            
+            if len(ags) < num_neighbor:
+                for i in range(len(ags), num_neighbor):
+                    for j in range(num_sector):
+                        label[f'n{i}_sector{j}'] = 0
+
             labels.append(label)
 
     # return the label information
@@ -419,7 +425,7 @@ def parse_params(s: str):
     return pns, mns, nfs
 
 
-def aggregate_pm_test(num_sample_per_class: int, methods: list = [1, 2], use_preprocess: bool = False, region_r: float = 6, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_stds: list = [0.5, 1, 1.5, 2], mv_noise_stds: list = [0.1, 0.2], num_false_stars: list = [1, 2, 3, 4, 5], num_thread: int = 20):
+def aggregate_pm_test(num_sample_per_class: int, methods: list = [], use_preprocess: bool = False, region_r: float = 6, grid_len: int = 8, num_ring: int = 200, num_sector: int = 30, pos_noise_stds: list = [], mv_noise_stds: list = [], num_false_stars: list = [], num_thread: int = 20):
     '''
         Aggregate the pattern test.
     Args:
@@ -442,9 +448,9 @@ def aggregate_pm_test(num_sample_per_class: int, methods: list = [1, 2], use_pre
 
     for method in methods:
         if method == 1:
-            key = f'{method}_{use_preprocess}_{region_r}_{grid_len}'
+            key = f'{method}_{region_r}_{grid_len}'
         elif method == 2:
-            key = f'{method}_{use_preprocess}_{region_r}_{num_ring}_{num_sector}'
+            key = f'{method}_{region_r}_{num_ring}_{num_sector}'
         else:
             print('Invalid method!')
             return
@@ -479,6 +485,41 @@ def aggregate_pm_test(num_sample_per_class: int, methods: list = [1, 2], use_pre
         tasks[key].append(task)
         
     wait_tasks(tasks, pattern_path, 'patterns.csv', 'id')
+
+    # fine generation
+    for key in tasks.keys():
+        df = pd.read_csv(os.path.join(pattern_path, key, 'patterns.csv'))
+        # count the number of samples for each class
+        df = df['id'].value_counts()
+        # add those even unexisting class(catalogue idx)
+        df = df.reindex(catalogue.index, fill_value=0)
+        # count class whose samples less than limit
+        df = df[df < num_sample_per_class]
+        # repeat each the index of df (which is catalogue idx needed)
+        idxs = df.index.repeat(num_sample_per_class-df).to_list()
+        print(len(df), len(idxs), idxs[:3], idxs[-3:])
+        # parse parameters
+        pos_noise_std, mv_noise_std, num_false_star = parse_params(key)
+        print(method, pos_noise_std, mv_noise_std, num_false_star)
+
+        # for class whose sample less than num_sample_per_class, generate the dataset til the number of samples reach the standard
+        if len(idxs) > 1000:
+            len_td = 1000
+            num_round = len(idxs)//len_td
+            if num_round > num_thread//4:
+                num_round = num_thread//4
+                len_td = len(idxs)//num_round
+        else:
+            len_td = len(idxs)
+            num_round = 1
+        for i in range(num_round+1):
+            beg, end = i*len_td, min((i+1)*len_td, len(idxs))
+            if beg >= end:
+                continue
+            task = pool.submit(generate_pm_samples, method, 'supplementary', 0, idxs[beg: end], use_preprocess, R, grid_len, num_ring, num_sector, pos_noise_std, mv_noise_std, num_false_star)
+            tasks[key].append(task)
+    
+    wait_tasks(tasks, pattern_path, 'labels.csv', 'id')
 
 
 def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5}, use_preprocess: bool = False, region_r: float = 6, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_stds: list = [], mv_noise_stds: list = [], num_false_stars: list = [], num_thread: int = 20):
@@ -525,7 +566,10 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
             # count the number of samples for each class
             df = df['cata_idx'].value_counts()
             pct = len(df[df > types[key]])/len(catalogue)
-            avg_num = np.sum(types[key]-df[df < types[key]])/len(df[df < types[key]])
+            if len(df[df < types[key]]) == 0:
+                avg_num = 0
+            else:
+                avg_num = np.sum(types[key]-df[df < types[key]])/len(df[df < types[key]])
             print('pct: ', pct, ' len(df[df < types[key]]): ', len(df[df < types[key]]), ' avg_num:', avg_num)
             if pct > 0.5 or avg_num < types[key]/3:
                 print(f'{key} skip rough generation!')
@@ -588,7 +632,7 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
 
 
 if __name__ == '__main__':
-    # generate_pm_database(1, region_r=6, grid_len=60)
-    # aggregate_pm_test(1, [1], region_r=6, grid_len=60)
-    aggregate_nn_dataset({'train': 30, 'test': 5}, use_preprocess=False, region_r=6, num_neighbor=3,) #pos_noise_stds=[0.5, 1, 1.5, 2, 2.5, 3], num_false_stars=[1, 2, 3, 4, 5])
+    generate_pm_database(1, region_r=6, grid_len=60)
+    aggregate_pm_test(1, [1], region_r=6, grid_len=60, pos_noise_stds=[0.5, 1, 1.5, 2], mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
+    aggregate_nn_dataset({'train': 30, 'validate': 10, 'test': 2}, use_preprocess=False, region_r=6, num_neighbor=3, pos_noise_stds=[0.5, 1, 1.5, 2, 2.5, 3],  mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
     
