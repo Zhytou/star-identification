@@ -40,9 +40,9 @@ def generate_pm_database(method: int, use_preprocess: bool = False, region_r: fl
     R = region_r/FOV*w
 
     if method == 1:
-        path = f'{database_path}/{method}_{region_r}_{grid_len}'
+        path = f'{database_path}/{int(use_preprocess)}_{region_r}_{grid_len}'
     elif method == 2:
-        path = f'{database_path}/{method}_{region_r}_{num_ring}_{num_sector}'
+        path = f'{database_path}/{int(use_preprocess)}_{region_r}_{num_ring}_{num_sector}'
     else:
         print('Invalid method!')
         return
@@ -116,7 +116,7 @@ def generate_pm_database(method: int, use_preprocess: bool = False, region_r: fl
             })
 
     df = pd.DataFrame(database)
-    df.to_csv(f'{path}/db.csv', index=False)
+    df.to_csv(f'{path}/pm{method}.csv', index=False)
 
 
 def generate_nn_dataset(mode: str, num_vec: int, idxs: list, use_preprocess: bool = False, R: int = 600, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0):
@@ -169,15 +169,6 @@ def generate_nn_dataset(mode: str, num_vec: int, idxs: list, use_preprocess: boo
 
         # generate a unique img id for later accuracy calculation
         img_id = uuid.uuid1()
-
-        # number of candidate primary stars in the region
-        # in_rect  = np.logical_and(
-        #     np.logical_and(stars[:, 0] >= R, stars[:, 0] <= h-R),
-        #     np.logical_and(stars[:, 1] >= R, stars[:, 1] <= w-R)
-        # )
-        # # too few stars to identify satellite attitude
-        # if np.sum(in_rect) < 3:
-        #     continue
 
         # distances and angles between each star in FOV
         distances = cdist(stars, stars, 'euclidean')
@@ -281,6 +272,15 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
         # generate a unique img id for later accuracy calculation
         img_id = uuid.uuid1()
 
+        # number of candidate primary stars in the region
+        in_rect  = np.logical_and(
+            np.logical_and(stars[:, 0] >= R, stars[:, 0] <= h-R),
+            np.logical_and(stars[:, 1] >= R, stars[:, 1] <= w-R)
+        )
+        # too few stars to identify satellite attitude
+        if np.sum(in_rect) < 3:
+            continue
+
         # distances = cdist(stars, stars, 'euclidean')
         distances = np.linalg.norm(stars[:,None,:] - stars[None,:,:], axis=-1)
         angles = np.arctan2(stars[:, 1] - stars[:, 1][:, None], stars[:, 0] - stars[:, 0][:, None])
@@ -372,7 +372,10 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                     })
                 else:
                     print('Invalid method')
-            
+    
+    # convert the results into dataframe
+    for key in patterns:
+        patterns[key] = pd.DataFrame(patterns[key])
     return patterns
 
 
@@ -386,6 +389,8 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
         num_sector: the number of sectors
         num_neighbor: the number of neighbor stars
         pos_noise_stds: list of positional noise
+        mv_noise_stds: list of magnitude noise
+        num_false_stars: list of false star number
         num_thread: the number of threads to generate the dataset
     '''
 
@@ -562,9 +567,68 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
     wait_tasks(tasks, os.path.join(dataset_path, gen_cfg), 'labels.csv', 'cata_idx', types)
 
 
+def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool = False, region_r: float = 6, pos_noise_stds: list = [], mv_noise_stds: list = [], num_false_stars: list = [], num_thread: int = 20):
+    '''
+    Aggregate the test samples. 
+    Args:
+        num_vec: number of vectors used to generate test samples
+        region_r: the radius of the region in degrees
+        gen_params: the parameters for the test sample generation
+                'pm1': grid algorithm 60 
+                'pm2': radial and cyclic algorithm 200 8
+                'nn': proposed 1dcnn algorithm 200 30 3
+        pos_noise_stds: list of positional noise
+        pos_noise_stds: list of positional noise
+        mv_noise_stds: list of magnitude noise
+        num_false_stars: list of false star number
+        num_thread: the number of threads to generate the test samples
+    '''
+
+    R = int(region_r/FOV*w)
+    # use thread pool
+    pool = ThreadPoolExecutor(max_workers=num_thread)
+    # tasks for later aggregation
+    tasks = defaultdict(list)
+    for _ in range(num_thread):
+        task = pool.submit(generate_test_samples, num_vec//num_thread, gen_params, use_preprocess, R)
+        tasks['default'].append(task)
+
+        for pns in pos_noise_stds:
+            task = pool.submit(generate_test_samples, num_vec//num_thread, gen_params, use_preprocess, R, pos_noise_stds=pns)
+            tasks[f'pos{pns}'].append(task)
+
+        for mns in mv_noise_stds:
+            task = pool.submit(generate_test_samples, num_vec//num_thread, gen_params, use_preprocess, R, mv_noise_stds=mns)
+            tasks[f'mv{mns}'].append(task)
+
+        for nfs in num_false_stars:
+            task = pool.submit(generate_test_samples, num_vec//num_thread, gen_params, use_preprocess, R, num_false_stars=nfs)
+            tasks[f'fs{nfs}'].append(task)
+
+
+    # get the async task result and store the returned dataframe
+    for key in tasks.keys():
+        for task in tasks[key]:
+            df_dict = task.result()
+            for method in df_dict.keys():
+                gen_cfg = f'{int(use_preprocess)}_{region_r}_'+'_'.join(gen_params[method])
+                df = df_dict[method]
+                df.to_csv(os.path.join(test_path, method, gen_cfg, key, uuid.uuid1()), index=False)
+
+    # aggregate all the test patterns
+    for method in gen_params:
+        gen_cfg = f'{int(use_preprocess)}_{region_r}_'+'_'.join(gen_params[method])
+        path = os.path.join(test_path, method, gen_cfg)
+        # sub test dir names
+        test_names = os.listdir(path)
+        for tn in test_names:
+            p = os.path.join(path, tn)
+            dfs = [pd.read_csv(os.path.join(p, f)) for f in os.listdir(p) if f != 'labels.csv']
+            df = pd.concat(dfs, ignore_index=True)
+            df.to_csv(os.path.join(p, 'labels.csv'))
+
+
 if __name__ == '__main__':
     # generate_pm_database(1, region_r=6, grid_len=60)
     # aggregate_nn_dataset({'train': 30, 'validate': 10, 'test': 2}, use_preprocess=False, region_r=6, num_neighbor=3, pos_noise_stds=[0.5, 1, 1.5, 2, 2.5, 3],  mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
-    ps = generate_test_samples(10, {'nn': [200, 30, 3]}, use_preprocess=False, R=600)
-    df = pd.DataFrame(ps['nn'])
-    print(len(df), len(df['img_id'].unique()))
+    aggregate_test_samples(1000, {'nn': [200, 30, 3]})
