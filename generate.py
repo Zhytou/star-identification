@@ -589,46 +589,59 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
     pool = ThreadPoolExecutor(max_workers=num_thread)
     # tasks for later aggregation
     tasks = defaultdict(list)
+
+    if num_vec < 500:
+        num_thread = 1
+    elif num_vec//num_thread > 500:
+        num_vec = num_vec//num_thread
+    else:
+        num_thread = num_vec//500
+        num_vec = 500
+
     for _ in range(num_thread):
-        task = pool.submit(generate_test_samples, num_vec//num_thread, gen_params, use_preprocess, R)
+        task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, R)
         tasks['default'].append(task)
 
         for pns in pos_noise_stds:
-            task = pool.submit(generate_test_samples, num_vec//num_thread, gen_params, use_preprocess, R, pos_noise_stds=pns)
+            task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, R, pos_noise_std=pns)
             tasks[f'pos{pns}'].append(task)
 
         for mns in mv_noise_stds:
-            task = pool.submit(generate_test_samples, num_vec//num_thread, gen_params, use_preprocess, R, mv_noise_stds=mns)
+            task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, R, mv_noise_std=mns)
             tasks[f'mv{mns}'].append(task)
 
         for nfs in num_false_stars:
-            task = pool.submit(generate_test_samples, num_vec//num_thread, gen_params, use_preprocess, R, num_false_stars=nfs)
+            task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, R, num_false_star=nfs)
             tasks[f'fs{nfs}'].append(task)
-
 
     # get the async task result and store the returned dataframe
     for key in tasks.keys():
         for task in tasks[key]:
             df_dict = task.result()
             for method in df_dict.keys():
-                gen_cfg = f'{int(use_preprocess)}_{region_r}_'+'_'.join(gen_params[method])
+                gen_cfg = f'{int(use_preprocess)}_{region_r}_'+'_'.join(map(str, gen_params[method]))
+                path = os.path.join(test_path, method, gen_cfg, key)
+                if not os.path.exists(path):
+                    os.makedirs(path)
                 df = df_dict[method]
-                df.to_csv(os.path.join(test_path, method, gen_cfg, key, uuid.uuid1()), index=False)
+                df.to_csv(os.path.join(path, str(uuid.uuid1())), index=False)
 
     # aggregate all the test patterns
     for method in gen_params:
-        gen_cfg = f'{int(use_preprocess)}_{region_r}_'+'_'.join(gen_params[method])
+        gen_cfg = f'{int(use_preprocess)}_{region_r}_'+'_'.join(map(str, gen_params[method]))
         path = os.path.join(test_path, method, gen_cfg)
         # sub test dir names
         test_names = os.listdir(path)
         for tn in test_names:
             p = os.path.join(path, tn)
             dfs = [pd.read_csv(os.path.join(p, f)) for f in os.listdir(p) if f != 'labels.csv']
-            df = pd.concat(dfs, ignore_index=True)
-            df.to_csv(os.path.join(p, 'labels.csv'))
+            print(p, len(dfs))
+            if len(dfs) > 0:        
+                df = pd.concat(dfs, ignore_index=True)
+                df.to_csv(os.path.join(p, 'labels.csv'))
 
 
 if __name__ == '__main__':
     # generate_pm_database(1, region_r=6, grid_len=60)
     # aggregate_nn_dataset({'train': 30, 'validate': 10, 'test': 2}, use_preprocess=False, region_r=6, num_neighbor=3, pos_noise_stds=[0.5, 1, 1.5, 2, 2.5, 3],  mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
-    aggregate_test_samples(1000, {'nn': [200, 30, 3]})
+    aggregate_test_samples(100, {'nn': [200, 30, 3]}, pos_noise_stds=[0.5, 1, 1.5, 2, 2.5, 3], num_false_stars=[1, 2, 3, 4, 5])
