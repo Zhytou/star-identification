@@ -95,7 +95,7 @@ def generate_pm_database(method: int, use_preprocess: bool = False, region_r: fl
                 col = int(star[1]/R*grid_len)
                 grid_pattern[row][col] = 1
             database.append({
-                'pattern': ''.join(map(str, grid_pattern.flatten())),
+                'pattern': ' '.join(map(str, grid_pattern.flatten())),
                 'id': star_id
             })
         else:
@@ -105,13 +105,13 @@ def generate_pm_database(method: int, use_preprocess: bool = False, region_r: fl
             angles = angles - angles[0]
             # make sure angles are in the range of [-pi, pi]
             angles %= 2*np.pi
-            angles[angles > np.pi] -= 2*np.pi
+            angles[angles >= np.pi] -= 2*np.pi
             angles[angles < -np.pi] += 2*np.pi
             # get the radial and cyclic features
             ring_counts, _ = np.histogram(distances, bins=num_ring, range=(0, R))
             sector_counts, _ = np.histogram(angles, bins=num_sector, range=(-np.pi, np.pi))
             database.append({
-                'pattern': ''.join(map(str, np.concatenate([ring_counts, sector_counts]))),
+                'pattern': ' '.join(map(str, np.concatenate([ring_counts, sector_counts]))),
                 'id': star_id
             })
 
@@ -339,7 +339,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                     patterns[method].append(pattern)
                 elif method == 'pm1':
                     # parse the parameters
-                    grid_len = gen_params[method]
+                    grid_len = gen_params[method][0]
 
                     ag = ags[0]
                     M = np.array([[np.cos(ag), -np.sin(ag)], [np.sin(ag), np.cos(ag)]])
@@ -352,10 +352,12 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                         grid_pattern[row][col] = 1
                     patterns[method].append({
                         'img_id': img_id,
-                        'pattern': ''.join(map(str, grid_pattern.flatten())), 
+                        'pattern': ' '.join(map(str, grid_pattern.flatten())), 
                         'id': star_id
                     })
                 elif method == 'pm2':
+                    # parse the parameters
+                    num_ring, num_sector = gen_params[method]
                     # rotate the stars until the nearest star lies on the horizontal axis
                     ags = ags-ags[0]
                     # make sure angles are in the range of [-pi, pi]
@@ -367,7 +369,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                     sector_counts, _ = np.histogram(ags, bins=num_sector, range=(-np.pi, np.pi))
                     patterns[method].append({
                         'img_id': img_id,
-                        'pattern': ''.join(map(str, np.concatenate([ring_counts, sector_counts]))),
+                        'pattern': ' '.join(map(str, np.concatenate([ring_counts, sector_counts]))),
                         'id': star_id
                     })
                 else:
@@ -644,4 +646,5 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 if __name__ == '__main__':
     # generate_pm_database(1, region_r=6, grid_len=60)
     # aggregate_nn_dataset({'train': 30, 'validate': 10, 'test': 2}, use_preprocess=False, region_r=6, num_neighbor=3, pos_noise_stds=[0.5, 1, 1.5, 2, 2.5, 3],  mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
-    aggregate_test_samples(100, {'nn': [200, 30, 3]}, pos_noise_stds=[0.5, 1, 1.5, 2, 2.5, 3], num_false_stars=[1, 2, 3, 4, 5])
+    # generate_pm_database(2, region_r=6, num_ring=200, num_sector=8)
+    aggregate_test_samples(100, {'pm1': [60]}, pos_noise_stds=[0.5, 1, 1.5, 2, 2.5, 3], mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
