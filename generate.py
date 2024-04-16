@@ -78,7 +78,6 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False):
             # sort the stars by distance with accending order
             stars = stars[distances.argsort()]
             distances = np.sort(distances)
-            
             # exclude the reference star (h/2, w/2)
             assert stars[0][0] == 0 and stars[0][1] == 0 and distances[0] == 0
             stars, distances = stars[1:], distances[1:]
@@ -98,13 +97,14 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False):
                 rotated_stars = np.dot(stars, M)
                 assert round(rotated_stars[0][1])==0
                 # calculate the pattern
-                grid_pattern = np.zeros((grid_len, grid_len), dtype=int)
+                grid = np.zeros((grid_len, grid_len), dtype=int)
                 for star in rotated_stars:
                     row = int((star[0]/Rp+1)/2*grid_len)
                     col = int((star[1]/Rp+1)/2*grid_len)
-                    grid_pattern[row][col] = 1
+                    grid[row][col] = 1
+                # store the 1's position of the grid
                 database.append({
-                    'pattern': ' '.join(map(str, grid_pattern.flatten())),
+                    'pattern': ' '.join(map(str, np.flatnonzero(grid))),
                     'id': star_id
                 })
             else:
@@ -353,17 +353,17 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                     ag = ags[0]
                     M = np.array([[np.cos(ag), -np.sin(ag)], [np.sin(ag), np.cos(ag)]])
                     ss = np.dot(ss, M)
+                    assert round(ss[0][1])==0
                     # calculate the pattern
-                    grid_pattern = np.zeros((grid_len, grid_len), dtype=int)
+                    grid = np.zeros((grid_len, grid_len), dtype=int)
                     for s in ss:
                         row = int((s[0]/Rp+1)/2*grid_len)
                         col = int((s[1]/Rp+1)/2*grid_len)
-                        grid_pattern[row][col] = 1
-                        if row < 0 or col < 0:
-                            print(row, col)
+                        grid[row][col] = 1
+                    # store the 1's position of grid
                     patterns[method].append({
                         'img_id': img_id,
-                        'pattern': ' '.join(map(str, grid_pattern.flatten())), 
+                        'pattern': ' '.join(map(str, np.flatnonzero(grid))), 
                         'id': star_id
                     })
                 elif method == 'pm2':
@@ -658,7 +658,7 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
 
 if __name__ == '__main__':
-    generate_pm_database({'pm1': [0.03, 6, 60]})
+    # generate_pm_database({'pm1': [0, 6, 60]})
     # aggregate_nn_dataset({'train': 30, 'validate': 10, 'test': 2}, use_preprocess=False, region_r=6, num_neighbor=3, pos_noise_stds=[0.5, 1, 1.5, 2, 2.5, 3],  mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
     # generate_pm_database(2, region_r=6, num_ring=200, num_sector=8)
-    # aggregate_test_samples(100, {'pm1': [0.03, 6, 60]}, pos_noise_stds=[0.2, 0.4, 0.6, 0.8, 1, 1.5, 2], mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
+    aggregate_test_samples(2000, {'pm1': [0, 6, 60]}, pos_noise_stds=[0.2, 0.4, 0.6, 0.8, 1, 1.5, 2] ,mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])

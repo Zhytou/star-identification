@@ -5,26 +5,29 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from generate import database_path, test_path, dataset_path, sim_cfg, num_class
+from generate import database_path, test_path, sim_cfg, num_class
 from dataset import StarPointDataset
 from models import CNN
 
 
-def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame):
+def check_pm_accuracy(method: str, db: pd.DataFrame, df: pd.DataFrame):
     '''
         Evaluate the pattern match method's accuracy on the provided patterns. The accuracy is calculated based on the method's ability to correctly identify the closest pattern in the database.
     Args:
+        method: the pattern match method
         db: the database of patterns
         df: the patterns to be tested
     Returns:
         the accuracy of the pattern match method
     '''
+    
     # convert patterns to numpy array
     db_patterns = db['pattern'].values
-    db_patterns = np.array([np.array(list(map(int, pattern.split(' ')))) for pattern in db_patterns])
-
-    # number of multi-match samples
-    multi_match = 0 
+    db_patterns = [list(map(int, pattern.split(' '))) for pattern in db_patterns]
+    
+    # fill -1 to make sure each db_pattern has the same length so that they can be stored in np.array
+    max_len = max(map(len, db_patterns))
+    db_patterns = np.array([pattern+[-1]*(max_len-len(pattern)) for pattern in db_patterns])
 
     # dict to store the number of correctly predicted samples for each star image
     freqs = {}
@@ -33,19 +36,19 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame):
         img_id, pattern, id = df.loc[i, ['img_id', 'pattern', 'id']]
         pattern = np.array(list(map(int, pattern.split(' '))))
 
-        # find the closest pattern in the database
-        match_result = np.sum(pattern & db_patterns, axis=1)
-        max_val = np.max(match_result)
-        idxs = np.where(match_result == max_val)[0]
-        if id in db.loc[idxs, 'id'].values:
-            if len(idxs) == 1:
+        if method == 'pm1':
+            # find the closest pattern in the database
+            match_result = np.sum(np.isin(db_patterns, pattern), axis=1)
+            max_val = np.max(match_result)
+            idxs = np.where(match_result == max_val)[0]
+            if id in db.loc[idxs, 'id'].values:
                 freqs.update({img_id: freqs.get(img_id, 0)+1})
-            else:
-                multi_match += 1
+        else:
+            pass
 
     # the number of star images that have at least three correctly predicted samples
     cnt = sum(v >= 3 for v in freqs.values())
-    acc = round(100.0*cnt/len(freqs), 2)
+    acc = round(100.0*cnt/len(freqs), 2) if len(freqs) > 0 else 0
 
     return acc
 
@@ -98,24 +101,25 @@ if __name__ == '__main__':
         for method in methods:
             gen_cfgs = os.listdir(os.path.join(test_path, method))
             for gen_cfg in gen_cfgs:
+                # db = pd.read_csv(os.path.join('database/SAO5.6_20_30_1024x1024_12x12', gen_cfg, f'{method}.csv'))
                 db = pd.read_csv(os.path.join(database_path, gen_cfg, f'{method}.csv'))
                 test = pd.read_csv(os.path.join(test_path, method, gen_cfg, 'default', 'labels.csv'))
-                default_acc = check_pm_accuracy(db, test)
+                default_acc = check_pm_accuracy(method, db, test)
                 
                 pos_accs, mv_accs, fs_accs = [], [], []
-                for pns in [0.5, 1, 1.5, 2]:
+                for pns in [0.2, 0.4, 0.6, 0.8, 1, 1.5, 2]:
                     test = pd.read_csv(os.path.join(test_path, method, gen_cfg, f'pos{pns}', 'labels.csv'))
-                    acc = check_pm_accuracy(db, test)
+                    acc = check_pm_accuracy(method, db, test)
                     pos_accs.append(acc)
                 
                 for mns in [0.1, 0.2]:
                     test = pd.read_csv(os.path.join(test_path, method, gen_cfg, f'mv{mns}', 'labels.csv'))
-                    acc = check_pm_accuracy(db, test)
+                    acc = check_pm_accuracy(method, db, test)
                     mv_accs.append(acc)
 
                 for nfs in [1, 2, 3, 4, 5]:
                     test = pd.read_csv(os.path.join(test_path, method, gen_cfg, f'fs{nfs}', 'labels.csv'))
-                    acc = check_pm_accuracy(db, test)
+                    acc = check_pm_accuracy(method, db, test)
                     fs_accs.append(acc)
             
                 print(gen_cfg, default_acc, pos_accs, mv_accs, fs_accs)
