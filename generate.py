@@ -29,7 +29,7 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False):
     Args:
         gen_params: the parameters for the test sample generation
                 'pm1': grid algorithm Rb Rp grid_len
-                'pm2': radial and cyclic algorithm Rb Rr Rc num_ring num_sector
+                'pm2': radial and cyclic algorithm Rb Rr Rc N
         use_preprocess: whether to avoid the error resulted from get_star_centroids function in preprocess stage
     '''
     
@@ -42,12 +42,12 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False):
 
             path = f'{database_path}/{int(use_preprocess)}_{rb}_{rp}_{grid_len}'
         elif method == 'pm2':
-            # parse parameters: buffer radius, radial radius, cyclic radius, number of rings and sectors
-            rb, rr, rc, num_ring, num_sector = gen_params[method]
+            # parse parameters: buffer radius, radial radius, cyclic radius, number of rings
+            rb, rr, rc, N = gen_params[method]
             # radius in pixels
             Rb, Rr, Rc = rb/FOV*w, rr/FOV*w, rc/FOV*w
 
-            path = f'{database_path}/{int(use_preprocess)}_{rb}_{rr}_{rc}_{num_ring}_{num_sector}'
+            path = f'{database_path}/{int(use_preprocess)}_{rb}_{rr}_{rc}_{N}'
         else:
             print('Invalid method!')
             return
@@ -108,8 +108,12 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False):
                     'id': star_id
                 })
             else:
-                # get the radial and cyclic features
-                ring_counts, _ = np.histogram(distances, bins=num_ring, range=(Rb, Rr))
+                # count the number of stars in each ring
+                r_cnts, _ = np.histogram(distances, bins=N, range=(Rb, Rr))
+                # generate radial pattern 01 sequence
+                r_pattern = np.zeros(N, dtype=int)
+                r_pattern[np.nonzero(r_cnts)] = 1
+
                 # exclude stars out of region
                 stars = stars[(distances >= Rb) & (distances <= Rc)] 
                 # calculate the angles between the star and the center of the image
@@ -120,10 +124,14 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False):
                 angles %= 2*np.pi
                 angles[angles >= np.pi] -= 2*np.pi
                 angles[angles < -np.pi] += 2*np.pi
-                
-                sector_counts, _ = np.histogram(angles, bins=num_sector, range=(-np.pi, np.pi))
+                # count the number of stars in each sector
+                s_cnts, _ = np.histogram(angles, bins=8, range=(-np.pi, np.pi))
+                # generate cyclic pattern 01 sequence
+                c_pattern = np.zeros(8, dtype=int)
+                c_pattern[np.nonzero(s_cnts)] = 1
+
                 database.append({
-                    'pattern': ' '.join(map(str, np.concatenate([ring_counts, sector_counts]))),
+                    'pattern': ' '.join(map(str, np.concatenate([r_pattern, c_pattern]))),
                     'id': star_id
                 })
 
@@ -345,7 +353,6 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                     rb, rp, grid_len = gen_params[method]
                     # radius in pixels
                     Rb, Rp = rb/FOV*w, rp/FOV*w
-                    # print(Rb, Rp, ds)
                     # exclude stars outside the region
                     ss, ags = ss[(ds >= Rb) & (ds <= Rp)], ags[(ds >= Rb) & (ds <= Rp)]
                     if len(ss) < 2:
@@ -367,26 +374,37 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                         'id': star_id
                     })
                 elif method == 'pm2':
-                    # parse the parameters: buffer radius, radial radius, cyclic radius, number of rings and sectors
-                    rb, rr, rc, num_ring, num_sector = gen_params[method]
+                    # parse the parameters: buffer radius, radial radius, cyclic radius, number of rings
+                    rb, rr, rc, N = gen_params[method]
                     # radius in pixels
                     Rb, Rr, Rc = rb/FOV*w, rr/FOV*w, rc/FOV*w
-                    # get the radial and cyclic features
-                    ring_counts, _ = np.histogram(ds, bins=num_ring, range=(Rb, Rr))
+
+                    # count the number of stars in each ring
+                    r_cnts, _ = np.histogram(ds, bins=N, range=(Rb, Rr))
+                    # generate radial pattern 01 sequence
+                    r_pattern = np.zeros(N, dtype=int)
+                    r_pattern[np.nonzero(r_cnts)] = 1
+
                     # exclude stars outside the region
                     ags = ags[(ds >= Rb) & (ds <= Rc)]
                     # rotate the stars until the nearest star lies on the horizontal axis
+                    if len(ags) < 2:
+                        continue
                     ags = ags-ags[0]
                     # make sure angles are in the range of [-pi, pi]
                     ags %= 2*np.pi
                     ags[ags > np.pi] -= 2*np.pi
                     ags[ags < -np.pi] += 2*np.pi
-                    sector_counts, _ = np.histogram(ags, bins=num_sector, range=(-np.pi, np.pi))
+                    s_cnts, _ = np.histogram(ags, bins=8, range=(-np.pi, np.pi))
+                    # generate cyclic pattern 01 sequence
+                    c_pattern = np.zeros(8, dtype=int)
+                    c_pattern[np.nonzero(s_cnts)] = 1
+
                     patterns[method].append({
                         'img_id': img_id,
-                        'pattern': ' '.join(map(str, np.concatenate([ring_counts, sector_counts]))),
+                        'pattern': ' '.join(map(str, np.concatenate([r_pattern, c_pattern]))),
                         'id': star_id
-                    })
+                    })                    
                 else:
                     print('Invalid method')
     
@@ -658,7 +676,6 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
 
 if __name__ == '__main__':
-    # generate_pm_database({'pm1': [0, 6, 60]})
-    # aggregate_nn_dataset({'train': 30, 'validate': 10, 'test': 2}, use_preprocess=False, region_r=6, num_neighbor=3, pos_noise_stds=[0.5, 1, 1.5, 2, 2.5, 3],  mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
-    # generate_pm_database(2, region_r=6, num_ring=200, num_sector=8)
-    aggregate_test_samples(2000, {'pm1': [0, 6, 60]}, pos_noise_stds=[0.2, 0.4, 0.6, 0.8, 1, 1.5, 2] ,mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
+    generate_pm_database({'pm2': [0, 7, 10, 200]})
+    # aggregate_nn_dataset({'train': 30, 'validate': 10, 'test': 2}, use_preprocess=False, region_r=6, num_neighbor=3, pos_noise_stds=[0.2, 0.4, 0.6, 0.8, 1, 1.5, 2],  mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
+    # aggregate_test_samples(1000, {'pm2': [0, 7, 6, 200]},) #pos_noise_stds=[0.2, 0.4, 0.6, 0.8, 1, 1.5, 2] ,mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
