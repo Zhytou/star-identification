@@ -13,12 +13,17 @@ from preprocess import get_star_centroids
 # star catalogue
 catalogue = pd.read_csv(catalogue_path, usecols= ["Star ID", "RA", "DE", "Magnitude"])
 
+# guide star catalogue for pattern match database generation
+gcatalogue_path = 'catalogue/SAO5.6_15_22.csv'
+gcatalogue = pd.read_csv(gcatalogue_path, usecols= ["Star ID", "RA", "DE", "Magnitude"])
+
 # number of reference star
 num_class = len(catalogue)
 
 # define the path to store the database and pattern as well as dataset
-sim_cfg = f"{os.path.basename(catalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOV}x{FOV}"
+sim_cfg = f"{os.path.basename(gcatalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOV}x{FOV}"
 database_path = f'database/{sim_cfg}'
+sim_cfg = f"{os.path.basename(catalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOV}x{FOV}"
 test_path = f'test/{sim_cfg}'
 dataset_path = f'dataset/{sim_cfg}'
 
@@ -56,7 +61,7 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False):
             os.makedirs(path)
         
         database = []
-        for ra, de in zip(catalogue['RA'], catalogue['DE']):
+        for ra, de in zip(gcatalogue['RA'], gcatalogue['DE']):
             # star_info is a list of [star_ids[i], (row, col), star_magnitudes[i]]
             img, star_info = create_star_image(ra, de, 0)
             # generate star_table: (row, col) -> star_id
@@ -676,6 +681,6 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
 
 if __name__ == '__main__':
-    generate_pm_database({'pm2': [0, 7, 10, 200]})
+    # generate_pm_database({'pm1': [0, 7, 60]})
     # aggregate_nn_dataset({'train': 30, 'validate': 10, 'test': 2}, use_preprocess=False, region_r=6, num_neighbor=3, pos_noise_stds=[0.2, 0.4, 0.6, 0.8, 1, 1.5, 2],  mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
-    # aggregate_test_samples(1000, {'pm2': [0, 7, 6, 200]},) #pos_noise_stds=[0.2, 0.4, 0.6, 0.8, 1, 1.5, 2] ,mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
+    aggregate_test_samples(1000, {'pm1': [0, 7, 60]}, pos_noise_stds=[0.2, 0.4, 0.6, 0.8, 1, 1.5, 2] ,mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
