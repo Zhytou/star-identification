@@ -4,8 +4,6 @@ import pandas as pd
 import matplotlib.pyplot as plt, matplotlib.axes._axes as axes
 from math import radians, sqrt, tan, sin, cos, pi
 
-from simulate import f, FOV
-
 
 def draw_star_distribution(catalogue: pd.DataFrame, ax: axes.Axes, title: str):
     '''
@@ -48,7 +46,7 @@ def get_rotation_matrix(ra: float, de: float, roll: float) -> np.ndarray:
     return M
 
 
-def draw_probability_versus_star_num_within_FOV(catalogue: pd.DataFrame, ax: axes.Axes, title: str, num_vec: int=100000):
+def draw_probability_versus_star_num_within_FOV(catalogue: pd.DataFrame, ax: axes.Axes, title: str, FOV: int=20, f: float=58e-3, num_vec: int=100000):
     '''
         Draw the probability distribution of the number of stars within FOV.
     Args:
@@ -114,7 +112,7 @@ def draw_probability_versus_star_num_within_FOV(catalogue: pd.DataFrame, ax: axe
     ax.set_ylabel('Probability%')
 
 
-def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.0, agd_limit: float=0.5, num_sector: int=4, num_vec: int=100) -> pd.DataFrame:
+def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.0, agd_limit: float=0.5, num_sector: int=4, FOV: int=20, f: float=58e-3, num_vec: int=100) -> pd.DataFrame:
     '''
         Filter navigation stars.
         Referred [1](http://www.opticsjournal.net/Articles/Abstract?aid=OJbf48ddeef697ba09)
@@ -221,7 +219,9 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.
 
 if __name__ == '__main__':
     file = 'catalogue/SAO6.0.csv'
-    num_limit = 30
+    FOV = 15
+    f = 58e-3
+    num_limit = 22
     mv_limit = 5.6
     filtered_file = f'catalogue/SAO{mv_limit}_{FOV}_{num_limit}.csv'
 
@@ -229,15 +229,15 @@ if __name__ == '__main__':
     if os.path.exists(filtered_file):
         filtered_df = pd.read_csv(filtered_file)
     else:
-        filtered_df = filter_catalogue(df, num_limit, mv_limit).reset_index(drop=True)
+        filtered_df = filter_catalogue(df, num_limit, mv_limit, FOV=FOV, f=f).reset_index(drop=True)
         filtered_df.to_csv(filtered_file)
 
     fig1, axs1 = plt.subplots(2)
-    draw_star_distribution(df, axs1[0], "Original")
+    # draw_star_distribution(df, axs1[0], "Original")
     draw_star_distribution(filtered_df, axs1[1], "Filtered")
 
     fig2, axs2 = plt.subplots(2)
-    draw_probability_versus_star_num_within_FOV(df, axs2[0], "Original")
-    draw_probability_versus_star_num_within_FOV(filtered_df, axs2[1], "Filtered")
+    # draw_probability_versus_star_num_within_FOV(df, axs2[0], "Original", FOV=FOV, f=f)
+    draw_probability_versus_star_num_within_FOV(filtered_df, axs2[1], "Filtered", FOV=FOV, f=f, num_vec=1000)
 
     plt.show()
