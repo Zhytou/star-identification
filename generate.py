@@ -7,23 +7,19 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from scipy.spatial.distance import cdist
 
-from simulate import w, h, FOV, catalogue_path, create_star_image
+from simulate import w, h, FOV, create_star_image
 from preprocess import get_star_centroids
-
-# star catalogue
-catalogue = pd.read_csv(catalogue_path, usecols= ["Star ID", "RA", "DE", "Magnitude"])
 
 # guide star catalogue for pattern match database generation
 gcatalogue_path = 'catalogue/SAO5.6_15_22.csv'
 gcatalogue = pd.read_csv(gcatalogue_path, usecols= ["Star ID", "RA", "DE", "Magnitude"])
 
 # number of reference star
-num_class = len(catalogue)
+num_class = len(gcatalogue)
 
 # define the path to store the database and pattern as well as dataset
 sim_cfg = f"{os.path.basename(gcatalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOV}x{FOV}"
 database_path = f'database/{sim_cfg}'
-sim_cfg = f"{os.path.basename(catalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOV}x{FOV}"
 test_path = f'test/{sim_cfg}'
 dataset_path = f'dataset/{sim_cfg}'
 
@@ -171,8 +167,8 @@ def generate_nn_dataset(mode: str, num_vec: int, idxs: list, use_preprocess: boo
         ras = np.random.uniform(-np.pi, np.pi, num_vec)
         des = np.arcsin(np.random.uniform(-1, 1, num_vec))
     elif mode == 'supplementary':
-        ras = np.clip(catalogue.loc[idxs, 'RA']+np.radians(np.random.normal(0, 1, len(idxs))), -np.pi, np.pi)
-        des = np.clip(catalogue.loc[idxs, 'DE']+np.radians(np.random.normal(0, 1, len(idxs))), -np.pi/2, np.pi/2)
+        ras = np.clip(gcatalogue.loc[idxs, 'RA']+np.radians(np.random.normal(0, 1, len(idxs))), -np.pi, np.pi)
+        des = np.clip(gcatalogue.loc[idxs, 'DE']+np.radians(np.random.normal(0, 1, len(idxs))), -np.pi/2, np.pi/2)
     else:
         print('Invalid mode!')
         return
@@ -200,14 +196,14 @@ def generate_nn_dataset(mode: str, num_vec: int, idxs: list, use_preprocess: boo
         angles = np.arctan2(stars[:, 1] - stars[:, 1][:, None], stars[:, 0] - stars[:, 0][:, None])
         # choose a guide star as the reference star
         for star, ds, ags in zip(stars, distances, angles):
-            if star[0] < R or star[0] > h-R or star[1] < R or star[1] > w-R:
+            if star[0] < R/2 or star[0] > h-R/2 or star[1] < R/2 or star[1] > w-R/2:
                 continue
-            # check if false star
+            # check if false star or star not in guide catalogue
             star_id = star_table.get(tuple(star), -1)
-            if star_id == -1:
+            if star_id == -1 or star_id not in gcatalogue['Star ID'].values:
                 continue
             # get catalogue index of the guide star
-            cata_idx = catalogue[catalogue['Star ID'] == star_id].index.to_list()[0]
+            cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
             # generate label information for training and testing
             label = {
                 'ra': ra,
@@ -261,7 +257,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
         gen_params: the parameters for the test sample generation
                 'pm1': grid algorithm Rb Rp grid_len
                 'pm2': radial and cyclic algorithm Rb Rr Rc num_ring num_sector
-                'nn': proposed 1dcnn algorithm Rb Rr Rc num_ring num_sector num_neighbor
+                'nn': proposed 1dcnn algorithm R num_ring num_sector num_neighbor
         use_preprocess: whether to avoid the error resulted from get_star_centroids function in preprocess stage
         R: the radius of the region in pixels
         pos_noise_std: the standard deviation of the positional noise
@@ -302,9 +298,9 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
         angles = np.arctan2(stars[:, 1] - stars[:, 1][:, None], stars[:, 0] - stars[:, 0][:, None])
         # choose a guide star as the reference star
         for star, ds, ags in zip(stars, distances, angles):
-            # check if false star
+            # check if false star or not in guide star catalogue
             star_id = star_table.get(tuple(star), -1)
-            if star_id == -1:
+            if star_id == -1 or star_id not in gcatalogue['Star ID'].values:
                 continue
 
             # angles is sorted by distance with accending order
@@ -322,21 +318,23 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
             for method in methods:
                 if method == 'nn':
                     # parse the parameters: 
-                    rb, rr, rc, num_ring, num_sector, num_neighbor = gen_params[method]
+                    r, num_ring, num_sector, num_neighbor = gen_params[method]
                     # radius in pixels
-                    Rb, Rr, Rc = rb/FOV*w, rr/FOV*w, rc/FOV*w
+                    R = r/FOV*w
+                    if star[0] < R/2 or star[0] > h-R/2 or star[1] < R/2 or star[1] > w-R/2:
+                        continue
                     # get catalogue index of the guide star
-                    cata_idx = catalogue[catalogue['Star ID'] == star_id].index.to_list()[0]
+                    cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
                     pattern = {
                         'star_id': star_id,
                         'cata_idx': cata_idx,
                         'img_id': img_id
                     }
-                    ring_counts, _ = np.histogram(ds, bins=num_ring, range=(Rb, Rr))
+                    ring_counts, _ = np.histogram(ds, bins=num_ring, range=(0, R))
                     for i, rc in enumerate(ring_counts):
                         pattern[f'ring{i}'] = rc
 
-                    ags = ags[(ds >= Rb) & (ds <= Rc)]
+                    ags = ags[ds <= R]
                     # uses several neighbor stars as the starting angle to obtain the cyclic features
                     for i, ag in enumerate(ags[:num_neighbor]):
                         rotated_ags = ags - ag
@@ -488,7 +486,6 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
 
         return tasks
 
-
     def parse_params(s: str):
         '''
             Parse special test parameters.
@@ -541,7 +538,7 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
             df.to_csv(os.path.join(dataset_path, gen_cfg, key, 'labels.csv'), index=False)
             # count the number of samples for each class
             df = df['cata_idx'].value_counts()
-            pct = len(df[df > types[key]])/len(catalogue)
+            pct = len(df[df > types[key]])/len(gcatalogue)
             if len(df[df < types[key]]) == 0:
                 avg_num = 0
             else:
@@ -578,7 +575,7 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
         # count the number of samples for each class
         df = df['cata_idx'].value_counts()
         # add those even unexisting class(catalogue idx)
-        df = df.reindex(catalogue.index, fill_value=0)
+        df = df.reindex(gcatalogue.index, fill_value=0)
         # count class whose samples less than limit
         df = df[df < types[key]]
         # repeat each the index of df (which is catalogue idx needed)
@@ -591,8 +588,8 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
         if len(idxs) > 1000:
             len_td = 1000
             num_round = len(idxs)//len_td
-            if num_round > num_thread//4:
-                num_round = num_thread//4
+            if num_round > num_thread//2:
+                num_round = num_thread//2
                 len_td = len(idxs)//num_round
         else:
             len_td = len(idxs)
@@ -614,9 +611,9 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
         num_vec: number of vectors used to generate test samples
         region_r: the radius of the region in degrees
         gen_params: the parameters for the test sample generation
-                'pm1': grid algorithm 60 
-                'pm2': radial and cyclic algorithm 200 8
-                'nn': proposed 1dcnn algorithm 200 30 3
+                'pm1': grid algorithm Rb Rp grid_len
+                'pm2': radial and cyclic algorithm Rb Rr Rc num_ring num_sector
+                'nn': proposed 1dcnn algorithm R num_ring num_sector num_neighbor
         pos_noise_stds: list of positional noise
         pos_noise_stds: list of positional noise
         mv_noise_stds: list of magnitude noise
@@ -681,6 +678,6 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
 
 if __name__ == '__main__':
-    # generate_pm_database({'pm1': [0, 7, 60]})
-    # aggregate_nn_dataset({'train': 30, 'validate': 10, 'test': 2}, use_preprocess=False, region_r=6, num_neighbor=3, pos_noise_stds=[0.2, 0.4, 0.6, 0.8, 1, 1.5, 2],  mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
-    aggregate_test_samples(1000, {'pm1': [0, 7, 60]}, pos_noise_stds=[0.2, 0.4, 0.6, 0.8, 1, 1.5, 2] ,mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
+    # generate_pm_database({'pm2': [0, 6, 10, 60]})
+    # aggregate_nn_dataset({'train': 20, 'validate': 1, 'test': 2}, use_preprocess=False, region_r=6, num_neighbor=3)
+    aggregate_test_samples(400, {'nn': [6, 200, 30, 3]}, pos_noise_stds=[0.2, 0.4, 0.6, 0.8, 1, 1.5, 2] ,mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
