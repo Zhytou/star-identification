@@ -7,18 +7,21 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from scipy.spatial.distance import cdist
 
-from simulate import w, h, FOV, create_star_image
+from simulate import w, h, FOV, sim_cfg, create_star_image
 from preprocess import get_star_centroids
 
-# guide star catalogue for pattern match database generation
-gcatalogue_path = 'catalogue/SAO5.6_15_22.csv'
-gcatalogue = pd.read_csv(gcatalogue_path, usecols= ["Star ID", "RA", "DE", "Magnitude"])
+
+# guide star catalogue for pattern match database and nn dataset generation
+gcata_path = 'catalogue/SAO5.6_15_22.csv'
+# use for generation config
+gcata_name = os.path.basename(gcata_path).split('.')[0]
+# guide star catalogue
+gcatalogue = pd.read_csv(gcata_path, usecols= ["Star ID", "RA", "DE", "Magnitude"])
 
 # number of reference star
 num_class = len(gcatalogue)
 
 # define the path to store the database and pattern as well as dataset
-sim_cfg = f"{os.path.basename(gcatalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOV}x{FOV}"
 database_path = f'database/{sim_cfg}'
 test_path = f'test/{sim_cfg}'
 dataset_path = f'dataset/{sim_cfg}'
@@ -41,14 +44,14 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False):
             # radius in pixels
             Rb, Rp = rb/FOV*w, rp/FOV*w
 
-            path = f'{database_path}/{int(use_preprocess)}_{rb}_{rp}_{grid_len}'
+            path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rp}_{grid_len}'
         elif method == 'pm2':
             # parse parameters: buffer radius, radial radius, cyclic radius, number of rings
             rb, rr, rc, N = gen_params[method]
             # radius in pixels
             Rb, Rr, Rc = rb/FOV*w, rr/FOV*w, rc/FOV*w
 
-            path = f'{database_path}/{int(use_preprocess)}_{rb}_{rr}_{rc}_{N}'
+            path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rr}_{rc}_{N}'
         else:
             print('Invalid method!')
             return
@@ -140,7 +143,7 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False):
         df.to_csv(f'{path}/{method}.csv', index=False)
 
 
-def generate_nn_dataset(mode: str, num_vec: int, idxs: list, use_preprocess: bool = False, R: int = 600, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0):
+def generate_nn_dataset(mode: str, num_vec: int, idxs: list, use_preprocess: bool, R: int, num_ring: int, num_sector: int, num_neighbor: int, pos_noise_std: float, mv_noise_std: float, num_false_star: int):
     '''
         Generate radial and cyclic features dataset for NN model using the given star catalogue.
     Args:
@@ -290,6 +293,15 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
         if len(stars) < 3:
             continue
         
+        # number of candidate primary stars in the region
+        in_rect  = np.logical_and(
+            np.logical_and(stars[:, 0] >= R, stars[:, 0] <= h-R),
+            np.logical_and(stars[:, 1] >= R, stars[:, 1] <= w-R)
+        )
+        # too few stars to identify satellite attitude
+        if np.sum(in_rect) < 3:
+            continue
+
         # generate a unique img id for later accuracy calculation
         img_id = uuid.uuid1()
 
@@ -417,7 +429,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
     return patterns
 
 
-def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5}, use_preprocess: bool = False, region_r: float = 6, num_ring: int = 200, num_sector: int = 30, num_neighbor: int = 4, pos_noise_stds: list = [], mv_noise_stds: list = [], num_false_stars: list = [], num_thread: int = 20):
+def aggregate_nn_dataset(types: dict, use_preprocess: bool, region_r: float, num_ring: int, num_sector: int, num_neighbor: int, pos_noise_stds: list = [], mv_noise_stds: list = [], num_false_stars: list = [], num_thread: int = 20):
     '''
         Aggregate the dataset. Firstly, the number of samples for each class is counted. Then, roughly generate classes with too few samples using generate_nn_dataset function's 'random' mode. Lastly, the rest are finely generated to ensure that the number of samples in each class in the entire dataset reaches the standard.
     Args:
@@ -509,7 +521,7 @@ def aggregate_nn_dataset(types: dict = {'train': 20, 'validate': 10, 'test': 5},
         return pns, mns, nfs
 
     # generate config
-    gen_cfg = f'{int(use_preprocess)}_{region_r}_{num_ring}_{num_sector}_{num_neighbor}'
+    gen_cfg = f'{gcata_name}_{int(use_preprocess)}_{region_r}_{num_ring}_{num_sector}_{num_neighbor}'
     R = int(region_r/FOV*w)
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thread)
@@ -655,7 +667,7 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
         for task in tasks[key]:
             df_dict = task.result()
             for method in df_dict.keys():
-                gen_cfg = f'{int(use_preprocess)}_'+'_'.join(map(str, gen_params[method]))
+                gen_cfg = f'{gcata_name}_{int(use_preprocess)}_'+'_'.join(map(str, gen_params[method]))
                 path = os.path.join(test_path, method, gen_cfg, key)
                 if not os.path.exists(path):
                     os.makedirs(path)
@@ -664,7 +676,7 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
     # aggregate all the test patterns
     for method in gen_params:
-        gen_cfg = f'{int(use_preprocess)}_'+'_'.join(map(str, gen_params[method]))
+        gen_cfg = f'{gcata_name}_{int(use_preprocess)}_'+'_'.join(map(str, gen_params[method]))
         path = os.path.join(test_path, method, gen_cfg)
         # sub test dir names
         test_names = os.listdir(path)
@@ -679,5 +691,5 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
 if __name__ == '__main__':
     # generate_pm_database({'pm2': [0, 6, 10, 60]})
-    # aggregate_nn_dataset({'train': 20, 'validate': 1, 'test': 2}, use_preprocess=False, region_r=6, num_neighbor=3)
-    aggregate_test_samples(400, {'nn': [6, 200, 30, 3]}, pos_noise_stds=[0.2, 0.4, 0.6, 0.8, 1, 1.5, 2] ,mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
+    aggregate_nn_dataset({'train': 10, 'validate': 1, 'test': 2}, use_preprocess=False, region_r=6, num_ring=100, num_sector=18, num_neighbor=3)
+    # aggregate_test_samples(400, {'nn': [6, 200, 30, 3]}, pos_noise_stds=[0.2, 0.4, 0.6, 0.8, 1, 1.5, 2] ,mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
