@@ -14,7 +14,7 @@ from preprocess import get_star_centroids
 # guide star catalogue for pattern match database and nn dataset generation
 gcata_path = 'catalogue/SAO5.6_15_22.csv'
 # use for generation config
-gcata_name = os.path.basename(gcata_path).split('.')[0]
+gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
 # guide star catalogue
 gcatalogue = pd.read_csv(gcata_path, usecols= ["Star ID", "RA", "DE", "Magnitude"])
 
@@ -27,7 +27,7 @@ test_path = f'test/{sim_cfg}'
 dataset_path = f'dataset/{sim_cfg}'
 
 
-def generate_pm_database(gen_params: dict, use_preprocess: bool = False):
+def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thread: int = 10):
     '''
         Generate the pattern database for the given star catalogue.
     Args:
@@ -37,30 +37,17 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False):
         use_preprocess: whether to avoid the error resulted from get_star_centroids function in preprocess stage
     '''
     
-    for method in gen_params.keys():
-        if method == 'pm1':
-            # parse parameters: buffer radius, pattern radius and grid length
-            rb, rp, grid_len = gen_params[method]
-            # radius in pixels
-            Rb, Rp = rb/FOV*w, rp/FOV*w
+    def generate_database(method: str, idxs: pd.Index):
+        '''
+            Generate the pattern database for the given star catalogue.
+        Args:
+            idxs: the indexes of star catalogue used to generate database
+        Return:
+            database: the pattern database
+        '''
 
-            path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rp}_{grid_len}'
-        elif method == 'pm2':
-            # parse parameters: buffer radius, radial radius, cyclic radius, number of rings
-            rb, rr, rc, N = gen_params[method]
-            # radius in pixels
-            Rb, Rr, Rc = rb/FOV*w, rr/FOV*w, rc/FOV*w
-
-            path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rr}_{rc}_{N}'
-        else:
-            print('Invalid method!')
-            return
-        
-        if not os.path.exists(path):
-            os.makedirs(path)
-        
         database = []
-        for ra, de in zip(gcatalogue['RA'], gcatalogue['DE']):
+        for ra, de in zip(gcatalogue.loc[idxs, 'RA'], gcatalogue.loc[idxs, 'DE']):
             # star_info is a list of [star_ids[i], (row, col), star_magnitudes[i]]
             img, star_info = create_star_image(ra, de, 0)
             # generate star_table: (row, col) -> star_id
@@ -133,13 +120,68 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False):
                 # generate cyclic pattern 01 sequence
                 c_pattern = np.zeros(8, dtype=int)
                 c_pattern[np.nonzero(s_cnts)] = 1
-
                 database.append({
                     'pattern': ' '.join(map(str, np.concatenate([r_pattern, c_pattern]))),
                     'id': star_id
                 })
 
-        df = pd.DataFrame(database)
+        # store the rest of the results
+        return pd.DataFrame(database)
+
+    # use thread pool to generate the database
+    pool = ThreadPoolExecutor(max_workers=num_thread)
+    tasks = defaultdict(list)
+
+    # iterate the methods
+    for method in gen_params.keys():
+        if method == 'pm1':
+            # parse parameters: buffer radius, pattern radius and grid length
+            rb, rp, grid_len = gen_params[method]
+            # radius in pixels
+            Rb, Rp = rb/FOV*w, rp/FOV*w
+
+            path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rp}_{grid_len}'
+        elif method == 'pm2':
+            # parse parameters: buffer radius, radial radius, cyclic radius, number of rings
+            rb, rr, rc, N = gen_params[method]
+            # radius in pixels
+            Rb, Rr, Rc = rb/FOV*w, rr/FOV*w, rc/FOV*w
+
+            path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rr}_{rc}_{N}'
+        else:
+            print('Invalid method!')
+            return
+        
+        # number of round used for this method
+        num_round = num_thread//len(gen_params)
+        len_td = len(gcatalogue)//num_round
+        # add task
+        for i in range(num_round):
+            beg, end = i*len_td, min((i+1)*len_td, len(gcatalogue))
+            if beg >= end:
+                continue
+            task = pool.submit(generate_database, method, gcatalogue.index[beg:end])
+            tasks[method].append(task)
+    
+    # wait all tasks to be done and merge all the results
+    for method in tasks.keys():
+        # make directory to store the database
+        if method == 'pm1':
+            path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rp}_{grid_len}'
+        else:
+            path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rr}_{rc}_{N}'
+        if not os.path.exists(path):
+            os.makedirs(path)
+
+        # temporary results
+        dfs = []
+        for task in tasks[method]:
+            df = task.result()
+            if len(df) > 0:
+                dfs.append(df)
+
+        # merge the results
+        df = pd.concat(dfs, ignore_index=True)
         df.to_csv(f'{path}/{method}.csv', index=False)
 
 
@@ -690,6 +732,6 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
 
 if __name__ == '__main__':
-    # generate_pm_database({'pm2': [0, 6, 10, 60]})
-    aggregate_nn_dataset({'train': 10, 'validate': 1, 'test': 2}, use_preprocess=False, region_r=6, num_ring=100, num_sector=18, num_neighbor=3)
-    # aggregate_test_samples(400, {'nn': [6, 200, 30, 3]}, pos_noise_stds=[0.2, 0.4, 0.6, 0.8, 1, 1.5, 2] ,mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
+    generate_pm_database({'pm2': [0, 6, 10, 100]})
+    # aggregate_nn_dataset({'train': 10, 'validate': 1, 'test': 2}, use_preprocess=False, region_r=6, num_ring=100, num_sector=18, num_neighbor=3)
+    # aggregate_test_samples(400, {'nn': [6, 100, 18, 3], 'pm1': [0, 6, 60]}, pos_noise_stds=[0.2, 0.4, 0.6, 0.8, 1, 1.5, 2] ,mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
