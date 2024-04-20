@@ -335,10 +335,11 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
         if len(stars) < 3:
             continue
         
+        R = gen_params['nn'][0]/FOV*w
         # number of candidate primary stars in the region
         in_rect  = np.logical_and(
-            np.logical_and(stars[:, 0] >= R, stars[:, 0] <= h-R),
-            np.logical_and(stars[:, 1] >= R, stars[:, 1] <= w-R)
+            np.logical_and(stars[:, 0] >= R/2, stars[:, 0] <= h-R/2),
+            np.logical_and(stars[:, 1] >= R/2, stars[:, 1] <= w-R/2)
         )
         # too few stars to identify satellite attitude
         if np.sum(in_rect) < 3:
@@ -388,10 +389,10 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                     for i, rc in enumerate(ring_counts):
                         pattern[f'ring{i}'] = rc
 
-                    ags = ags[ds <= R]
+                    nn_ags = ags[ds <= R]
                     # uses several neighbor stars as the starting angle to obtain the cyclic features
-                    for i, ag in enumerate(ags[:num_neighbor]):
-                        rotated_ags = ags - ag
+                    for i, ag in enumerate(nn_ags[:num_neighbor]):
+                        rotated_ags = nn_ags - ag
                         rotated_ags %= 2*np.pi
                         rotated_ags[rotated_ags > np.pi] -= 2*np.pi
                         rotated_ags[rotated_ags < -np.pi] += 2*np.pi
@@ -411,16 +412,16 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                     # radius in pixels
                     Rb, Rp = rb/FOV*w, rp/FOV*w
                     # exclude stars outside the region
-                    ss, ags = ss[(ds >= Rb) & (ds <= Rp)], ags[(ds >= Rb) & (ds <= Rp)]
-                    if len(ss) < 2:
+                    pm1_ss, pm1_ags = ss[(ds >= Rb) & (ds <= Rp)], ags[(ds >= Rb) & (ds <= Rp)]
+                    if len(pm1_ss) < 2:
                         continue
-                    ag = ags[0]
+                    ag = pm1_ags[0]
                     M = np.array([[np.cos(ag), -np.sin(ag)], [np.sin(ag), np.cos(ag)]])
-                    ss = np.dot(ss, M)
-                    assert round(ss[0][1])==0
+                    pm1_ss = np.dot(pm1_ss, M)
+                    assert round(pm1_ss[0][1])==0
                     # calculate the pattern
                     grid = np.zeros((grid_len, grid_len), dtype=int)
-                    for s in ss:
+                    for s in pm1_ss:
                         row = int((s[0]/Rp+1)/2*grid_len)
                         col = int((s[1]/Rp+1)/2*grid_len)
                         grid[row][col] = 1
@@ -443,16 +444,16 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                     r_pattern[np.nonzero(r_cnts)] = 1
 
                     # exclude stars outside the region
-                    ags = ags[(ds >= Rb) & (ds <= Rc)]
+                    pm2_ags = ags[(ds >= Rb) & (ds <= Rc)]
                     # rotate the stars until the nearest star lies on the horizontal axis
-                    if len(ags) < 2:
+                    if len(pm2_ags) < 2:
                         continue
                     ags = ags-ags[0]
                     # make sure angles are in the range of [-pi, pi]
-                    ags %= 2*np.pi
-                    ags[ags > np.pi] -= 2*np.pi
-                    ags[ags < -np.pi] += 2*np.pi
-                    s_cnts, _ = np.histogram(ags, bins=8, range=(-np.pi, np.pi))
+                    pm2_ags %= 2*np.pi
+                    pm2_ags[pm2_ags > np.pi] -= 2*np.pi
+                    pm2_ags[pm2_ags < -np.pi] += 2*np.pi
+                    s_cnts, _ = np.histogram(pm2_ags, bins=8, range=(-np.pi, np.pi))
                     # generate cyclic pattern 01 sequence
                     c_pattern = np.zeros(8, dtype=int)
                     c_pattern[np.nonzero(s_cnts)] = 1
@@ -732,6 +733,6 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
 
 if __name__ == '__main__':
-    generate_pm_database({'pm2': [0, 6, 10, 100]})
-    # aggregate_nn_dataset({'train': 10, 'validate': 1, 'test': 2}, use_preprocess=False, region_r=6, num_ring=100, num_sector=18, num_neighbor=3)
-    # aggregate_test_samples(400, {'nn': [6, 100, 18, 3], 'pm1': [0, 6, 60]}, pos_noise_stds=[0.2, 0.4, 0.6, 0.8, 1, 1.5, 2] ,mv_noise_stds=[0.1, 0.2], num_false_stars=[1, 2, 3, 4, 5])
+    # generate_pm_database({'pm1': [0, 6, 60], 'pm2': [0, 6, 10, 100]})
+    aggregate_nn_dataset({'train': 10, 'validate': 1, 'test': 2}, use_preprocess=False, region_r=6, num_ring=100, num_sector=18, num_neighbor=3)
+    # aggregate_test_samples(400, {'nn': [6, 100, 18, 3], 'pm1': [0, 6, 60]})
