@@ -40,18 +40,17 @@ class StarImageDataset(Dataset):
 class StarPointDataset(Dataset):
     '''Star point dataset'''
 
-    def __init__(self, root_dir: str):
+    def __init__(self, root_dir: str, gen_cfg: str):
         '''
         Args:
             root_dir: name of the dataset directory
+            gen_cfg: name of the generator configuration
         '''
         label_file_path = os.path.join(root_dir, 'labels.csv')
         if not os.path.exists(label_file_path):
             raise FileNotFoundError(f'{label_file_path}does not exist')
         
-        dirs = root_dir.split('/')
-        assert len(dirs) <= 5 and dirs[0] == 'data'
-        _, _, self.num_ring, self.num_sector, self.num_neighbor_limit = list(map(int, dirs[2].split('_')))
+        self.num_ring, self.num_sector, self.num_neighbor_limit = list(map(int, gen_cfg.split('_')[-3:]))
         
         self.label_df = pd.read_csv(label_file_path)
 
