@@ -1,3 +1,4 @@
+import os
 from math import radians, degrees, sin, cos, tan, sqrt, exp
 import numpy as np
 import pandas as pd
@@ -7,24 +8,30 @@ import pandas as pd
 ROI = 2
 
 # star sensor pixel num
-w = 2048
-h = 2048
+w = 1024
+h = 1024
 
 # star sensor foucs in metres
 f = 58e-3
 
 # field of view angle in degrees
-FOV = 20
+FOV = 15
 
 # camera total length and width in metres
 mtot = 2*tan(radians(FOV/2))*f
+
+# camera magnitude sensitivity limitation
+mv_limit = 6.0
 
 # pixel num per length
 xpixel = w/mtot
 ypixel = h/mtot
 
 # star catalogue path
-catalogue_path = f'catalogue/SAO5.6_15_20.csv'
+catalogue_path = f'catalogue/SAO6.0.csv'
+
+# define simulation config
+sim_cfg = f"{os.path.basename(catalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOV}x{FOV}"
 
 
 def create_star_image(ra: float, de: float, roll: float, white_noise_std: float = 10, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0) -> tuple[np.ndarray, list]:
@@ -119,9 +126,10 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
         while len(false_stars) < num:
             x = np.random.randint(ROI, w-ROI)
             y = np.random.randint(ROI, h-ROI)
-            ds = np.linalg.norm(pos-(x, y), axis=1)
-            if ds.min() < min_d:
-                continue
+            if len(pos) > 0:
+                ds = np.linalg.norm(pos-(x, y), axis=1)
+                if ds.min() < min_d:
+                    continue
             img = draw_star(x, y, 5.7, img)
             false_stars.append([-1, (y, x), 5.7])
         return img, false_stars
@@ -163,12 +171,15 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
         stars_within_FOV['X4'] += np.random.normal(0, pos_noise_std, size=len(stars_within_FOV['X4']))
         stars_within_FOV['Y4'] += np.random.normal(0, pos_noise_std, size=len(stars_within_FOV['Y4']))
     
-    # add magnitude noise
+    # exclude stars beyond range
+    stars_within_FOV = stars_within_FOV[stars_within_FOV['X4'].between(ROI, w-ROI) & stars_within_FOV['Y4'].between(ROI, h-ROI)]
+
+    # add magnitude noise if needed
     if mv_noise_std > 0:
         stars_within_FOV['Magnitude'] += np.random.normal(0, mv_noise_std, size=len(stars_within_FOV['Magnitude']))
 
-    # exclude stars beyond range
-    stars_within_FOV = stars_within_FOV[stars_within_FOV['X4'].between(ROI, w-ROI) & stars_within_FOV['Y4'].between(ROI, h-ROI)]
+    # exclude stars too dark to identify
+    stars_within_FOV = stars_within_FOV[stars_within_FOV['Magnitude'] <= mv_limit]
 
     star_positions = list(zip(stars_within_FOV['X4'], stars_within_FOV['Y4']))
     star_magnitudes = list(stars_within_FOV['Magnitude'])
