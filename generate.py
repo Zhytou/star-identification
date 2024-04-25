@@ -212,8 +212,8 @@ def generate_nn_dataset(mode: str, num_vec: int, idxs: list, use_preprocess: boo
         ras = np.random.uniform(-np.pi, np.pi, num_vec)
         des = np.arcsin(np.random.uniform(-1, 1, num_vec))
     elif mode == 'supplementary':
-        ras = np.clip(gcatalogue.loc[idxs, 'RA']+np.radians(np.random.normal(0, 1, len(idxs))), -np.pi, np.pi)
-        des = np.clip(gcatalogue.loc[idxs, 'DE']+np.radians(np.random.normal(0, 1, len(idxs))), -np.pi/2, np.pi/2)
+        ras = np.clip(gcatalogue.loc[idxs, 'RA']+np.radians(np.random.normal(0, 3, len(idxs))), -np.pi, np.pi)
+        des = np.clip(gcatalogue.loc[idxs, 'DE']+np.radians(np.random.normal(0, 3, len(idxs))), -np.pi/2, np.pi/2)
     else:
         print('Invalid mode!')
         return
@@ -230,7 +230,7 @@ def generate_nn_dataset(mode: str, num_vec: int, idxs: list, use_preprocess: boo
             stars = np.array(get_star_centroids(img))
         else:
             stars = np.array(list(star_table.keys()))
-        if len(stars) < num_neighbor+1:
+        if len(stars) < 4:
             continue
 
         # generate a unique img id for later accuracy calculation
@@ -278,7 +278,7 @@ def generate_nn_dataset(mode: str, num_vec: int, idxs: list, use_preprocess: boo
                 rotated_ags %= 2*np.pi
                 rotated_ags[rotated_ags > np.pi] -= 2*np.pi
                 rotated_ags[rotated_ags < -np.pi] += 2*np.pi
-                sector_counts, _ = np.histogram(ags, bins=num_sector, range=(-np.pi, np.pi))
+                sector_counts, _ = np.histogram(rotated_ags, bins=num_sector, range=(-np.pi, np.pi))
                 for j, sc in enumerate(sector_counts):
                     label[f'n{i}_sector{j}'] = sc
             
@@ -332,7 +332,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
             stars = np.array(list(star_table.keys()))
 
         # too few stars for quest algorithm to identify satellite attitude
-        if len(stars) < 3:
+        if len(stars) < 4:
             continue
         
         R = gen_params['nn'][0]/FOV*w
@@ -348,8 +348,8 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
         # generate a unique img id for later accuracy calculation
         img_id = uuid.uuid1()
 
-        # distances = cdist(stars, stars, 'euclidean')
-        distances = np.linalg.norm(stars[:,None,:] - stars[None,:,:], axis=-1)
+        distances = cdist(stars, stars, 'euclidean')
+        # distances = np.linalg.norm(stars[:,None,:] - stars[None,:,:], axis=-1)
         angles = np.arctan2(stars[:, 1] - stars[:, 1][:, None], stars[:, 0] - stars[:, 0][:, None])
         # choose a guide star as the reference star
         for star, ds, ags in zip(stars, distances, angles):
@@ -396,7 +396,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                         rotated_ags %= 2*np.pi
                         rotated_ags[rotated_ags > np.pi] -= 2*np.pi
                         rotated_ags[rotated_ags < -np.pi] += 2*np.pi
-                        sector_counts, _ = np.histogram(ags, bins=num_sector, range=(-np.pi, np.pi))
+                        sector_counts, _ = np.histogram(rotated_ags, bins=num_sector, range=(-np.pi, np.pi))
                         for j, sc in enumerate(sector_counts):
                             pattern[f'n{i}_sector{j}'] = sc
                     
@@ -472,7 +472,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
     return patterns
 
 
-def aggregate_nn_dataset(types: dict, use_preprocess: bool, region_r: float, num_ring: int, num_sector: int, num_neighbor: int, pos_noise_stds: list = [], mv_noise_stds: list = [], num_false_stars: list = [], num_thread: int = 20):
+def aggregate_nn_dataset(types: dict, use_preprocess: bool, region_r: float, num_ring: int, num_sector: int, num_neighbor: int, pos_noise_stds: list = [], mv_noise_stds: list = [], num_false_stars: list = [], num_thread: int = 40):
     '''
         Aggregate the dataset. Firstly, the number of samples for each class is counted. Then, roughly generate classes with too few samples using generate_nn_dataset function's 'random' mode. Lastly, the rest are finely generated to ensure that the number of samples in each class in the entire dataset reaches the standard.
     Args:
@@ -522,6 +522,7 @@ def aggregate_nn_dataset(types: dict, use_preprocess: bool, region_r: float, num
 
             # aggregate the dataset
             df = pd.concat(dfs, ignore_index=True)
+            dfs.clear()
 
             # print dataset distribution per class
             if col_name:
@@ -531,15 +532,11 @@ def aggregate_nn_dataset(types: dict, use_preprocess: bool, region_r: float, num
             # truncate and store the dataset
             if num_sample_per_class !=  None:
                 df = df.groupby(col_name).apply(lambda x: x.sample(n=min(len(x), num_sample_per_class[key])))
-                df_info = df[col_name].value_counts()
-                print(key, col_name, len(df_info), len(df_info[df_info < num_sample_per_class[key]]), len(df_info[df_info < num_sample_per_class[key]//2]))
             
             df.to_csv(f'{path}/{file_name}', index=False)
 
             # clear tasks[key] after aggregation
-            tasks[key] = []
-
-        return tasks
+            tasks[key].clear()
 
     def parse_params(s: str):
         '''
@@ -569,17 +566,16 @@ def aggregate_nn_dataset(types: dict, use_preprocess: bool, region_r: float, num
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thread)
     
-    # generate config for special test
-    if 'test' in types.keys():
+    # generate config for each dataset
+    names = list(types.keys())
+    for name in names:
         for pns in pos_noise_stds:
-            types[f'test/pos{pns}'] = types['test']
+            types[f'{name}/pos{pns}'] = types[name]
         for mns in mv_noise_stds:
-            types[f'test/mv{mns}'] = types['test']
+            types[f'{name}/mv{mns}'] = types[name]
         for nfs in num_false_stars:
-            types[f'test/fs{nfs}'] = types['test']
-        types['test/default'] = types.pop('test')
-
-        print(types)
+            types[f'{name}/fs{nfs}'] = types[name]
+        types[f'{name}/default'] = types.pop(name)
 
     # rough generation
     tasks = defaultdict(list)
@@ -593,37 +589,33 @@ def aggregate_nn_dataset(types: dict, use_preprocess: bool, region_r: float, num
             df.to_csv(os.path.join(dataset_path, gen_cfg, key, 'labels.csv'), index=False)
             # count the number of samples for each class
             df = df['cata_idx'].value_counts()
-            pct = len(df[df > types[key]])/len(gcatalogue)
+            pct = len(df[df >= types[key]])/len(gcatalogue)
             if len(df[df < types[key]]) == 0:
                 avg_num = 0
             else:
                 avg_num = np.sum(types[key]-df[df < types[key]])/len(df[df < types[key]])
             print('pct: ', pct, ' len(df[df < types[key]]): ', len(df[df < types[key]]), ' avg_num:', avg_num)
-            if pct > 0.5 or avg_num < types[key]/3:
+            if pct > 0.9 and avg_num < 2:
                 print(f'{key} skip rough generation!')
                 continue
-        
+        else:
+            avg_num = types[key]
         # parse parameters
         pos_noise_std, mv_noise_std, num_false_star = parse_params(key)
         print(key, pos_noise_std, mv_noise_std, num_false_star)
 
-        # roughly generate the samples for each class
-        num_vec = types[key]*300
-        if num_vec > 900:
-            num_round = num_vec//900+1
-            num_vec = 900
-            if num_round > num_thread//4:
-                num_round = num_thread//4
-                num_vec = types[key]*300//num_round
-        else:
-            num_round = 1
+        # roughly generate the samples for each class        
+        num_round = min(num_thread//4, int(avg_num))
+        num_vec = 500
+        
         for _ in range(num_round):
             task = pool.submit(generate_nn_dataset, 'random', num_vec, [], use_preprocess, R, num_ring, num_sector, num_neighbor, pos_noise_std, mv_noise_std, num_false_star)
             tasks[key].append(task)
 
     # wait for all tasks to be done and merge the results
-    tasks = wait_tasks(tasks, os.path.join(dataset_path, gen_cfg), 'labels.csv', 'cata_idx')
+    wait_tasks(tasks, os.path.join(dataset_path, gen_cfg), 'labels.csv', 'cata_idx')
 
+    tasks = defaultdict(list)
     # fine generation
     for key in types.keys():
         df = pd.read_csv(os.path.join(dataset_path, gen_cfg, key, 'labels.csv'))
@@ -657,6 +649,13 @@ def aggregate_nn_dataset(types: dict, use_preprocess: bool, region_r: float, num
             tasks[key].append(task)
     
     wait_tasks(tasks, os.path.join(dataset_path, gen_cfg), 'labels.csv', 'cata_idx', types)
+
+    # aggregate the train, validate and test dataset labels.csv in the root directory
+    for name in names:
+        dfs = [pd.read_csv(os.path.join(dataset_path, gen_cfg, key, 'labels.csv')) for key in types.keys() if name in key]
+        if len(dfs) > 0:
+            df = pd.concat(dfs, ignore_index=True)
+            df.to_csv(os.path.join(dataset_path, gen_cfg, name, 'labels.csv'), index=False)
 
 
 def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool = False, pos_noise_stds: list = [], mv_noise_stds: list = [], num_false_stars: list = [], num_thread: int = 20):
@@ -734,5 +733,5 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
 if __name__ == '__main__':
     # generate_pm_database({'pm1': [0, 6, 60], 'pm2': [0, 6, 10, 100]})
-    aggregate_nn_dataset({'train': 10, 'validate': 1, 'test': 2}, use_preprocess=False, region_r=6, num_ring=100, num_sector=18, num_neighbor=3)
-    # aggregate_test_samples(400, {'nn': [6, 100, 18, 3], 'pm1': [0, 6, 60]})
+    aggregate_nn_dataset({'train': 1, 'validate': 1, 'test': 1}, use_preprocess=False, region_r=6, num_ring=50, num_sector=16, num_neighbor=3, pos_noise_stds=[1, 2, 3], num_false_stars=[1, 2, 3, 4, 5])
+    # aggregate_test_samples(400, {'nn': [6, 50, 16, 3]}, pos_noise_stds=[0.5, 1, 1.5, 2], mv_noise_stds=[0.1, 0.2, 0.3], num_false_stars=[1, 2, 3])
