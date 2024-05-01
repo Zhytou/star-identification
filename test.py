@@ -1,8 +1,10 @@
 import os
+import re
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 
 from simulate import get_neighbor_num
@@ -105,8 +107,7 @@ def check_nn_accuracy(model: nn.Module, loader: DataLoader, img_ids: pd.Series=N
 
     # iterate through test dataset
     for idxs, rings, sectors, labels in loader:
-        # idxs, rings, sectors, labels = idxs.to(device), rings.to(device), sectors.to(device), labels.to(device)
-        
+        idxs, rings, sectors, labels = idxs.to(device), rings.to(device), sectors.to(device), labels.to(device)
         # forward pass only to get logits/output
         outputs = model(rings, sectors)
         # get predictions from the maximum value
@@ -126,87 +127,83 @@ def check_nn_accuracy(model: nn.Module, loader: DataLoader, img_ids: pd.Series=N
 
 
 if __name__ == '__main__':
-    test_pm, test_nn = True, False
-    
+    res = {}
+
     # conventional pattern match method accuracy
-    if test_pm:
-        methods = ['pm1']
-        for method in methods:
-            gen_cfgs = os.listdir(os.path.join(test_path, method))
-            for gen_cfg in gen_cfgs:
-                db = pd.read_csv(os.path.join(database_path, gen_cfg, f'{method}.csv'))
-                test = pd.read_csv(os.path.join(test_path, method, gen_cfg, 'default', 'labels.csv'))
-                default_acc = check_pm_accuracy(method, db, test)
-                
-                pos_accs, mv_accs, fs_accs = [], [], []
-                for pns in [1, 2, 3, 4]:
-                    test = pd.read_csv(os.path.join(test_path, method, gen_cfg, f'pos{pns}', 'labels.csv'))
-                    acc = check_pm_accuracy(method, db, test)
-                    pos_accs.append(acc)
-                
-                for mns in [0.05, 0.1, 0.15, 0.2]:
-                    test = pd.read_csv(os.path.join(test_path, method, gen_cfg, f'mv{mns}', 'labels.csv'))
-                    acc = check_pm_accuracy(method, db, test)
-                    mv_accs.append(acc)
-
-                for nfs in [1, 2, 3, 4, 5]:
-                    test = pd.read_csv(os.path.join(test_path, method, gen_cfg, f'fs{nfs}', 'labels.csv'))
-                    acc = check_pm_accuracy(method, db, test)
-                    fs_accs.append(acc)
+    for method in ['pm1']:
+        for gen_cfg in os.listdir(os.path.join(test_path, method)):
+            db = pd.read_csv(os.path.join(database_path, gen_cfg, f'{method}.csv'))
+            for s in os.listdir(os.path.join(test_path, method, gen_cfg)):
+                # calculate accuracy
+                df = pd.read_csv(os.path.join(test_path, method, gen_cfg, s, 'labels.csv'))
+                y = check_pm_accuracy(method, db, df)
+                # store the results
+                if s == 'default':
+                    res[method]['default'] = y
+                    continue
+                # use regex to parse test parameters
+                match = re.match('(pos|mv|fs)([0-9]+\.?[0-9]*)', s)
+                name, x = match.groups()
+                x = float(x)
+                if name not in res[method]:
+                    res[method][name] = [(x, y)]
+                else:
+                    res[method][name].append((x, y))
             
-                print(method, gen_cfg, default_acc, pos_accs, mv_accs, fs_accs)
-
     # nn model accuracy
-    if test_nn:
-        batch_size = 100
-        # use gpu if available
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        
-        gen_cfgs = os.listdir(os.path.join(test_path, 'nn'))
-        for gen_cfg in gen_cfgs:
-            # parse gen_cfg
-            num_ring, num_sector, num_neighbor = list(map(int, gen_cfg.split('_')[-3:]))
-            num_input = num_ring+num_sector*num_neighbor
+    method = 'nn'
+    res[method] = {}
+    batch_size = 100
+    # use gpu if available
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    for gen_cfg in os.listdir(os.path.join(test_path, 'nn')):
+        # parse gen_cfg
+        num_ring, num_sector, num_neighbor = list(map(int, gen_cfg.split('_')[-3:]))
+        num_input = num_ring+num_sector*num_neighbor
 
-            # load best model
-            model_path = f'model/{sim_cfg}/{gen_cfg}/1dcnn/best_model.pth'            
-            best_model = CNN(num_ring, (num_neighbor, num_sector), num_class)
-            best_model.load_state_dict(torch.load(model_path))
-            # best_model.to(device)
+        # load best model
+        model_path = f'model/{sim_cfg}/{gen_cfg}/1dcnn/best_model.pth'            
+        best_model = CNN(num_ring, (num_neighbor, num_sector), num_class)
+        best_model.load_state_dict(torch.load(model_path))
+        best_model.to(device)
 
-            # default_test accuracy
-            default_dataset = StarPointDataset(os.path.join(test_path, 'nn', gen_cfg, 'default'), gen_cfg)
-            defualt_df = pd.read_csv(os.path.join(test_path, 'nn', gen_cfg, 'default', 'labels.csv'))
-            default_loader = DataLoader(default_dataset, batch_size)
-            defualt_acc = check_nn_accuracy(best_model, default_loader, defualt_df['img_id'], device=device)
+        for s in os.listdir(os.path.join(test_path, 'nn', gen_cfg)):
+            # calculate accuracy
+            df = pd.read_csv(os.path.join(test_path, 'nn', gen_cfg, s, 'labels.csv'))
+            dataset = StarPointDataset(os.path.join(test_path, 'nn', gen_cfg, s), gen_cfg)
+            loader = DataLoader(dataset, batch_size)
+            y = check_nn_accuracy(best_model, loader, df['img_id'], device=device)
+            # store the results
+            if s == 'default':
+                res[method]['default'] = y
+                continue
+            # use regex to parse test parameters
+            match = re.match('(pos|mv|fs)([0-9]+\.?[0-9]*)', s)
+            name, x = match.groups()
+            x = float(x)
+            if name not in res:
+                res[method][name] = [(x, y)]
+            else:
+                res[method][name].append((x, y))
+    
+    # plot the results
+    axs = {}    
+    for method in res.keys():
+        y = res[method].pop('default')
+        for name in res[method]:
+            if name not in axs:
+                fig, ax = plt.subplots()
+                ax.set_xlabel(name)
+                ax.set_ylabel('Accuracy (%)')
+                ax.set_ylim(90, 100)
+                axs[name] = ax
 
-            pos_accs, mv_accs, fs_accs = [], [], []
-            # pos_noise_test accuracy
-            for pns in [1, 2, 3, 4]:
-                pos_dataset = StarPointDataset(os.path.join(test_path, 'nn', gen_cfg, f'pos{pns}'), gen_cfg)
-                pos_df = pd.read_csv(os.path.join(test_path, 'nn', gen_cfg, f'pos{pns}', 'labels.csv'))
-                # define data loaders
-                pos_loader = DataLoader(pos_dataset, batch_size)
-                pos_acc = check_nn_accuracy(best_model, pos_loader, pos_df['img_id'], device=device)
-                pos_accs.append(pos_acc)
+            res[method][name].sort(key=lambda x: x[0])
+            xs, ys = zip(*res[method][name])
+            xs, ys = [0]+list(xs), [y]+list(ys)
+            axs[name].plot(xs, ys, label=method)
+            axs[name].legend()
+            axs[name].set_xlim(min(xs), max(xs))
+    plt.show()  
 
-            # mv_noise_test accuracy
-            for mns in [0.05, 0.1, 0.15, 0.2]:
-                mv_dataset = StarPointDataset(os.path.join(test_path, 'nn', gen_cfg, f'mv{mns}'), gen_cfg)
-                mv_df = pd.read_csv(os.path.join(test_path, 'nn', gen_cfg, f'mv{mns}', 'labels.csv'))  
-                # define data loaders
-                mv_loader = DataLoader(mv_dataset, batch_size)
-                mv_acc = check_nn_accuracy(best_model, mv_loader, mv_df['img_id'], device=device)
-                mv_accs.append(mv_acc)
-
-            # false_star_test accuracy
-            for nfs in [1, 2, 3, 4, 5]:
-                fs_dataset = StarPointDataset(os.path.join(test_path, 'nn', gen_cfg, f'fs{nfs}'), gen_cfg)
-                fs_df = pd.read_csv(os.path.join(test_path, 'nn', gen_cfg, f'fs{nfs}', 'labels.csv'))
-                # define data loaders
-                fs_loader = DataLoader(fs_dataset, batch_size)
-                fs_acc = check_nn_accuracy(best_model, fs_loader, fs_df['img_id'], device=device)   
-                fs_accs.append(fs_acc)
-            
-            print('nn', gen_cfg, defualt_acc, pos_accs, mv_accs, fs_accs)
 
