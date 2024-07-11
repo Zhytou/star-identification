@@ -21,17 +21,21 @@ FOV = 15
 mtot = 2*tan(radians(FOV/2))*f
 
 # camera magnitude sensitivity limitation
-mv_limit = 6.0
+mv_limit = 6.5
 
 # pixel num per length
 xpixel = w/mtot
 ypixel = h/mtot
 
 # star catalogue path
-catalogue_path = f'catalogue/SAO6.0.csv'
+catalogue_path = f'catalogue/SAO7.0.csv'
+
+# read star catalogue
+col_list = ["Star ID", "RA", "DE", "Magnitude"]
+catalogue = pd.read_csv(catalogue_path, usecols=col_list)
 
 # define simulation config
-sim_cfg = f"{os.path.basename(catalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOV}x{FOV}"
+sim_cfg = f"{os.path.basename(catalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOV}x{FOV}_{mv_limit}"
 
 
 def create_star_image(ra: float, de: float, roll: float, white_noise_std: float = 10, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0) -> tuple[np.ndarray, list]:
@@ -137,18 +141,14 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
     # get rotation matrix
     M = get_rotation_matrix(ra, de, roll)
 
-    # read star catalogue
-    col_list = ["Star ID", "RA", "DE", "Magnitude"]
-    star_catalogue = pd.read_csv(catalogue_path, usecols=col_list)
-
     # search for image-able stars
     R = sqrt((radians(FOV)**2)+(radians(FOV)**2))/2
     ra1, ra2 = (ra - (R/cos(de))), (ra + (R/cos(de)))
     de1, de2 = (de - R), (de + R)
     assert ra1 < ra2 and de1 < de2
 
-    stars_within_FOV = star_catalogue[(ra1 <= star_catalogue['RA']) & (star_catalogue['RA'] <= ra2) & 
-                                      (de1 <= star_catalogue['DE']) & (star_catalogue['DE'] <= de2)].copy()
+    stars_within_FOV = catalogue[(ra1 <= catalogue['RA']) & (catalogue['RA'] <= ra2) & 
+                                (de1 <= catalogue['DE']) & (catalogue['DE'] <= de2)].copy()
 
     # convert to celestial rectangular coordinate system
     stars_within_FOV['X1'] = np.cos(stars_within_FOV['RA'])*np.cos(stars_within_FOV['DE'])
@@ -209,7 +209,7 @@ if __name__ == '__main__':
     # simulation accuracy check
     col_list = ["Star ID", "RA", "DE", "Magnitude"]
     df = pd.read_csv(catalogue_path, usecols=col_list)
-    for i in range(len(df)):
+    for i in range(10):
         ra, de = df.loc[i, 'RA'], df.loc[i, 'DE']
         img, stars = create_star_image(ra, de, 0)
         star_table = dict(map(lambda x: (x[1], x[0]), stars))

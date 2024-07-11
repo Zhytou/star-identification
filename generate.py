@@ -12,7 +12,7 @@ from preprocess import get_star_centroids
 
 
 # guide star catalogue for pattern match database and nn dataset generation
-gcata_path = 'catalogue/SAO5.6_15_22.csv'
+gcata_path = 'catalogue/SAO5.6_15_20.csv'
 # use for generation config
 gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
 # guide star catalogue
@@ -209,11 +209,11 @@ def generate_nn_dataset(mode: str, num_vec: int, idxs: list, use_preprocess: boo
 
     # generate right ascension[-pi, pi] and declination[-pi/2, pi/2]
     if mode == 'random':
-        ras = np.random.uniform(-np.pi, np.pi, num_vec)
+        ras = np.random.uniform(0, 2*np.pi, num_vec)
         des = np.arcsin(np.random.uniform(-1, 1, num_vec))
     elif mode == 'supplementary':
-        ras = np.clip(gcatalogue.loc[idxs, 'RA']+np.radians(np.random.normal(0, 3, len(idxs))), -np.pi, np.pi)
-        des = np.clip(gcatalogue.loc[idxs, 'DE']+np.radians(np.random.normal(0, 3, len(idxs))), -np.pi/2, np.pi/2)
+        ras = np.clip(gcatalogue.loc[idxs, 'RA']+np.radians(np.random.normal(0, 5, len(idxs))), 0, 2*np.pi)
+        des = np.clip(gcatalogue.loc[idxs, 'DE']+np.radians(np.random.normal(0, 5, len(idxs))), -np.pi/2, np.pi/2)
     else:
         print('Invalid mode!')
         return
@@ -313,7 +313,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
     '''
 
     # generate right ascension[-pi, pi] and declination[-pi/2, pi/2]
-    ras = np.random.uniform(-np.pi, np.pi, num_vec)
+    ras = np.random.uniform(0, 2*np.pi, num_vec)
     des = np.arcsin(np.random.uniform(-1, 1, num_vec))
 
     # the dict to store the results
@@ -335,15 +335,15 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
         if len(stars) < 4:
             continue
         
-        R = gen_params['nn'][0]/FOV*w
-        # number of candidate primary stars in the region
-        in_rect  = np.logical_and(
-            np.logical_and(stars[:, 0] >= R/2, stars[:, 0] <= h-R/2),
-            np.logical_and(stars[:, 1] >= R/2, stars[:, 1] <= w-R/2)
-        )
-        # too few stars to identify satellite attitude
-        if np.sum(in_rect) < 3:
-            continue
+        # R = gen_params['nn'][0]/FOV*w
+        # # number of candidate primary stars in the region
+        # in_rect  = np.logical_and(
+        #     np.logical_and(stars[:, 0] >= R/2, stars[:, 0] <= h-R/2),
+        #     np.logical_and(stars[:, 1] >= R/2, stars[:, 1] <= w-R/2)
+        # )
+        # # too few stars to identify satellite attitude
+        # if np.sum(in_rect) < 3:
+        #     continue
 
         # generate a unique img id for later accuracy calculation
         img_id = uuid.uuid1()
@@ -472,11 +472,13 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
     return patterns
 
 
-def aggregate_nn_dataset(types: dict, use_preprocess: bool, region_r: float, num_ring: int, num_sector: int, num_neighbor: int, pos_noise_stds: list = [], mv_noise_stds: list = [], num_false_stars: list = [], num_thread: int = 40):
+def aggregate_nn_dataset(types: dict, use_preprocess: bool, default_ratio: float, region_r: float, num_ring: int, num_sector: int, num_neighbor: int, pos_noise_stds: list = [], mv_noise_stds: list = [], num_false_stars: list = [], num_thread: int = 40, fine_grained: bool = False):
     '''
         Aggregate the dataset. Firstly, the number of samples for each class is counted. Then, roughly generate classes with too few samples using generate_nn_dataset function's 'random' mode. Lastly, the rest are finely generated to ensure that the number of samples in each class in the entire dataset reaches the standard.
     Args:
         types: key->the types of the dataset, values->the minumin number of samples for each class
+        use_preprocess: whether to avoid the error resulted from get_star_centroids function in preprocess stage
+        default_ratio: the ratio of default dataset versus total dataset
         region_r: the radius of the region in degrees
         num_ring: the number of rings
         num_sector: the number of sectors
@@ -527,7 +529,8 @@ def aggregate_nn_dataset(types: dict, use_preprocess: bool, region_r: float, num
             # print dataset distribution per class
             if col_name:
                 df_info = df[col_name].value_counts()
-                print(len(df_info), df_info.tail(3))
+                print(key, len(df_info))
+                print(df_info.tail(3))
             
             # truncate and store the dataset
             if num_sample_per_class !=  None:
@@ -560,6 +563,16 @@ def aggregate_nn_dataset(types: dict, use_preprocess: bool, region_r: float, num
                 nfs = int(number)
         return pns, mns, nfs
 
+    def aggregate_root_dir():
+        '''
+        Aggregate the train, validate and test dataset labels.csv in the root directory.
+        '''
+        for name in names:
+            dfs = [pd.read_csv(os.path.join(dataset_path, gen_cfg, key, 'labels.csv')) for key in types.keys() if name in key]
+            if len(dfs) > 0:
+                df = pd.concat(dfs, ignore_index=True)
+                df.to_csv(os.path.join(dataset_path, gen_cfg, name, 'labels.csv'), index=False)
+
     # generate config
     gen_cfg = f'{gcata_name}_{int(use_preprocess)}_{region_r}_{num_ring}_{num_sector}_{num_neighbor}'
     R = int(region_r/FOV*w)
@@ -568,14 +581,17 @@ def aggregate_nn_dataset(types: dict, use_preprocess: bool, region_r: float, num
     
     # generate config for each dataset
     names = list(types.keys())
+    if len(pos_noise_stds)+len(mv_noise_stds)+len(num_false_stars) > 0:
+        noised_ratio = (1-default_ratio)/(len(pos_noise_stds)+len(mv_noise_stds)+len(num_false_stars))
     for name in names:
         for pns in pos_noise_stds:
-            types[f'{name}/pos{pns}'] = types[name]
+            types[f'{name}/pos{pns}'] = max(int(types[name]*noised_ratio), 1)
         for mns in mv_noise_stds:
-            types[f'{name}/mv{mns}'] = types[name]
+            types[f'{name}/mv{mns}'] = max(int(types[name]*noised_ratio), 1)
         for nfs in num_false_stars:
-            types[f'{name}/fs{nfs}'] = types[name]
-        types[f'{name}/default'] = types.pop(name)
+            types[f'{name}/fs{nfs}'] = max(int(types[name]*noised_ratio), 1)
+        types[f'{name}/default'] = max(int(types.pop(name)*default_ratio), 1)
+    print(types)
 
     # rough generation
     tasks = defaultdict(list)
@@ -594,26 +610,31 @@ def aggregate_nn_dataset(types: dict, use_preprocess: bool, region_r: float, num
                 avg_num = 0
             else:
                 avg_num = np.sum(types[key]-df[df < types[key]])/len(df[df < types[key]])
-            print('pct: ', pct, ' len(df[df < types[key]]): ', len(df[df < types[key]]), ' avg_num:', avg_num)
-            if pct > 0.9 and avg_num < 2:
+            print(key, ' pct: ', pct, ' len(df[df < types[key]]): ', len(df[df < types[key]]), ' avg_num:', avg_num)
+            if pct > 0.9 and avg_num <= 1:
                 print(f'{key} skip rough generation!')
                 continue
+            if avg_num < 1:
+                avg_num = 1
         else:
             avg_num = types[key]
         # parse parameters
         pos_noise_std, mv_noise_std, num_false_star = parse_params(key)
-        print(key, pos_noise_std, mv_noise_std, num_false_star)
 
         # roughly generate the samples for each class        
         num_round = min(num_thread//4, int(avg_num))
-        num_vec = 500
+        num_vec = 1000
         
         for _ in range(num_round):
             task = pool.submit(generate_nn_dataset, 'random', num_vec, [], use_preprocess, R, num_ring, num_sector, num_neighbor, pos_noise_std, mv_noise_std, num_false_star)
             tasks[key].append(task)
 
     # wait for all tasks to be done and merge the results
-    wait_tasks(tasks, os.path.join(dataset_path, gen_cfg), 'labels.csv', 'cata_idx')
+    wait_tasks(tasks, os.path.join(dataset_path, gen_cfg), 'labels.csv', 'cata_idx', types)
+
+    if not fine_grained:
+        aggregate_root_dir()
+        return
 
     tasks = defaultdict(list)
     # fine generation
@@ -649,13 +670,9 @@ def aggregate_nn_dataset(types: dict, use_preprocess: bool, region_r: float, num
             tasks[key].append(task)
     
     wait_tasks(tasks, os.path.join(dataset_path, gen_cfg), 'labels.csv', 'cata_idx', types)
-
-    # aggregate the train, validate and test dataset labels.csv in the root directory
-    for name in names:
-        dfs = [pd.read_csv(os.path.join(dataset_path, gen_cfg, key, 'labels.csv')) for key in types.keys() if name in key]
-        if len(dfs) > 0:
-            df = pd.concat(dfs, ignore_index=True)
-            df.to_csv(os.path.join(dataset_path, gen_cfg, name, 'labels.csv'), index=False)
+    
+    # aggregate the labels.csv in root directory
+    aggregate_root_dir()
 
 
 def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool = False, pos_noise_stds: list = [], mv_noise_stds: list = [], num_false_stars: list = [], num_thread: int = 20):
@@ -720,6 +737,8 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
     for method in gen_params:
         gen_cfg = f'{gcata_name}_{int(use_preprocess)}_'+'_'.join(map(str, gen_params[method]))
         path = os.path.join(test_path, method, gen_cfg)
+        if not os.path.exists(path):
+            continue
         # sub test dir names
         test_names = os.listdir(path)
         for tn in test_names:
@@ -733,5 +752,5 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
 if __name__ == '__main__':
     # generate_pm_database({'pm1': [0, 6, 60], 'pm2': [0, 6, 10, 100]})
-    aggregate_nn_dataset({'train': 1, 'validate': 1, 'test': 1}, use_preprocess=False, region_r=6, num_ring=50, num_sector=16, num_neighbor=3, pos_noise_stds=[1, 2, 3], num_false_stars=[1, 2, 3, 4, 5])
-    # aggregate_test_samples(400, {'nn': [6, 50, 16, 3]}, pos_noise_stds=[0.5, 1, 1.5, 2], mv_noise_stds=[0.1, 0.2, 0.3], num_false_stars=[1, 2, 3])
+    # aggregate_nn_dataset({'train': 100, 'validate': 5, 'test': 5}, use_preprocess=False, default_ratio=0.7, region_r=6, num_ring=50, num_sector=16, num_neighbor=3, pos_noise_stds=[3], mv_noise_stds=[0.5, 1], num_false_stars=[2, 4, 6, 8], fine_grained=True)
+    aggregate_test_samples(800, {'nn': [6, 50, 16, 3], 'pm1': [0, 6, 60]}, use_preprocess=False, pos_noise_stds=[], mv_noise_stds=[],  num_false_stars=[1, 2, 3, 4, 5])

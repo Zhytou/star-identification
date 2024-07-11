@@ -50,7 +50,7 @@ def check_pm_accuracy(method: str, db: pd.DataFrame, df: pd.DataFrame):
             # find the closest pattern in the database
             res = np.sum(np.isin(db_patterns, pattern), axis=1)
             idxs = np.where(res == np.max(res))[0]
-            if len(idxs) == 1 and star_id == db.loc[idxs[0], 'id']:
+            if np.max(res) >= 7 and len(idxs) == 1 and star_id == db.loc[idxs[0], 'id']:
                 freqs.update({img_id: freqs.get(img_id, 0)+1})
         else:
             # initial match based on radial features
@@ -131,21 +131,24 @@ if __name__ == '__main__':
 
     # conventional pattern match method accuracy
     for method in ['pm1']:
+        res[method] = {}
         for gen_cfg in os.listdir(os.path.join(test_path, method)):
             db = pd.read_csv(os.path.join(database_path, gen_cfg, f'{method}.csv'))
             for s in os.listdir(os.path.join(test_path, method, gen_cfg)):
+                # use regex to parse test parameters
+                match = re.match('(pos|mv|fs)([0-9]+\.?[0-9]*)', s)
+                if match is None:
+                    name, x = 'default', 0
+                else:
+                    name, x = match.groups()
+                    x = float(x)
                 # calculate accuracy
                 df = pd.read_csv(os.path.join(test_path, method, gen_cfg, s, 'labels.csv'))
                 y = check_pm_accuracy(method, db, df)
-                # store the results
-                if s == 'default':
+                if name == 'default':
                     res[method]['default'] = y
                     continue
-                # use regex to parse test parameters
-                match = re.match('(pos|mv|fs)([0-9]+\.?[0-9]*)', s)
-                name, x = match.groups()
-                x = float(x)
-                if name not in res[method]:
+                if name not in res[method].keys():
                     res[method][name] = [(x, y)]
                 else:
                     res[method][name].append((x, y))
@@ -168,24 +171,28 @@ if __name__ == '__main__':
         best_model.to(device)
 
         for s in os.listdir(os.path.join(test_path, 'nn', gen_cfg)):
+            # use regex to parse test parameters
+            match = re.match('(pos|mv|fs)([0-9]+\.?[0-9]*)', s)
+            if match is None:
+                name, x = 'default', 0
+            else:
+                name, x = match.groups()
+                x = float(x)
             # calculate accuracy
             df = pd.read_csv(os.path.join(test_path, 'nn', gen_cfg, s, 'labels.csv'))
             dataset = StarPointDataset(os.path.join(test_path, 'nn', gen_cfg, s), gen_cfg)
             loader = DataLoader(dataset, batch_size)
             y = check_nn_accuracy(best_model, loader, df['img_id'], device=device)
             # store the results
-            if s == 'default':
+            if name == 'default':
                 res[method]['default'] = y
                 continue
-            # use regex to parse test parameters
-            match = re.match('(pos|mv|fs)([0-9]+\.?[0-9]*)', s)
-            name, x = match.groups()
-            x = float(x)
-            if name not in res:
+            if name not in res[method].keys():
                 res[method][name] = [(x, y)]
             else:
                 res[method][name].append((x, y))
     
+    print(res)
     # plot the results
     axs = {}    
     for method in res.keys():

@@ -16,7 +16,7 @@ def draw_star_distribution(catalogue: pd.DataFrame, ax: axes.Axes, title: str):
     ras, des = np.degrees(catalogue['RA']), np.degrees(catalogue['DE'])
     ax.scatter(ras, des, s=1)
     ax.set_title(title)
-    ax.set_xlim(-180, 180)
+    ax.set_xlim(0, 360)
     ax.set_ylim(-90, 90)
     ax.set_xlabel('RA')
     ax.set_ylabel('DE')
@@ -59,7 +59,7 @@ def draw_probability_versus_star_num_within_FOV(catalogue: pd.DataFrame, ax: axe
     R = sqrt((radians(FOV)**2)+(radians(FOV)**2))/2
     
     # generate random right ascension[-pi, pi] and declination[-pi/2, pi/2], method from http://www.opticsjournal.net/Articles/Abstract?aid=OJbf48ddeef697ba09
-    ras = np.random.uniform(-pi, pi, num_vec)
+    ras = np.random.uniform(0, 2*pi, num_vec)
     des = np.arcsin(np.random.uniform(-1, 1, num_vec))
     
     # record the result: star_num -> sample_num
@@ -170,7 +170,7 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.
     # eliminate the darker stars from small angular distance star pairs
     catalogue = catalogue[~catalogue.index.isin(darker_idxs)]
 
-    ras = np.arange(-pi, pi, 2*pi/num_vec)
+    ras = np.arange(0, 2*pi, 2*pi/num_vec)
     des = np.arcsin(np.arange(-1, 1, 2/num_vec))
     for ra in ras:
         for de in des:
@@ -218,11 +218,11 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.
 
 
 if __name__ == '__main__':
-    file = 'catalogue/SAO6.0.csv'
+    file = 'catalogue/SAO7.0.csv'
     FOV = 15
     f = 58e-3
-    num_limit = 22
-    mv_limit = 5.6
+    num_limit = 20
+    mv_limit = 5.3
     filtered_file = f'catalogue/SAO{mv_limit}_{FOV}_{num_limit}.csv'
 
     df = pd.read_csv(file, usecols=["Star ID", "RA", "DE", "Magnitude"])
@@ -233,7 +233,7 @@ if __name__ == '__main__':
         filtered_df.to_csv(filtered_file)
 
     fig1, axs1 = plt.subplots(2)
-    # draw_star_distribution(df, axs1[0], "Original")
+    draw_star_distribution(df, axs1[0], "Original")
     draw_star_distribution(filtered_df, axs1[1], "Filtered")
 
     fig2, axs2 = plt.subplots(2)

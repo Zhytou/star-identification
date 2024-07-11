@@ -46,10 +46,10 @@ class CNN(nn.Module):
             nn.Flatten()
         )
         self.fc2 = nn.Sequential(
-            nn.Linear(500+32*(input2_dim[1]-4), 1000),
+            nn.Linear(500+32*(input2_dim[1]-4), 2000),
             nn.ReLU(),
-            nn.BatchNorm1d(1000),
-            nn.Linear(1000, output_dim),
+            nn.BatchNorm1d(2000),
+            nn.Linear(2000, output_dim),
         )
 
     def forward(self, x1, x2):

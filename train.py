@@ -91,14 +91,15 @@ def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader:
             print(f'Epoch: {epoch+1}, Accuracy: {accuracy}%')
             accs.append(accuracy)
 
-    return ls, accs
+    with open(os.path.join(model_dir, 'train.log'), 'a+') as f:
+        f.write(f'Loss: {ls}\nAccuracy: {accs}\n')
 
- 
+
 if __name__ == '__main__':
     # training setting
-    batch_size = 500
-    num_epochs = 30
-    learning_rate = 0.0001
+    batch_size = 128
+    num_epochs = 10
+    learning_rate = 0.01
     # use gpu if available
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f'Using device: {device}')
@@ -106,11 +107,13 @@ if __name__ == '__main__':
     # iterate different generate configs under same simulate config
     gen_cfgs = os.listdir(dataset_path)
     for gen_cfg in gen_cfgs:
+        if gen_cfg != 'SAO5.6_15_20_0_6_50_16_3':
+            continue
         print(f'Generate config: {gen_cfg}')
         num_ring, num_sector, num_neighbor = list(map(int, gen_cfg.split('_')[-3:]))
         num_input = num_ring+num_sector*num_neighbor
         # define datasets for train validate and test
-        train_dataset, val_dataset, test_dataset = [StarPointDataset(os.path.join(dataset_path, gen_cfg, type), gen_cfg) for type in ['train', 'validate', 'test/default']]
+        train_dataset, val_dataset, test_dataset = [StarPointDataset(os.path.join(dataset_path, gen_cfg, type), gen_cfg) for type in ['train', 'validate', 'test']]
         # print datasets' sizes
         print(f'Training set: {len(train_dataset)}, Validation set: {len(val_dataset)}, Test set: {len(test_dataset)}')
         # create data loaders for our datasets
@@ -129,9 +132,7 @@ if __name__ == '__main__':
             model.load_state_dict(torch.load(model_path))
         model.to(device)
         
-        optimizer = optim.Adam(model.parameters(), lr=learning_rate)  
-        ls, accs = train(model, optimizer, num_epochs, train_loader, test_loader, device=device)
+        optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=0.0001)  
+        train(model, optimizer, num_epochs, train_loader, test_loader, device=device)
         torch.save(model.state_dict(), model_path)
-
-        print(ls, accs)
-
+    
