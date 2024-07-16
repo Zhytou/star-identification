@@ -10,17 +10,16 @@ class FNN(nn.Module):
         super(FNN, self).__init__()
         self.fc = nn.Sequential(
             nn.BatchNorm1d(input_dim),
-            nn.Linear(input_dim, 500),
+            nn.Linear(input_dim, 200),
             nn.ReLU(),
-            nn.BatchNorm1d(500),
-            nn.Linear(500, 1000),
+            nn.BatchNorm1d(200),
+            nn.Linear(200, 1600),
             nn.ReLU(),
-            nn.BatchNorm1d(1000),
-            nn.Linear(1000, output_dim),
+            nn.BatchNorm1d(1600),
+            nn.Linear(1600, output_dim),
         )
 
-    def forward(self, x1, x2):
-        x = torch.concat((x1, torch.flatten(x2, start_dim=1)), dim=1)
+    def forward(self, x):
         y = self.fc(x)
         return y
 

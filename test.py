@@ -8,8 +8,8 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 
 from generate import database_path, test_path, sim_cfg, num_class
-from dataset import StarPointDataset
-from models import CNN
+from dataset import LPTDataset, RACDataset
+from models import CNN, FNN
 
 
 def check_pm_accuracy(method: str, db: pd.DataFrame, df: pd.DataFrame):
@@ -49,7 +49,9 @@ def check_pm_accuracy(method: str, db: pd.DataFrame, df: pd.DataFrame):
             # find the closest pattern in the database
             res = np.sum(np.isin(db_patterns, pattern), axis=1)
             idxs = np.where(res == np.max(res))[0]
-            if np.max(res) >= 7 and len(idxs) == 1 and star_id == db.loc[idxs[0], 'id']:
+            if method == 'grid' and np.max(res) >= 7 and len(idxs) == 1 and star_id == db.loc[idxs[0], 'id']:
+                freqs.update({img_id: freqs.get(img_id, 0)+1})
+            elif method == 'lpt' and np.max(res) >= 6 and len(idxs) == 1 and star_id == db.loc[idxs[0], 'id']:
                 freqs.update({img_id: freqs.get(img_id, 0)+1})
         else:
             # initial match based on radial features
@@ -88,7 +90,7 @@ def check_pm_accuracy(method: str, db: pd.DataFrame, df: pd.DataFrame):
     return acc
 
 
-def check_nn_accuracy(model: nn.Module, loader: DataLoader, img_ids: pd.Series=None, device=torch.device('cpu')):
+def check_nn_accuracy(method: str, model: nn.Module, loader: DataLoader, img_ids: pd.Series=None, device=torch.device('cpu')):
     '''
         Evaluate the model's accuracy on the provided data loader. The accuracy is calculated based on the model's ability to correctly identify at least three stars in each star image.
     Args:
@@ -104,17 +106,30 @@ def check_nn_accuracy(model: nn.Module, loader: DataLoader, img_ids: pd.Series=N
     # dict to store the number of correctly predicted samples for each star image
     freqs = {}
 
-    # iterate through test dataset
-    for idxs, rings, sectors, labels in loader:
-        idxs, rings, sectors, labels = idxs.to(device), rings.to(device), sectors.to(device), labels.to(device)
-        # forward pass only to get logits/output
-        outputs = model(rings, sectors)
-        # get predictions from the maximum value
-        predicted = torch.argmax(outputs.data, 1)
-        # correctly predicted sample indexes
-        idxs = idxs[predicted == labels].tolist()
-        # update number of successfully predicted star images
-        img_ids[idxs].apply(lambda x: freqs.update({x: freqs.get(x, 0)+1}))
+    if method == 'proposed':
+        for idxs, rings, sectors, labels in loader:
+            idxs, rings, sectors, labels = idxs.to(device), rings.to(device), sectors.to(device), labels.to(device)
+            # forward pass only to get logits/output
+            outputs = model(rings, sectors)
+            # get predictions from the maximum value
+            predicted = torch.argmax(outputs.data, 1)
+            # correctly predicted sample indexes
+            idxs = idxs[predicted == labels].tolist()
+            # update number of successfully predicted star images
+            img_ids[idxs].apply(lambda x: freqs.update({x: freqs.get(x, 0)+1}))
+    elif method == 'lpt_nn':
+        for idxs, dists, labels in loader:
+            idxs, dists, labels = idxs.to(device), dists.to(device), labels.to(device)
+            # forward pass only to get logits/output
+            outputs = model(dists)
+            # get predictions from the maximum value
+            predicted = torch.argmax(outputs.data, 1)
+            # correctly predicted sample indexes
+            idxs = idxs[predicted == labels].tolist()
+            # update number of successfully predicted star images
+            img_ids[idxs].apply(lambda x: freqs.update({x: freqs.get(x, 0)+1}))
+    else:
+        return 0.0
 
     # the percentage of star images that have at least three correctly predicted samples
     test_info = img_ids.value_counts()
@@ -129,7 +144,7 @@ if __name__ == '__main__':
     res = {}
 
     # conventional pattern match method accuracy
-    for method in ['lpt']:
+    for method in []:
         res[method] = {}
         for gen_cfg in os.listdir(os.path.join(test_path, method)):
             db = pd.read_csv(os.path.join(database_path, gen_cfg, f'{method}.csv'))
@@ -153,23 +168,25 @@ if __name__ == '__main__':
                     res[method][name].append((x, y))
             
     # nn model accuracy
-    for method in ['proposed']:
+    for method in ['proposed', 'lpt_nn']:
         res[method] = {}
         batch_size = 100
         # use gpu if available
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         for gen_cfg in os.listdir(os.path.join(test_path, method)):
             # parse gen_cfg
-            num_ring, num_sector, num_neighbor = list(map(int, gen_cfg.split('_')[-3:]))
-            num_input = num_ring+num_sector*num_neighbor
-
+            if method == 'proposed':
+                num_ring, num_sector, num_neighbor = list(map(int, gen_cfg.split('_')[-3:]))
+                best_model = CNN(num_ring, (num_neighbor, num_sector), num_class)
+            else:
+                num_dist = int(gen_cfg.split('_')[-1])
+                best_model = FNN(num_dist, num_class)
             # load best model
-            model_path = f'model/{sim_cfg}/{gen_cfg}/1dcnn/best_model.pth'            
-            best_model = CNN(num_ring, (num_neighbor, num_sector), num_class)
-            best_model.load_state_dict(torch.load(model_path))
+            best_model.load_state_dict(torch.load(os.path.join('model', sim_cfg, method, gen_cfg, 'best_model.pth')))
             best_model.to(device)
 
-            for s in os.listdir(os.path.join(test_path, 'nn', gen_cfg)):
+            path = os.path.join(test_path, method, gen_cfg)
+            for s in os.listdir(path):
                 # use regex to parse test parameters
                 match = re.match('(pos|mv|fs)([0-9]+\.?[0-9]*)', s)
                 if match is None:
@@ -178,10 +195,13 @@ if __name__ == '__main__':
                     name, x = match.groups()
                     x = float(x)
                 # calculate accuracy
-                df = pd.read_csv(os.path.join(test_path, 'nn', gen_cfg, s, 'labels.csv'))
-                dataset = StarPointDataset(os.path.join(test_path, 'nn', gen_cfg, s), gen_cfg)
+                df = pd.read_csv(os.path.join(path, s, 'labels.csv'))
+                if method == 'proposed':
+                    dataset = RACDataset(os.path.join(path, s), gen_cfg)
+                else:
+                    dataset = LPTDataset(os.path.join(path, s), gen_cfg)
                 loader = DataLoader(dataset, batch_size)
-                y = check_nn_accuracy(best_model, loader, df['img_id'], device=device)
+                y = check_nn_accuracy(method, best_model, loader, df['img_id'], device=device)
                 # store the results
                 if name == 'default':
                     res[method]['default'] = y
@@ -192,24 +212,3 @@ if __name__ == '__main__':
                     res[method][name].append((x, y))
     
     print(res)
-    # plot the results
-    # axs = {}    
-    # for method in res.keys():
-    #     y = res[method].pop('default')
-    #     for name in res[method]:
-    #         if name not in axs:
-    #             fig, ax = plt.subplots()
-    #             ax.set_xlabel(name)
-    #             ax.set_ylabel('Accuracy (%)')
-    #             ax.set_ylim(90, 100)
-    #             axs[name] = ax
-
-    #         res[method][name].sort(key=lambda x: x[0])
-    #         xs, ys = zip(*res[method][name])
-    #         xs, ys = [0]+list(xs), [y]+list(ys)
-    #         axs[name].plot(xs, ys, label=method)
-    #         axs[name].legend()
-    #         axs[name].set_xlim(min(xs), max(xs))
-    # plt.show()  
-
-

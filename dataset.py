@@ -37,8 +37,8 @@ class StarImageDataset(Dataset):
         return transform(img), torch.tensor([star_id])
 
 
-class StarPointDataset(Dataset):
-    '''Star point dataset'''
+class LPTDataset(Dataset):
+    '''Log-Polar transform based NN dataset'''
 
     def __init__(self, root_dir: str, gen_cfg: str):
         '''
@@ -46,13 +46,40 @@ class StarPointDataset(Dataset):
             root_dir: name of the dataset directory
             gen_cfg: name of the generator configuration
         '''
-        label_file_path = os.path.join(root_dir, 'labels.csv')
-        if not os.path.exists(label_file_path):
-            raise FileNotFoundError(f'{label_file_path}does not exist')
-        
+        label_file = os.path.join(root_dir, 'labels.csv')
+        if not os.path.exists(label_file):
+            raise FileNotFoundError(f'{label_file} does not exist')
+        self.num_dist = int(gen_cfg.split('_')[-1])
+        self.label_df = pd.read_csv(label_file)
+
+    def __len__(self):
+        return len(self.label_df)
+
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        cols = [f'dist{i}' for i in range(self.num_dist)]
+        dists = self.label_df.loc[idx, cols].to_numpy(float)
+        cata_idx = self.label_df.loc[idx, 'cata_idx'].astype(int)
+
+        return idx, torch.from_numpy(dists).float(), cata_idx
+
+
+class RACDataset(Dataset):
+    '''Radial and cyclic based NN dataset'''
+
+    def __init__(self, root_dir: str, gen_cfg: str):
+        '''
+        Args:
+            root_dir: name of the dataset directory
+            gen_cfg: name of the generator configuration
+        '''
+        label_file = os.path.join(root_dir, 'labels.csv')
+        if not os.path.exists(label_file):
+            raise FileNotFoundError(f'{label_file} does not exist')
         self.num_ring, self.num_sector, self.num_neighbor_limit = list(map(int, gen_cfg.split('_')[-3:]))
-        
-        self.label_df = pd.read_csv(label_file_path)
+        self.label_df = pd.read_csv(label_file)
 
     def __len__(self):
         return len(self.label_df)
