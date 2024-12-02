@@ -1,4 +1,4 @@
-import os
+import os, struct
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt, matplotlib.axes._axes as axes
@@ -112,6 +112,110 @@ def draw_probability_versus_star_num_within_FOV(catalogue: pd.DataFrame, ax: axe
     ax.set_ylabel('Probability%')
 
 
+def parse_tdc_sao(file_path: str):
+    '''
+        Parse SAO star catalogue's raw data from Harvard University Telescope Data Center http://tdc-www.harvard.edu/catalogs/sao.html. 
+        
+        The first 28 bytes of the file is its header, containing the following information:
+            Integer*4 STAR0=0	Subtract from star number to get sequence number
+            Integer*4 STAR1=1	First star number in file
+            Integer*4 STARN=258996	Number of stars in file
+            Integer*4 STNUM=1	0 if no star i.d. numbers are present
+			                    1 if star i.d. numbers are in catalog file
+			                    2 if star i.d. numbers are  in file
+            Logical*4 MPROP=t	True if proper motion is included
+			                    False if no proper motion is included
+            Integer*4 NMAG=1	Number of magnitudes present
+            Integer*4 NBENT=32	Number of bytes per star entry
+
+        Each entry in the raw data contains 32 bytes with the following information:
+        
+            Real*4 XNO		Catalog number of star
+            Real*8 SRA0		B1950 Right Ascension (radians)
+            Real*8 SDEC0		B1950 Declination (radians)
+            Character*2 IS	Spectral type (2 characters)
+            Integer*2 MAG		V Magnitude * 100
+            Real*4 XRPM		R.A. proper motion (radians per year)
+            Real*4 XDPM		Dec. proper motion (radians per year)
+
+    Args:
+        path: the path to the raw data file
+
+    Returns:
+        dataframe of the parsed data
+    '''
+    file_name = file_path.split('/')[-1].split('.')[0]
+    endian = file_name.split('_')[-1]
+    
+    flag = ''
+    if endian == 'bigendian':
+        flag = '>'
+    elif endian == 'smallendian':
+        flag = '<'
+    else:
+        print('wrong file', file_name, endian)
+        return
+
+    with open(file_path, 'rb') as file:
+        # parse header
+        header_bytes = file.read(28)
+        star0, star1, starn, stnum, mprop, nmag, nbent = struct.unpack(f'{flag}i i i i i i i', header_bytes)
+        print('header', star0, star1, starn, stnum, mprop, nmag, nbent)
+
+        # parse entries
+        entries = []
+        while True:
+            entry_bytes = file.read(nbent)
+            # no star id in entry(no xno)
+            if stnum == 0:
+                xno = len(entries)
+                sra0, sdec0, _, mag, _, _ = struct.unpack(f'{flag}d d h H f f', entry_bytes)
+            else:
+                xno, sra0, sdec0, _, mag, _, _ = struct.unpack(f'{flag}f d d h H f f', entry_bytes)
+            
+            print(xno, sra0, sdec0, mag)
+            entries.append([xno, sra0, sdec0, mag])
+            # if len(entries) > 10:
+            #     break
+        
+    df = pd.DataFrame(entries, columns=["Star ID", "RA", "DE", "Magnitude"])
+    print(df)
+    return df
+            
+
+def parse_heasarc_sao(file_path: str, file_storage_path: str):
+    '''
+        Parse SAO star catalogue's raw data from HEASARC https://heasarc.gsfc.nasa.gov/W3Browse/star-catalog/sao.html.
+    
+    Args:
+        file_path: the path to the raw data file
+        file_storage_path: the path to store the parsed data
+    Returns:
+        dataframe of the parsed data
+    '''
+
+    if os.path.exists(file_storage_path):
+        return pd.read_csv(file_storage_path)
+
+    with open(file_path, 'r') as file:
+        data_list = []
+
+        lines = file.readlines()
+        for line in lines:            
+            cata_id = int(line[0:6])
+            ra = float(line[183:193])
+            de = float(line[193:204])
+            mag = float(line[80:84])
+
+            # print(len(line), cata_id, ra, de, mag)
+            data_list.append([cata_id, ra, de, mag])
+        
+    df = pd.DataFrame(data_list, columns=["Star ID", "RA", "DE", "Magnitude"])
+    df.to_csv(file_storage_path)
+
+    return df
+        
+
 def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.0, agd_limit: float=0.5, num_sector: int=4, FOV: int=20, f: float=58e-3, num_vec: int=100) -> pd.DataFrame:
     '''
         Filter navigation stars.
@@ -218,14 +322,25 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.
 
 
 if __name__ == '__main__':
-    file = 'catalogue/SAO7.0.csv'
+    # filter parameters
     FOV = 15
     f = 58e-3
     num_limit = 20
     mv_limit = 5.3
-    filtered_file = f'catalogue/SAO{mv_limit}_{FOV}_{num_limit}.csv'
 
-    df = pd.read_csv(file, usecols=["Star ID", "RA", "DE", "Magnitude"])
+    raw_file = 'raw_catalogue/sao_j2000.dat'
+    parsed_file = 'catalogue/sao.csv'
+    limit_parsed_file = 'catalogue/sao7.0.csv'
+    filtered_file = f'catalogue/sao{mv_limit}_{FOV}_{num_limit}.csv'
+    old_file = 'old_catalogue/sao7.0.csv'
+
+    df = parse_heasarc_sao(raw_file, parsed_file)
+    df = df[df['Magnitude'] <= 7.0].reset_index(drop=True)
+    if not os.path.exists(limit_parsed_file):
+        df.to_csv(limit_parsed_file)
+
+    old_df = pd.read_csv(old_file)
+
     if os.path.exists(filtered_file):
         filtered_df = pd.read_csv(filtered_file)
     else:
