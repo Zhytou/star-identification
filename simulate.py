@@ -2,7 +2,7 @@ import os
 from math import radians, degrees, sin, cos, tan, sqrt, exp
 import numpy as np
 import pandas as pd
-
+import cv2
 
 # region of interest for point spread function
 ROI = 2
@@ -38,7 +38,7 @@ catalogue = pd.read_csv(catalogue_path, usecols=col_list)
 sim_cfg = f"{os.path.basename(catalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOV}x{FOV}_{mv_limit}"
 
 
-def create_star_image(ra: float, de: float, roll: float, white_noise_std: float = 10, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0) -> tuple[np.ndarray, list]:
+def create_star_image(ra: float, de: float, roll: float, white_noise_std: float = 10, pos_noise_std: float = 0, mv_noise_std: float = 0, ratio_false_star: int = 0, pure_point: bool = False) -> tuple[np.ndarray, list]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
@@ -48,7 +48,8 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
         white_noise_std: the standard deviation of white noise
         pos_noise_std: the standard deviation of positional noise
         mv_noise_std: the standard deviation of maginatitude noise
-        num_false_star: the number of false stars
+        ratio_false_star: the ratio of false stars
+        pure_point: no need to draw the star image, just pure point data
     Returns:
         img: the simulated star image
         stars: stars drawn in the image
@@ -88,6 +89,10 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
         Returns:
             img: the image with the star drawn
         """
+        # no need to draw img
+        if pure_point:
+            return img
+
         # stellar magnitude to intensity
         H = 30/(2.51**(magnitude-6))
 
@@ -100,7 +105,7 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
                 if (u-x)**2+(v-y)**2 > ROI**2:
                     continue
                 raw_intensity = int(H*exp(-((u-x)**2+(v-y)**2)/(2*ROI**2)))
-                img[v ,u] = raw_intensity
+                img[v ,u] = 255 #raw_intensity
 
         return img
 
@@ -164,7 +169,7 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
 
     # convert to pixel coordinate system
     stars_within_FOV['X4'] = w/2+stars_within_FOV['X3']*xpixel
-    stars_within_FOV['Y4'] = h/2-stars_within_FOV['Y3']*ypixel
+    stars_within_FOV['Y4'] = h/2+stars_within_FOV['Y3']*ypixel
     
     # add positional noise if needed
     if pos_noise_std > 0:
@@ -195,8 +200,8 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
         stars.append([star_ids[i], (round(y, 3), round(x, 3)), star_magnitudes[i]])
 
     # add false stars with random magitudes at random positions
-    if num_false_star > 0:
-        img, false_stars = add_false_stars(img, num_false_star, np.array(star_positions))
+    if ratio_false_star > 0:
+        img, false_stars = add_false_stars(img, max(1, int(ratio_false_star*len(star_ids))), np.array(star_positions))
         stars.extend(false_stars)
 
     # add white noise
@@ -206,15 +211,21 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
 
 
 if __name__ == '__main__':
-    # simulation accuracy check
-    col_list = ["Star ID", "RA", "DE", "Magnitude"]
-    df = pd.read_csv(catalogue_path, usecols=col_list)
-    for i in range(10):
-        ra, de = df.loc[i, 'RA'], df.loc[i, 'DE']
-        img, stars = create_star_image(ra, de, 0)
-        star_table = dict(map(lambda x: (x[1], x[0]), stars))
-        # when using the ra & de in star catalogue, one star must be placed in the center of image
-        if star_table.get((h/2, w/2), -1) == -1:
-            print(i, 'ra:', round(degrees(ra), 2), 'de:', round(degrees(de), 2), 'f:',f)
-            print(stars)
-            break
+    # # simulation accuracy check
+    # col_list = ["Star ID", "RA", "DE", "Magnitude"]
+    # df = pd.read_csv(catalogue_path, usecols=col_list)
+    # for i in range(10):
+    #     ra, de = df.loc[i, 'RA'], df.loc[i, 'DE']
+    #     img, stars = create_star_image(ra, de, 0, ratio_false_star=0)
+    #     star_table = dict(map(lambda x: (x[1], x[0]), stars))
+    #     # when using the ra & de in star catalogue, one star must be placed in the center of image
+    #     if star_table.get((h/2, w/2), -1) == -1:
+    #         print(i, 'ra:', round(degrees(ra), 2), 'de:', round(degrees(de), 2), 'f:',f)
+    #         print(stars)
+    #         break
+    
+    # simulate one image
+    ra, de = radians(249.2104), radians(-12.0386)
+    roll = radians(-13.3845)
+    img, stars = create_star_image(ra, de, roll, ratio_false_star=0)
+    cv2.imwrite(f'{sim_cfg}.png', img)

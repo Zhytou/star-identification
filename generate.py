@@ -62,7 +62,7 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
         database = []
         for ra, de in zip(gcatalogue.loc[idxs, 'RA'], gcatalogue.loc[idxs, 'DE']):
             # star_info is a list of [star_ids[i], (row, col), star_magnitudes[i]]
-            img, star_info = create_star_image(ra, de, 0)
+            img, star_info = create_star_image(ra, de, 0, pure_point=not use_preprocess)
             # generate star_table: (row, col) -> star_id
             star_table = dict(map(lambda x: (x[1], x[0]), star_info))
             # get the centroids of the stars in the image
@@ -224,7 +224,7 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
         df.to_csv(f'{path}/{method}.csv', index=False)
 
 
-def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, idxs: list, use_preprocess: bool, pos_noise_std: float, mv_noise_std: float, num_false_star: int):
+def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, idxs: list, use_preprocess: bool, pos_noise_std: float, mv_noise_std: float, ratio_false_star: float):
     '''
         Generate radial and cyclic features dataset for NN model using the given star catalogue.
     Args:
@@ -247,7 +247,7 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
         idxs: the indexes of star catalogue used to generate dataset
         pos_noise_std: the standard deviation of the positional noise
         mv_noise_std: the standard deviation of the magnitude noise
-        num_false_star: the number of false stars
+        ratio_false_star: the number of false stars
     Returns:
         df: the dataset
     '''
@@ -268,7 +268,7 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
     # generate the star image
     for ra, de in zip(ras, des):
         # star_info is a list of [star_ids[i], (row, col), star_magnitudes[i]]
-        img, star_info = create_star_image(ra, de, 0, pos_noise_std=pos_noise_std, mv_noise_std=mv_noise_std, num_false_star=num_false_star)
+        img, star_info = create_star_image(ra, de, 0, pos_noise_std=pos_noise_std, mv_noise_std=mv_noise_std, ratio_false_star=ratio_false_star, pure_point=not use_preprocess)
         # generate star_table: (row, col) -> star_id
         star_table = dict(map(lambda x: (x[1], x[0]), star_info))
         
@@ -362,7 +362,7 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
     return pd.DataFrame(labels)
 
 
-def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool = False, pos_noise_std: float = 0, mv_noise_std: float = 0, num_false_star: int = 0):
+def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool = False, pos_noise_std: float = 0, mv_noise_std: float = 0, ratio_false_star: float = 0):
     '''
         Generate pattern match test case.
     Args:
@@ -394,7 +394,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
         use_preprocess: whether to avoid the error resulted from get_star_centroids function in preprocess stage
         pos_noise_std: the standard deviation of the positional noise
         mv_noise_std: the standard deviation of the magnitude noise
-        num_false_star: the number of false stars
+        ratio_false_star: the number of false stars
     Returns:
         dict: method->dataframe
     '''
@@ -409,9 +409,10 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
     # generate the star image
     for ra, de in zip(ras, des):
         # star_info is a list of [star_ids[i], (row, col), star_magnitudes[i]]
-        img, star_info = create_star_image(ra, de, 0, pos_noise_std=pos_noise_std, mv_noise_std=mv_noise_std, num_false_star=num_false_star)
+        img, star_info = create_star_image(ra, de, 0, pos_noise_std=pos_noise_std, mv_noise_std=mv_noise_std, ratio_false_star=ratio_false_star, pure_point=not use_preprocess)
         # generate star_table: (row, col) -> star_id
         star_table = dict(map(lambda x: (x[1], x[0]), star_info))
+
         # get the centroids of the stars in the image
         if use_preprocess:
             stars = np.array(get_star_centroids(img))
@@ -599,14 +600,14 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                     })                    
                 else:
                     print('Invalid method')
-    
+
     # convert the results into dataframe
     for key in patterns:
         patterns[key] = pd.DataFrame(patterns[key])
     return patterns
 
 
-def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, default_ratio: float, pos_noise_stds: list = [], mv_noise_stds: list = [], num_false_stars: list = [], num_thread: int = 40, fine_grained: bool = False):
+def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, default_ratio: float, pos_noise_stds: list = [], mv_noise_stds: list = [], ratio_false_stars: list = [], num_thread: int = 40, fine_grained: bool = False):
     '''
         Aggregate the dataset. Firstly, the number of samples for each class is counted. Then, roughly generate classes with too few samples using generate_nn_dataset function's 'random' mode. Lastly, the rest are finely generated to ensure that the number of samples in each class in the entire dataset reaches the standard.
     Args:
@@ -624,7 +625,7 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
         default_ratio: the ratio of default dataset versus total dataset
         pos_noise_stds: list of positional noise
         mv_noise_stds: list of magnitude noise
-        num_false_stars: list of false star number
+        ratio_false_stars: list of false star ratio
         num_thread: the number of threads to generate the dataset
     '''
 
@@ -663,16 +664,16 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
                 # aggregate the dataset
                 df = pd.concat(dfs, ignore_index=True)
                 dfs.clear()
-
+                
+                # truncate and store the dataset
+                df = df.groupby(col_name, group_keys=False).apply(lambda x: x.sample(n=min(len(x), types[key])))
+                df.to_csv(f'{path}/{file_name}', index=False)
+                                
                 # print dataset distribution per class
                 if col_name:
                     df_info = df[col_name].value_counts()
-                    print(key, len(df_info))
-                    print(df_info.tail(3))
-                
-                # truncate and store the dataset
-                df = df.groupby(col_name).apply(lambda x: x.sample(n=min(len(x), types[key])))
-                df.to_csv(f'{path}/{file_name}', index=False)
+                    print(method, key, len(df_info))
+                    print(df_info.tail(5))
 
     def parse_params(s: str):
         '''
@@ -682,9 +683,9 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
         Returns:
             pns: the positional noise standard deviation
             mns: the magnitude noise standard deviation
-            nfs: the number of false stars
+            rfs: the ratio of false stars
         '''
-        pns, mns, nfs = 0, 0, 0
+        pns, mns, rfs = 0, 0, 0
         match = re.match('.+\/(pos|mv|fs)([0-9]+\.?[0-9]*)', s)
         if match:
             test_type, number = match.groups()
@@ -693,8 +694,8 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
             elif test_type == 'mv':
                 mns = float(number)
             else:  # test_type == 'fs'
-                nfs = int(number)
-        return pns, mns, nfs
+                rfs = float(number)
+        return pns, mns, rfs
 
     def aggregate_root_dir(root_dirs: dict):
         '''
@@ -714,16 +715,16 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
     pool = ThreadPoolExecutor(max_workers=num_thread)
     
     # generate config for each dataset
-    if len(pos_noise_stds)+len(mv_noise_stds)+len(num_false_stars) > 0:
-        noised_ratio = (1-default_ratio)/(len(pos_noise_stds)+len(mv_noise_stds)+len(num_false_stars))
+    if len(pos_noise_stds)+len(mv_noise_stds)+len(ratio_false_stars) > 0:
+        noised_ratio = (1-default_ratio)/(len(pos_noise_stds)+len(mv_noise_stds)+len(ratio_false_stars))
     names = list(types.keys())
     for name in names:
         for pns in pos_noise_stds:
             types[f'{name}/pos{pns}'] = max(int(types[name]*noised_ratio), 1)
         for mns in mv_noise_stds:
             types[f'{name}/mv{mns}'] = max(int(types[name]*noised_ratio), 1)
-        for nfs in num_false_stars:
-            types[f'{name}/fs{nfs}'] = max(int(types[name]*noised_ratio), 1)
+        for rfs in ratio_false_stars:
+            types[f'{name}/fs{rfs}'] = max(int(types[name]*noised_ratio), 1)
         types[f'{name}/default'] = max(int(types.pop(name)*default_ratio), 1)
     print(types)
 
@@ -763,8 +764,9 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
                     avg_num = 0
                 else:
                     avg_num = np.sum(types[key]-df[df < types[key]])/len(df[df < types[key]])
-                print(key, ' pct: ', pct, ' len(df[df < types[key]]): ', len(df[df < types[key]]), ' avg_num:', avg_num)
-                if pct > 0.9 and avg_num <= 1:
+                print(method, key, ' pct: ', pct, ' len(df[df < types[key]]): ', len(df[df < types[key]]), ' avg_num:',
+                       avg_num)
+                if pct > 0.95 or avg_num <= 1:
                     print(f'{key} skip rough generation!')
                     continue
                 if avg_num < 1:
@@ -772,14 +774,14 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
             else:
                 avg_num = types[key]
             # parse parameters
-            pos_noise_std, mv_noise_std, num_false_star = parse_params(key)
+            pos_noise_std, mv_noise_std, ratio_false_star = parse_params(key)
 
             # roughly generate the samples for each class        
-            num_round = min(num_thread//4, int(avg_num))
+            num_round = min(num_thread//4, int(avg_num), int((1-pct)*len(gcatalogue)))
             num_vec = 1000
             
             for _ in range(num_round):
-                task = pool.submit(generate_nn_dataset, method, gen_params[method], 'random', num_vec, [], use_preprocess, pos_noise_std, mv_noise_std, num_false_star)
+                task = pool.submit(generate_nn_dataset, method, gen_params[method], 'random', num_vec, [], use_preprocess, pos_noise_std, mv_noise_std, ratio_false_star)
                 tasks[method][key].append(task)
 
     # wait for all tasks to be done and merge the results
@@ -805,7 +807,7 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
             idxs = df.index.repeat(types[key]-df).to_list()
             print(len(df), len(idxs), idxs[:3], idxs[-3:])
             # parse parameters
-            pos_noise_std, mv_noise_std, num_false_star = parse_params(key)
+            pos_noise_std, mv_noise_std, ratio_false_star = parse_params(key)
 
             # for class whose sample less than num_sample_per_class, generate the dataset til the number of samples reach the standard
             if len(idxs) > 1000:
@@ -821,7 +823,7 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
                 beg, end = i*len_td, min((i+1)*len_td, len(idxs))
                 if beg >= end:
                     continue
-                task = pool.submit(generate_nn_dataset, method, gen_params[method], 'supplementary', 0, idxs[beg: end], use_preprocess, pos_noise_std, mv_noise_std, num_false_star)
+                task = pool.submit(generate_nn_dataset, method, gen_params[method], 'supplementary', 0, idxs[beg: end], use_preprocess, pos_noise_std, mv_noise_std, ratio_false_star)
                 tasks[method][key].append(task)
         
     wait_tasks(tasks, root_dirs, 'labels.csv', 'cata_idx')
@@ -830,12 +832,12 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
     aggregate_root_dir(root_dirs)
 
 
-def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool = False, pos_noise_stds: list = [], mv_noise_stds: list = [], num_false_stars: list = [], num_thread: int = 20):
+def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool = False, generate_default: bool = True, pos_noise_stds: list = [], mv_noise_stds: list = [], ratio_false_stars: list = [], num_thread: int = 20):
     '''
     Aggregate the test samples. 
     Args:
         num_vec: number of vectors used to generate test samples
-        gen_params: the parameters for the test sample generation
+        gen_params: the parameters for the test sample generation, possible methods include:
             'proposed':
                 r: the radius of the region in degrees
                 Nr: the number of rings
@@ -860,9 +862,10 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
                 Nr: the number of rings
                 Ns: the number of sectors
         use_preprocess: whether to avoid the error resulted from get_star_centroids function in preprocess stage
+        generate_default: whether to generate test samples for default case
         pos_noise_stds: list of positional noise
         mv_noise_stds: list of magnitude noise
-        num_false_stars: list of false star number
+        ratio_false_stars: list of false star number
         num_thread: the number of threads to generate the test samples
     '''
 
@@ -881,16 +884,17 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
     for _ in range(num_thread):
         task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess)
-        tasks['default'].append(task)
+        if generate_default:
+            tasks['default'].append(task)
         for pns in pos_noise_stds:
             task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, pos_noise_std=pns)
             tasks[f'pos{pns}'].append(task)
         for mns in mv_noise_stds:
             task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, mv_noise_std=mns)
             tasks[f'mv{mns}'].append(task)
-        for nfs in num_false_stars:
-            task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, num_false_star=nfs)
-            tasks[f'fs{nfs}'].append(task)
+        for rfs in ratio_false_stars:
+            task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, ratio_false_star=rfs)
+            tasks[f'fs{rfs}'].append(task)
 
     # get the async task result and store the returned dataframe
     for key in tasks.keys():
@@ -922,6 +926,7 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
 
 if __name__ == '__main__':
-    # generate_pm_database({'grid': [0, 6, 60], 'lpt': [0, 6, 60, 60]})
-    # aggregate_nn_dataset({'train': 50, 'validate': 5, 'test': 5}, {'lpt_nn': [6, 25]}, use_preprocess=False, default_ratio=0.7, pos_noise_stds=[3], mv_noise_stds=[0.3, 0.5], num_false_stars=[5], fine_grained=True)
-    aggregate_test_samples(200, {'proposed': [6, 50, 16, 3], 'lpt_nn': [6, 25]}, use_preprocess=False, pos_noise_stds=[0.5, 1, 1.5, 2, 2.5], mv_noise_stds=[0.1, 0.2, 0.3, 0.4, 0.5], num_false_stars=[1, 2, 3, 4, 5])
+    # generate_pm_database({'grid': [0, 6, 50], 'lpt': [0, 6, 50, 50]})
+    # aggregate_nn_dataset({'train': 50, 'test': 5}, {'proposed': [6, 50, 16, 3]}, use_preprocess=False, default_ratio=0.5, pos_noise_stds=[3], mv_noise_stds=[0.3],ratio_false_stars=[0.3], fine_grained=True, num_thread=20)
+    # aggregate_test_samples(1000, {'proposed': [6, 50, 16, 3], 'lpt_nn': [6, 50]}, use_preprocess=False, generate_default=False, mv_noise_stds=[0.1, 0.2, 0.3, 0.4, 0.5], pos_noise_stds=[0.5, 1, 1.5, 2, 2.5])
+    aggregate_test_samples(100, {'grid': [0, 6, 50], 'lpt': [0, 6, 50, 50]}, use_preprocess=False, generate_default=False, ratio_false_stars=[0.1, 0.2, 0.3, 0.4, 0.5])

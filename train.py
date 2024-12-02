@@ -124,7 +124,7 @@ if __name__ == '__main__':
     # training setting
     batch_size = 128
     num_epochs = 10
-    learning_rate = 0.003
+    learning_rate = 0.001
     # use gpu if available
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f'Using device: {device}')
@@ -132,7 +132,9 @@ if __name__ == '__main__':
 
     for method in os.listdir(dataset_path):
         for gen_cfg in os.listdir(os.path.join(dataset_path, method)):
-            if method == 'lpt_nn' and gen_cfg != 'SAO5.6_15_20_0_6_25':
+            # if method != 'lpt_nn' or gen_cfg != 'SAO5.6_15_20_0_6_50':
+            #     continue
+            if method != 'proposed':
                 continue
             print(f'Method: {method}, Generate config: {gen_cfg}')
             

@@ -133,8 +133,8 @@ def check_nn_accuracy(method: str, model: nn.Module, loader: DataLoader, img_ids
 
     # the percentage of star images that have at least three correctly predicted samples
     test_info = img_ids.value_counts()
-    cnt = sum(v >= 3 for v in freqs.values())
-    tot = len(test_info) - len(test_info[test_info<3])
+    cnt = sum(v >= 4 for v in freqs.values())
+    tot = len(test_info) - len(test_info[test_info<4])
     acc = round(100.0*cnt/tot, 2)
 
     return acc
@@ -144,7 +144,7 @@ if __name__ == '__main__':
     res = {}
 
     # conventional pattern match method accuracy
-    for method in []:
+    for method in ['grid', 'lpt']:
         res[method] = {}
         for gen_cfg in os.listdir(os.path.join(test_path, method)):
             db = pd.read_csv(os.path.join(database_path, gen_cfg, f'{method}.csv'))
@@ -168,7 +168,7 @@ if __name__ == '__main__':
                     res[method][name].append((x, y))
             
     # nn model accuracy
-    for method in ['proposed', 'lpt_nn']:
+    for method in []:
         res[method] = {}
         batch_size = 100
         # use gpu if available

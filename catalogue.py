@@ -237,7 +237,7 @@ if __name__ == '__main__':
     draw_star_distribution(filtered_df, axs1[1], "Filtered")
 
     fig2, axs2 = plt.subplots(2)
-    # draw_probability_versus_star_num_within_FOV(df, axs2[0], "Original", FOV=FOV, f=f)
+    draw_probability_versus_star_num_within_FOV(df, axs2[0], "Original", FOV=FOV, f=f, num_vec=1000)
     draw_probability_versus_star_num_within_FOV(filtered_df, axs2[1], "Filtered", FOV=FOV, f=f, num_vec=1000)
 
     plt.show()
