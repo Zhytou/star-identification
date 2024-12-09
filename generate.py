@@ -236,12 +236,12 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
         gen_params:
             'rac_1dcnn':
                 r: the radius of the region in degrees
-                Nr: the number of rings
+                arr_Nr: the array of ring number
                 Ns: the number of sectors
-                Nn: the amount of reference star to construct cyclic feature
+                Nn: the number of reference neighboring star needed to construct cyclic feature
             'daa_1dcnn':
                 r: the radius of the region in degrees
-                arr: an array of histgram bins number for discretizing the feature sequences
+                arr_N: an array of histgram bins number for discretizing the feature sequences
             'lpt_nn':
                 r: the radius of the region in degrees
                 Nd: the number of distance bins
@@ -316,7 +316,7 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
             }
             if method == 'rac_1dcnn':
                 # parse the parameters:
-                r, Nr, Ns, Nn = gen_params
+                r, arr_Nr, Ns, Nn = gen_params
                 # calculate the radius in pixels
                 R = r/FOV*w
                 if star[0] < R/2 or star[0] > h-R/2 or star[1] < R/2 or star[1] > w-R/2:
@@ -327,10 +327,14 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
                 if len(ags) == 0:
                     continue
 
-                # count the number of stars in each ring
-                r_cnts, _ = np.histogram(ds, bins=Nr, range=(0, R))
-                for i, rc in enumerate(r_cnts):
-                    label[f'ring{i}'] = rc
+                tot_Nr = 0
+                for Nr in arr_Nr:
+                    # count the number of stars in each ring
+                    r_cnts, _ = np.histogram(ds, bins=Nr, range=(0, R))
+                    for i, rc in enumerate(r_cnts):
+                        i = tot_Nr+i
+                        label[f'ring{i}'] = rc
+                    tot_Nr += Nr
                 # uses several neighbor stars as the starting angle to obtain the cyclic features
                 for i, ag in enumerate(ags[:Nn]):
                     # make sure all angles stay in [-pi, pi] after rotating the first angle to 0 degree
@@ -349,7 +353,7 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
                 labels.append(label)
             elif method == 'daa_1dcnn':
                 # parse the parameters:
-                r, N = gen_params
+                r, arr_N = gen_params
                 # calculate the radius in pixels
                 R = r/FOV*w
                 if star[0] < R/2 or star[0] > h-R/2 or star[1] < R/2 or star[1] > w-R/2:
@@ -369,15 +373,18 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
                     label[f'stat{i}'] = stat
 
                 # discretize the feature sequence(distances and angles) with different levels
-                for n in N:
+                tot_N = 0
+                for N in arr_N:
                     # density is set True
-                    d_pdf, _ = np.histogram(ds, bins=n, range=(0, R), density=True)
+                    d_pdf, _ = np.histogram(ds, bins=N, range=(0, R), density=True)
                     for i, p in enumerate(d_pdf):
+                        i += tot_N
                         label[f'dist{i}'] = p
-                    a_pdf, _ = np.histogram(ags, bins=n, range=(-np.pi, np.pi), density=True)
+                    a_pdf, _ = np.histogram(ags, bins=N, range=(-np.pi, np.pi), density=True)
                     for i, p in enumerate(a_pdf):
+                        i += tot_N
                         label[f'angle{i}'] = p
-                
+                    tot_N += N
                 labels.append(label)
             elif method == 'lpt_nn':
                 # parse the parameters:
@@ -407,9 +414,12 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
         gen_params: the parameters for the test sample generation
             'rac_1dcnn':
                 r: the radius of the region in degrees
-                Nr: the number of rings
+                arr_Nr: the array of ring number
                 Ns: the number of sectors
                 Nn: the minimum number of neighbor stars in the region
+            'rac_1dcnn':
+                r: the radius of the region in degrees
+                arr_N: the array of histgram bins number for discretizing the feature sequences
             'lpt_nn': 
                 r: the radius of the region in degrees
                 Nd: the number of distance bins
@@ -498,7 +508,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
             for method in methods:
                 if method == 'rac_1dcnn':
                     # parse the parameters
-                    r, Nr, Ns, Nn = gen_params[method]
+                    r, arr_Nr, Ns, Nn = gen_params[method]
                     # radius in pixels
                     R = r/FOV*w
                     if star[0] < R/2 or star[0] > h-R/2 or star[1] < R/2 or star[1] > w-R/2:
@@ -510,10 +520,15 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                         'cata_idx': cata_idx,
                         'img_id': img_id
                     }
-                    r_cnts, _ = np.histogram(ds, bins=Nr, range=(0, R))
-                    for i, rc in enumerate(r_cnts):
-                        pattern[f'ring{i}'] = rc
-
+                    
+                    tot_Nr = 0
+                    for Nr in arr_Nr:
+                        r_cnts, _ = np.histogram(ds, bins=Nr, range=(0, R))
+                        for i, rc in enumerate(r_cnts):
+                            i += tot_Nr
+                            pattern[f'ring{i}'] = rc
+                        tot_Nr += Nr
+                    
                     # exlcude stars' angle out of region
                     excl_ags = ags[ds <= R]
                     # uses several neighbor stars as the starting angle to obtain the cyclic features
@@ -534,6 +549,48 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                             for j in range(Ns):
                                 pattern[f'n{i}_sector{j}'] = 0
 
+                    patterns[method].append(pattern)
+                elif method == 'daa_1dcnn':
+                    # parse the parameters
+                    r, arr_N = gen_params[method]
+                    # radius in pixels
+                    R = r/FOV*w
+                    if star[0] < R/2 or star[0] > h-R/2 or star[1] < R/2 or star[1] > w-R/2:
+                        continue
+                    # get catalogue index of the guide star
+                    cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
+                    pattern = {
+                        'star_id': star_id,
+                        'cata_idx': cata_idx,
+                        'img_id': img_id
+                    }
+
+                    # exclude angles and distances outside the region
+                    excl_ds, excl_ags = ds[ds <= R], ags[ds <= R]
+                    # skip if only the reference star in the region
+                    if len(ags) == 0:
+                        continue
+
+                    # statistics of distances and angles
+                    stats = []
+                    for seq in [excl_ds, excl_ags]:
+                        stats.extend([np.min(seq), np.max(seq), np.median(seq), np.mean(seq)])
+                    for i, stat in enumerate(stats):
+                        pattern[f'stat{i}'] = stat
+
+                    # discretize the feature sequence(distances and angles) with different levels
+                    tot_N = 0
+                    for N in arr_N:
+                        # density is set True
+                        d_pdf, _ = np.histogram(excl_ds, bins=N, range=(0, R), density=True)
+                        for i, p in enumerate(d_pdf):
+                            i += tot_N
+                            pattern[f'dist{i}'] = p
+                        a_pdf, _ = np.histogram(excl_ags, bins=N, range=(-np.pi, np.pi), density=True)
+                        for i, p in enumerate(a_pdf):
+                            i += tot_N
+                            pattern[f'angle{i}'] = p
+                        tot_N += N
                     patterns[method].append(pattern)
                 elif method == 'lpt_nn':
                     # parse the parameters
@@ -652,9 +709,12 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
         gen_params: the parameters for the test sample generation
             'rac_1dcnn': 
                 rp: the radius of the pattern region in degrees
-                Nr: the number of rings
+                arr_Nr: the array of ring number
                 Ns: the number of sectors
                 Nn: the number of neighbor stars
+            'daa_1dcnn':
+                rp: the radius of the pattern region in degrees
+                arr_N: an array of histgram bins number for discretizing the feature sequences
             'lpt_nn':
                 rp: the radius of the pattern region in degrees
                 Nd: the number of distance bins
@@ -772,13 +832,13 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
     for method in gen_params:
         if method == 'rac_1dcnn':
             # parse parameters: radius, number of rings, number of sectors, number of neighbors
-            r, Nr, Ns, Nn = gen_params[method]
+            r, arr_Nr, Ns, Nn = gen_params[method]
             # generate config
-            gen_cfg = f'{gcata_name}_{int(use_preprocess)}_{r}_{Nr}_{Ns}_{Nn}'
+            gen_cfg = f'{gcata_name}_{int(use_preprocess)}_{r}_{arr_Nr}_{Ns}_{Nn}'
         elif method == 'daa_1dcnn':
-            r, N = gen_params[method]
+            r, arr_N = gen_params[method]
             # generate config
-            gen_cfg = f'{gcata_name}_{int(use_preprocess)}_{r}_{N[0]}'
+            gen_cfg = f'{gcata_name}_{int(use_preprocess)}_{r}_{arr_N}'
         elif method == 'lpt_nn':
             r, Nd = gen_params[method]
             # generate config
@@ -882,9 +942,12 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
         gen_params: the parameters for the test sample generation, possible methods include:
             'rac_1dcnn':
                 r: the radius of the region in degrees
-                Nr: the number of rings
+                arr_Nr: the array of ring number
                 Ns: the number of sectors
                 Nn: the minimum number of neighbor stars in the region
+            'rac_1dcnn':
+                r: the radius of the region in degrees
+                arr_N: the array of histgram bins number for discretizing the feature sequences
             'lpt_nn': 
                 r: the radius of the region in degrees
                 Nd: the number of distance bins
