@@ -229,10 +229,11 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
         Generate radial and cyclic features dataset for NN model using the given star catalogue.
     Args:
         method: the method used to generate the dataset
-            'proposed': proposed algorithm
+            'rac_1dcnn': the 1st proposed algorithm
+            'daa_1dcnn': the 2nd proposed algorithm
             'lpt_nn': log-polar transform based NN algorithm
         gen_params:
-            'proposed':
+            'rac_1dcnn':
                 r: the radius of the region in degrees
                 Nr: the number of rings
                 Ns: the number of sectors
@@ -309,7 +310,7 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
                 'cata_idx': cata_idx,
                 'img_id': img_id
             }
-            if method == 'proposed':
+            if method == 'rac_1dcnn':
                 # parse the parameters:
                 r, Nr, Ns, Nn = gen_params
                 # calculate the radius in pixels
@@ -368,7 +369,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
     Args:
         num_vec: the number of vectors to be generated
         gen_params: the parameters for the test sample generation
-            'proposed':
+            'rac_1dcnn':
                 r: the radius of the region in degrees
                 Nr: the number of rings
                 Ns: the number of sectors
@@ -459,7 +460,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
 
             methods = list(gen_params.keys())
             for method in methods:
-                if method == 'proposed':
+                if method == 'rac_1dcnn':
                     # parse the parameters
                     r, Nr, Ns, Nn = gen_params[method]
                     # radius in pixels
@@ -613,7 +614,7 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
     Args:
         types: key->the types of the dataset, values->the minumin number of samples for each class
         gen_params: the parameters for the test sample generation
-            'proposed': 
+            'rac_1dcnn': 
                 rp: the radius of the pattern region in degrees
                 Nr: the number of rings
                 Ns: the number of sectors
@@ -733,7 +734,7 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
     # the root directory for each method to store the dataset
     root_dirs = {}
     for method in gen_params:
-        if method == 'proposed':
+        if method == 'rac_1dcnn':
             # parse parameters: radius, number of rings, number of sectors, number of neighbors
             r, Nr, Ns, Nn = gen_params[method]
             # generate config
@@ -750,7 +751,7 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
         for key in types.keys():
             # reuse old samples
             files = []
-            # the storage path for each method's old samples, e.g /dataset_path/proposed/xxx/train/mv1 
+            # the storage path for each method's old samples, e.g /dataset_path/rac_1dcnn/xxx/train/mv1 
             path = os.path.join(dataset_path, method, gen_cfg, key)
             if os.path.exists(path):
                 files = os.listdir(path)
@@ -838,7 +839,7 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
     Args:
         num_vec: number of vectors used to generate test samples
         gen_params: the parameters for the test sample generation, possible methods include:
-            'proposed':
+            'rac_1dcnn':
                 r: the radius of the region in degrees
                 Nr: the number of rings
                 Ns: the number of sectors
@@ -927,6 +928,6 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
 if __name__ == '__main__':
     # generate_pm_database({'grid': [0, 6, 50], 'lpt': [0, 6, 50, 50]})
-    # aggregate_nn_dataset({'train': 50, 'test': 5}, {'proposed': [6, 50, 16, 3]}, use_preprocess=False, default_ratio=0.5, pos_noise_stds=[3], mv_noise_stds=[0.3],ratio_false_stars=[0.3], fine_grained=True, num_thread=20)
-    # aggregate_test_samples(1000, {'proposed': [6, 50, 16, 3], 'lpt_nn': [6, 50]}, use_preprocess=False, generate_default=False, mv_noise_stds=[0.1, 0.2, 0.3, 0.4, 0.5], pos_noise_stds=[0.5, 1, 1.5, 2, 2.5])
+    # aggregate_nn_dataset({'train': 50, 'test': 5}, {'rac_1dcnn': [6, 50, 16, 3]}, use_preprocess=False, default_ratio=0.5, pos_noise_stds=[3], mv_noise_stds=[0.3],ratio_false_stars=[0.3], fine_grained=True, num_thread=20)
+    # aggregate_test_samples(1000, {'rac_1dcnn': [6, 50, 16, 3], 'lpt_nn': [6, 50]}, use_preprocess=False, generate_default=False, mv_noise_stds=[0.1, 0.2, 0.3, 0.4, 0.5], pos_noise_stds=[0.5, 1, 1.5, 2, 2.5])
     aggregate_test_samples(100, {'grid': [0, 6, 50], 'lpt': [0, 6, 50, 50]}, use_preprocess=False, generate_default=False, ratio_false_stars=[0.1, 0.2, 0.3, 0.4, 0.5])
