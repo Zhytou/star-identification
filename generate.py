@@ -12,7 +12,7 @@ from preprocess import get_star_centroids
 
 
 # guide star catalogue for pattern match database and nn dataset generation
-gcata_path = 'catalogue/SAO5.6_15_20.csv'
+gcata_path = 'catalogue/sao5.6_15_20.csv'
 # use for generation config
 gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
 # guide star catalogue
@@ -46,6 +46,7 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
                 rr: the radius of pattern region for radial features in degrees
                 rc: the radius of pattern region for cyclic features in degrees
                 Nr: the number of rings
+                (the amount of sectors to construct cyclic feature is fixed to 8)
         use_preprocess: whether to avoid the error resulted from get_star_centroids function in preprocess stage
     '''
     
@@ -237,7 +238,10 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
                 r: the radius of the region in degrees
                 Nr: the number of rings
                 Ns: the number of sectors
-                Nn: the minimum number of neighbor stars in the region
+                Nn: the amount of reference star to construct cyclic feature
+            'daa_1dcnn':
+                r: the radius of the region in degrees
+                arr: an array of histgram bins number for discretizing the feature sequences
             'lpt_nn':
                 r: the radius of the region in degrees
                 Nd: the number of distance bins
@@ -342,6 +346,38 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
                     for i in range(len(ags), Nn):
                         for j in range(Ns):
                             label[f'n{i}_sector{j}'] = 0
+                labels.append(label)
+            elif method == 'daa_1dcnn':
+                # parse the parameters:
+                r, N = gen_params
+                # calculate the radius in pixels
+                R = r/FOV*w
+                if star[0] < R/2 or star[0] > h-R/2 or star[1] < R/2 or star[1] > w-R/2:
+                    continue
+                # exclude angles and distances outside the region
+                ags = ags[ds <= R]
+                ds = ds[ds <= R]
+                # skip if only the reference star in the region
+                if len(ags) == 0:
+                    continue
+
+                # statistics of distances and angles
+                stats = []
+                for seq in [ds, ags]:
+                    stats.extend([np.min(seq), np.max(seq), np.median(seq), np.mean(seq)])
+                for i, stat in enumerate(stats):
+                    label[f'stat{i}'] = stat
+
+                # discretize the feature sequence(distances and angles) with different levels
+                for n in N:
+                    # density is set True
+                    d_pdf, _ = np.histogram(ds, bins=n, range=(0, R), density=True)
+                    for i, p in enumerate(d_pdf):
+                        label[f'dist{i}'] = p
+                    a_pdf, _ = np.histogram(ags, bins=n, range=(-np.pi, np.pi), density=True)
+                    for i, p in enumerate(a_pdf):
+                        label[f'angle{i}'] = p
+                
                 labels.append(label)
             elif method == 'lpt_nn':
                 # parse the parameters:
@@ -739,6 +775,10 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
             r, Nr, Ns, Nn = gen_params[method]
             # generate config
             gen_cfg = f'{gcata_name}_{int(use_preprocess)}_{r}_{Nr}_{Ns}_{Nn}'
+        elif method == 'daa_1dcnn':
+            r, N = gen_params[method]
+            # generate config
+            gen_cfg = f'{gcata_name}_{int(use_preprocess)}_{r}_{N[0]}'
         elif method == 'lpt_nn':
             r, Nd = gen_params[method]
             # generate config
@@ -755,6 +795,7 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
             path = os.path.join(dataset_path, method, gen_cfg, key)
             if os.path.exists(path):
                 files = os.listdir(path)
+            pct = 0
             if len(files) > 0:
                 df = pd.concat([pd.read_csv(os.path.join(path, file)) for file in files if file != 'labels.csv'])
                 df.to_csv(os.path.join(path, 'labels.csv'), index=False)
@@ -780,7 +821,7 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
             # roughly generate the samples for each class        
             num_round = min(num_thread//4, int(avg_num), int((1-pct)*len(gcatalogue)))
             num_vec = 1000
-            
+            print('random generate round: ', num_round)
             for _ in range(num_round):
                 task = pool.submit(generate_nn_dataset, method, gen_params[method], 'random', num_vec, [], use_preprocess, pos_noise_std, mv_noise_std, ratio_false_star)
                 tasks[method][key].append(task)
@@ -928,6 +969,6 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
 if __name__ == '__main__':
     # generate_pm_database({'grid': [0, 6, 50], 'lpt': [0, 6, 50, 50]})
-    # aggregate_nn_dataset({'train': 50, 'test': 5}, {'rac_1dcnn': [6, 50, 16, 3]}, use_preprocess=False, default_ratio=0.5, pos_noise_stds=[3], mv_noise_stds=[0.3],ratio_false_stars=[0.3], fine_grained=True, num_thread=20)
+    aggregate_nn_dataset({'train': 1}, {'daa_1dcnn': [6, [5]]}, use_preprocess=False, default_ratio=1, fine_grained=False, num_thread=4)
     # aggregate_test_samples(1000, {'rac_1dcnn': [6, 50, 16, 3], 'lpt_nn': [6, 50]}, use_preprocess=False, generate_default=False, mv_noise_stds=[0.1, 0.2, 0.3, 0.4, 0.5], pos_noise_stds=[0.5, 1, 1.5, 2, 2.5])
-    aggregate_test_samples(100, {'grid': [0, 6, 50], 'lpt': [0, 6, 50, 50]}, use_preprocess=False, generate_default=False, ratio_false_stars=[0.1, 0.2, 0.3, 0.4, 0.5])
+    # aggregate_test_samples(100, {'grid': [0, 6, 50], 'lpt': [0, 6, 50, 50]}, use_preprocess=False, generate_default=False, ratio_false_stars=[0.1, 0.2, 0.3, 0.4, 0.5])
