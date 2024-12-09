@@ -5,21 +5,30 @@ import matplotlib.pyplot as plt, matplotlib.axes._axes as axes
 from math import radians, sqrt, tan, sin, cos, pi
 
 
-def draw_star_distribution(catalogue: pd.DataFrame, ax: axes.Axes, title: str):
+def draw_star_distribution(catalogue: pd.DataFrame, title: str = '', ax: axes.Axes = None):
     '''
         Draw the distribution of stars in the celestial sphere.
     Args:
         catalogue: the star catalogue
-        ax: the axes to draw
         title: the title of the plot
+        ax: the axes to draw
     '''
     ras, des = np.degrees(catalogue['RA']), np.degrees(catalogue['DE'])
-    ax.scatter(ras, des, s=1)
-    ax.set_title(title)
-    ax.set_xlim(0, 360)
-    ax.set_ylim(-90, 90)
-    ax.set_xlabel('RA')
-    ax.set_ylabel('DE')
+    if ax == None:
+        plt.scatter(ras, des, s=1)
+        plt.title(title)
+        plt.xlim(0, 360)
+        plt.ylim(-90, 90)
+        plt.xlabel('RA')
+        plt.ylabel('DE')
+    else:
+        ax.scatter(ras, des, s=1)
+        ax.set_title(title)
+        ax.set_xlim(0, 360)
+        ax.set_ylim(-90, 90)
+        ax.set_xlabel('RA')
+        ax.set_ylabel('DE')    
+    plt.show()
 
 
 def get_rotation_matrix(ra: float, de: float, roll: float) -> np.ndarray:
@@ -46,7 +55,7 @@ def get_rotation_matrix(ra: float, de: float, roll: float) -> np.ndarray:
     return M
 
 
-def draw_probability_versus_star_num_within_FOV(catalogue: pd.DataFrame, ax: axes.Axes, title: str, FOV: int=20, f: float=58e-3, num_vec: int=100000):
+def draw_probability_versus_star_num_within_FOV(catalogue: pd.DataFrame, ax: axes.Axes = None, title: str = '', FOV: int=20, f: float=58e-3, num_vec: int=100000):
     '''
         Draw the probability distribution of the number of stars within FOV.
     Args:
@@ -103,13 +112,24 @@ def draw_probability_versus_star_num_within_FOV(catalogue: pd.DataFrame, ax: axe
     std = sqrt(sum([((num_star - avg)**2)*table[num_star] for num_star in num_stars])/num_vec)
     print('avg: ', avg, ' std: ', std)
 
-    ax.plot(num_stars, probability)
-    ax.vlines(avg, 0, 100, linestyles='dashed', colors='red')
-    ax.set_title(title)
-    ax.set_xlim(0, 100)
-    ax.set_ylim(0, 10)
-    ax.set_xlabel('Number of stars within FOV')
-    ax.set_ylabel('Probability%')
+    if ax == None:
+        plt.plot(num_stars, probability)
+        plt.vlines(avg, 0, 100, linestyles='dashed', colors='red')
+        plt.title(title)
+        plt.xlim(0, 100)
+        plt.ylim(0, 20)
+        plt.xlabel('Number of stars within FOV')
+        plt.ylabel('Probability%')
+    else:
+        ax.plot(num_stars, probability)
+        ax.vlines(avg, 0, 100, linestyles='dashed', colors='red')
+        ax.set_title(title)
+        ax.set_xlim(0, 100)
+        ax.set_ylim(0, 20)
+        ax.set_xlabel('Number of stars within FOV')
+        ax.set_ylabel('Probability%')
+    
+    plt.show()
 
 
 def parse_tdc_sao(file_path: str):
@@ -195,7 +215,7 @@ def parse_heasarc_sao(file_path: str, file_storage_path: str):
     '''
 
     if os.path.exists(file_storage_path):
-        return pd.read_csv(file_storage_path)
+        return pd.read_csv(file_storage_path, usecols=["Star ID", "RA", "DE", "Magnitude"])
 
     with open(file_path, 'r') as file:
         data_list = []
@@ -205,10 +225,13 @@ def parse_heasarc_sao(file_path: str, file_storage_path: str):
             cata_id = int(line[0:6])
             ra = float(line[183:193])
             de = float(line[193:204])
-            mag = float(line[80:84])
+            # photographic magnitude
+            pmag = float(line[76:80])
+            # visual magnitude
+            vmag = float(line[80:84])
 
             # print(len(line), cata_id, ra, de, mag)
-            data_list.append([cata_id, ra, de, mag])
+            data_list.append([cata_id, ra, de, vmag])
         
     df = pd.DataFrame(data_list, columns=["Star ID", "RA", "DE", "Magnitude"])
     df.to_csv(file_storage_path)
@@ -216,7 +239,7 @@ def parse_heasarc_sao(file_path: str, file_storage_path: str):
     return df
         
 
-def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.0, agd_limit: float=0.5, num_sector: int=4, FOV: int=20, f: float=58e-3, num_vec: int=100) -> pd.DataFrame:
+def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.0, agd_limit: float=0.5, num_sector: int=4, FOV: int=20, f: float=58e-3, num_vec: int=100, uniform: bool = True) -> pd.DataFrame:
     '''
         Filter navigation stars.
         Referred [1](http://www.opticsjournal.net/Articles/Abstract?aid=OJbf48ddeef697ba09)
@@ -226,6 +249,11 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.
         num_limit: minimum number of stars in each circular area
         mv_limit: the magnitude limit
         agd_limit: the angular distance limit in degrees(if two stars' angular distance is less than this limit, choose the brighter one)
+        num_sector: the number of sectors
+        FOV: the field of view in degrees
+        f: the focal length of the lens
+        num_vec: the number of vectors to be generated
+        uniform: whether to homogenize the stars in the celestial sphere
     Returns:    
         the filtered catalogue
     '''
@@ -273,6 +301,9 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.
     darker_idxs = list(darker_idxs)
     # eliminate the darker stars from small angular distance star pairs
     catalogue = catalogue[~catalogue.index.isin(darker_idxs)]
+
+    if not uniform:
+        return catalogue
 
     ras = np.arange(0, 2*pi, 2*pi/num_vec)
     des = np.arcsin(np.arange(-1, 1, 2/num_vec))
@@ -326,12 +357,13 @@ if __name__ == '__main__':
     FOV = 15
     f = 58e-3
     num_limit = 20
-    mv_limit = 5.3
+    mv_limit = 6.0
 
     raw_file = 'raw_catalogue/sao_j2000.dat'
     parsed_file = 'catalogue/sao.csv'
     limit_parsed_file = 'catalogue/sao7.0.csv'
-    filtered_file = f'catalogue/sao{mv_limit}_{FOV}_{num_limit}.csv'
+    filtered_file = f'catalogue/sao{mv_limit}_d.csv' # process double star and magnitude threshold
+    uniform_filtered_file = f'catalogue/sao{mv_limit}_{FOV}_{num_limit}.csv'
     old_file = 'old_catalogue/sao7.0.csv'
 
     df = parse_heasarc_sao(raw_file, parsed_file)
@@ -341,18 +373,27 @@ if __name__ == '__main__':
 
     old_df = pd.read_csv(old_file)
 
-    if os.path.exists(filtered_file):
-        filtered_df = pd.read_csv(filtered_file)
+    # if os.path.exists(filtered_file):
+    #     f_df = pd.read_csv(filtered_file)
+    # else:
+    #     f_df = filter_catalogue(df, num_limit, mv_limit, FOV=FOV, f=f, uniform=False).reset_index(drop=True)
+    #     f_df.to_csv(filtered_file)
+
+    # draw_probability_versus_star_num_within_FOV(f_df, FOV=FOV, f=f, num_vec=1000)
+
+    if os.path.exists(uniform_filtered_file):
+        uf_df = pd.read_csv(uniform_filtered_file)
     else:
-        filtered_df = filter_catalogue(df, num_limit, mv_limit, FOV=FOV, f=f).reset_index(drop=True)
-        filtered_df.to_csv(filtered_file)
+        uf_df = filter_catalogue(df, num_limit, mv_limit, FOV=FOV, f=f).reset_index(drop=True)
+        uf_df.to_csv(uniform_filtered_file)
+    
+    draw_star_distribution(uf_df)
+    # draw_probability_versus_star_num_within_FOV(uf_df, FOV=FOV, f=f, num_vec=1000)
 
-    fig1, axs1 = plt.subplots(2)
-    draw_star_distribution(df, axs1[0], "Original")
-    draw_star_distribution(filtered_df, axs1[1], "Filtered")
+    # fig1, axs1 = plt.subplots(1, 2)
+    # draw_star_distribution(df, axs1[0], "Original")
+    # draw_star_distribution(uf_df, axs1[1], "Filtered")
 
-    fig2, axs2 = plt.subplots(2)
-    draw_probability_versus_star_num_within_FOV(df, axs2[0], "Original", FOV=FOV, f=f, num_vec=1000)
-    draw_probability_versus_star_num_within_FOV(filtered_df, axs2[1], "Filtered", FOV=FOV, f=f, num_vec=1000)
-
-    plt.show()
+    # fig2, axs2 = plt.subplots(1, 2)
+    # draw_probability_versus_star_num_within_FOV(df, axs2[0], "Original", FOV=FOV, f=f, num_vec=1000)
+    # draw_probability_versus_star_num_within_FOV(uf_df, axs2[1], "Filtered", FOV=FOV, f=f, num_vec=1000)
