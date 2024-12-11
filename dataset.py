@@ -2,6 +2,7 @@ import os
 import torch
 import cv2
 import pandas as pd
+import numpy as np
 import torchvision.transforms as transforms
 from torch.utils.data import Dataset
 
@@ -96,3 +97,34 @@ class RACDataset(Dataset):
 
         return idx, torch.from_numpy(rings).float(), torch.from_numpy(sectors).float(), cata_idx
 
+
+class DAADataset(Dataset):
+    '''Distance and angular based NN dataset'''
+
+    def __init__(self, root_dir: str, gen_cfg: str):
+        '''
+        Args:
+            root_dir: name of the dataset directory
+            gen_cfg: name of the generator configuration
+        '''
+        label_file = os.path.join(root_dir, 'labels.csv')
+        if not os.path.exists(label_file):
+            raise FileNotFoundError(f'{label_file} does not exist')
+        arr_n = list(map(int, gen_cfg.split('_')[-1].strip('[]').split(', ')))
+        self.tot_n = sum(arr_n)
+        self.label_df = pd.read_csv(label_file)
+
+    def __len__(self):
+        return len(self.label_df)
+
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        # sequence information: distance/angular feature + stats
+        cols = [f's{i}_feat{j}' for i in range(2) for j in range(self.tot_n+4)]
+        features = self.label_df.loc[idx, cols].to_numpy(float).reshape(2, -1)
+        # catalog index
+        cata_idx = self.label_df.loc[idx, 'cata_idx'].astype(int)
+
+        return idx, torch.from_numpy(features).float(), cata_idx

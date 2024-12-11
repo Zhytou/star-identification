@@ -24,12 +24,12 @@ class FNN(nn.Module):
         return y
 
 
-class CNN(nn.Module):
+class RAC_CNN(nn.Module):
     '''
         The one dimension convolutional neural network model.
     '''
     def __init__(self, input1_dim: int, input2_dim: tuple[int, int], output_dim: int):
-        super(CNN, self).__init__()
+        super(RAC_CNN, self).__init__()
         self.fc1 = nn.Sequential(
             nn.Linear(input1_dim, 500),
             nn.ReLU(),
@@ -55,4 +55,28 @@ class CNN(nn.Module):
         y1 = self.fc1(x1)
         y2 = self.conv(x2)
         y = self.fc2(torch.concat((y1, y2), dim=1))
+        return y
+
+
+class DAA_CNN(nn.Module):
+    '''
+        The one dimension convolutional neural network model.
+    '''
+    def __init__(self, input_dim: tuple[int, int], output_dim: int):
+        super(DAA_CNN, self).__init__()
+
+        self.conv = nn.Sequential(
+            nn.Conv1d(input_dim[0], 32, kernel_size=3),
+            nn.ReLU(),
+            nn.BatchNorm1d(32),
+            nn.Conv1d(32, 64, kernel_size=5),
+            nn.ReLU(),
+            nn.BatchNorm1d(64),
+            nn.MaxPool1d(kernel_size=2),
+            nn.Flatten(),
+            nn.Linear(((int(input_dim[1]/2))-3)*64, output_dim)
+        )
+
+    def forward(self, x):
+        y = self.conv(x)
         return y
