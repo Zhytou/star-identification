@@ -364,27 +364,26 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
                 # skip if only the reference star in the region
                 if len(ags) == 0:
                     continue
-
-                # statistics of distances and angles
-                stats = []
-                for seq in [ds, ags]:
-                    stats.extend([np.min(seq), np.max(seq), np.median(seq), np.mean(seq)])
-                for i, stat in enumerate(stats):
-                    label[f'stat{i}'] = stat
-
-                # discretize the feature sequence(distances and angles) with different levels
-                tot_N = 0
-                for N in arr_N:
-                    # density is set True
-                    d_pdf, _ = np.histogram(ds, bins=N, range=(0, R), density=True)
-                    for i, p in enumerate(d_pdf):
-                        i += tot_N
-                        label[f'dist{i}'] = p
-                    a_pdf, _ = np.histogram(ags, bins=N, range=(-np.pi, np.pi), density=True)
-                    for i, p in enumerate(a_pdf):
-                        i += tot_N
-                        label[f'angle{i}'] = p
-                    tot_N += N
+                for i, seq in enumerate([ds, ags]):
+                    # discretize the feature sequence(distances and angles) with different levels
+                    tot_N = 0
+                    for N in arr_N:
+                        # density is set True
+                        if i == 0:
+                            pdf, _ = np.histogram(seq, bins=N, range=(0, R), density=True)
+                        elif i == 1:
+                            pdf, _ = np.histogram(seq, bins=N, range=(-np.pi, np.pi), density=True)
+                        else:
+                            print("wrong index")
+                        for j, p in enumerate(pdf):
+                            j += tot_N
+                            label[f's{i}_feat{j}'] = p
+                        tot_N += N
+                    # statistics of distances and angles
+                    stats = [np.min(seq), np.max(seq), np.median(seq), np.mean(seq)]
+                    for j, stat in enumerate(stats):
+                        j += tot_N
+                        label[f's{i}_feat{j}'] = stat
                 labels.append(label)
             elif method == 'lpt_nn':
                 # parse the parameters:
@@ -568,29 +567,29 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                     # exclude angles and distances outside the region
                     excl_ds, excl_ags = ds[ds <= R], ags[ds <= R]
                     # skip if only the reference star in the region
-                    if len(ags) == 0:
+                    if len(excl_ags) == 0:
                         continue
 
-                    # statistics of distances and angles
-                    stats = []
-                    for seq in [excl_ds, excl_ags]:
-                        stats.extend([np.min(seq), np.max(seq), np.median(seq), np.mean(seq)])
-                    for i, stat in enumerate(stats):
-                        pattern[f'stat{i}'] = stat
-
-                    # discretize the feature sequence(distances and angles) with different levels
-                    tot_N = 0
-                    for N in arr_N:
-                        # density is set True
-                        d_pdf, _ = np.histogram(excl_ds, bins=N, range=(0, R), density=True)
-                        for i, p in enumerate(d_pdf):
-                            i += tot_N
-                            pattern[f'dist{i}'] = p
-                        a_pdf, _ = np.histogram(excl_ags, bins=N, range=(-np.pi, np.pi), density=True)
-                        for i, p in enumerate(a_pdf):
-                            i += tot_N
-                            pattern[f'angle{i}'] = p
-                        tot_N += N
+                    for i, seq in enumerate([excl_ds, excl_ags]):
+                        # discretize the feature sequence(distances and angles) with different levels
+                        tot_N = 0
+                        for N in arr_N:
+                            # density is set True
+                            if i == 0:
+                                pdf, _ = np.histogram(seq, bins=N, range=(0, R), density=True)
+                            elif i == 1:
+                                pdf, _ = np.histogram(seq, bins=N, range=(-np.pi, np.pi), density=True)
+                            else:
+                                print("wrong index")
+                            for j, p in enumerate(pdf):
+                                j += tot_N
+                                pattern[f's{i}_feat{j}'] = p
+                            tot_N += N
+                        # statistics of distances and angles
+                        stats = [np.min(seq), np.max(seq), np.median(seq), np.mean(seq)]
+                        for j, stat in enumerate(stats):
+                            j += tot_N
+                            pattern[f's{i}_feat{j}'] = stat
                     patterns[method].append(pattern)
                 elif method == 'lpt_nn':
                     # parse the parameters
@@ -1032,6 +1031,6 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
 if __name__ == '__main__':
     # generate_pm_database({'grid': [0, 6, 50], 'lpt': [0, 6, 50, 50]})
-    aggregate_nn_dataset({'train': 1}, {'daa_1dcnn': [6, [5]]}, use_preprocess=False, default_ratio=1, fine_grained=False, num_thread=4)
+    aggregate_nn_dataset({'train': 20, 'validate': 1, 'test': 1}, {'daa_1dcnn': [6, [9, 15, 23]]}, use_preprocess=False, default_ratio=0.7, fine_grained=True, pos_noise_stds=[0.5], mv_noise_stds=[0.3], ratio_false_stars=[0.3], num_thread=20)
     # aggregate_test_samples(1000, {'rac_1dcnn': [6, 50, 16, 3], 'lpt_nn': [6, 50]}, use_preprocess=False, generate_default=False, mv_noise_stds=[0.1, 0.2, 0.3, 0.4, 0.5], pos_noise_stds=[0.5, 1, 1.5, 2, 2.5])
     # aggregate_test_samples(100, {'grid': [0, 6, 50], 'lpt': [0, 6, 50, 50]}, use_preprocess=False, generate_default=False, ratio_false_stars=[0.1, 0.2, 0.3, 0.4, 0.5])
