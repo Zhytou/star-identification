@@ -5,9 +5,9 @@ import torch.nn as nn, torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from dataset import LPTDataset, RACDataset
+from dataset import RACDataset, DAADataset, LPTDataset
 from generate import num_class, sim_cfg, dataset_path
-from models import FNN, CNN
+from models import FNN, RAC_CNN, DAA_CNN
 
 
 def check_accuracy(method: str, model: nn.Module, loader: DataLoader, device=torch.device('cpu')):
@@ -28,7 +28,7 @@ def check_accuracy(method: str, model: nn.Module, loader: DataLoader, device=tor
     correct = 0
     total = 0
 
-    if method == 'proposed':
+    if method == 'rac_1dcnn':
         # iterate through test dataset
         for idxs, rings, sectors, labels in loader:
             idxs, rings, sectors, labels = idxs.to(device), rings.to(device), sectors.to(device), labels.to(device)
@@ -42,11 +42,11 @@ def check_accuracy(method: str, model: nn.Module, loader: DataLoader, device=tor
             correct += len(idxs)
             total += len(labels)
 
-    elif method == 'lpt_nn':
-        for idxs, dists, labels in loader:
-            idxs, dists, labels = idxs.to(device), dists.to(device), labels.to(device)
+    elif method == 'daa_1dcnn' or method == 'lpt_nn':
+        for idxs, feats, labels in loader:
+            idxs, feats, labels = idxs.to(device), feats.to(device), labels.to(device)
             # forward pass only to get logits/output
-            outputs = model(dists)
+            outputs = model(feats)
             # get predictions from the maximum value
             predicted = torch.argmax(outputs.data, 1)
             # correctly predicted sample indexes
@@ -81,7 +81,7 @@ def train(method: str, model: nn.Module, optimizer: optim.Optimizer, num_epochs:
         # set the model into train model
         model.train()
 
-        if method == 'proposed':
+        if method == 'rac_1dcnn':
             for _, rings, sectors, labels in loader:
                 rings, sectors, labels = rings.to(device), sectors.to(device), labels.to(device)
                 # forward pass to get output/logits
@@ -94,11 +94,11 @@ def train(method: str, model: nn.Module, optimizer: optim.Optimizer, num_epochs:
                 loss.backward()
                 # updating parameters
                 optimizer.step()
-        elif method == 'lpt_nn':
-            for _, dists, labels in loader:
-                dists, labels = dists.to(device), labels.to(device)
+        elif method == 'daa_1dcnn' or method == 'lpt_nn':
+            for _, feats, labels in loader:
+                feats, labels = feats.to(device), labels.to(device)
                 # forward pass to get output/logits
-                scores = model(dists)
+                scores = model(feats)
                 # calculate Loss: softmax --> cross entropy loss
                 loss = F.cross_entropy(scores, labels)
                 # clear gradients w.r.t. parameters
@@ -132,22 +132,31 @@ if __name__ == '__main__':
 
     for method in os.listdir(dataset_path):
         for gen_cfg in os.listdir(os.path.join(dataset_path, method)):
-            # if method != 'lpt_nn' or gen_cfg != 'SAO5.6_15_20_0_6_50':
-            #     continue
-            if method != 'proposed':
+            if method != 'daa_1dcnn':
                 continue
-            print(f'Method: {method}, Generate config: {gen_cfg}')
             
-            if method == 'proposed':
-                num_ring, num_sector, num_neighbor = list(map(int, gen_cfg.split('_')[-3:]))
+            if method == 'rac_1dcnn':
+                arr_nr, num_sector, num_neighbor = list(map(int, gen_cfg.split('_')[-3:]))
+                arr_nr = list(map(int, arr_nr.strip('[]').split(', ')))
+                num_ring = sum(arr_nr)
                 # define datasets for train validate and test
                 train_dataset, val_dataset, test_dataset = [RACDataset(os.path.join(dataset_path, method, gen_cfg, type), gen_cfg) for type in ['train', 'validate', 'test']]
+                print('Method: ', method, 'Generate config: ', gen_cfg, 'Num ring: ', num_ring, 'Num sector: ', num_sector, 'Num neighbor: ', num_neighbor)
                 # define model
-                model = CNN(num_ring, (num_neighbor, num_sector), num_class)
+                model = RAC_CNN(num_ring, (num_neighbor, num_sector), num_class)
+            elif method == 'daa_1dcnn':
+                arr_n = list(map(int, gen_cfg.split('_')[-1].strip('[]').split(', ')))
+                num_feat = sum(arr_n) + 4
+                # define datasets for train validate and test
+                train_dataset, val_dataset, test_dataset = [DAADataset(os.path.join(dataset_path, method, gen_cfg, type), gen_cfg) for type in ['train', 'validate', 'test']]
+                print('Method: ', method, 'Generate config: ', gen_cfg, 'Num feat: ', num_feat)
+                # define model
+                model = DAA_CNN((2, num_feat), num_class)
             elif method == 'lpt_nn':
                 num_dist = int(gen_cfg.split('_')[-1])
                 # define datasets for train validate and test
                 train_dataset, val_dataset, test_dataset = [LPTDataset(os.path.join(dataset_path, method, gen_cfg, type), gen_cfg) for type in ['train', 'validate', 'test']]
+                print('Method: ', method, 'Generate config: ', gen_cfg, 'Num dist: ', num_dist)
                 # define model
                 model = FNN(num_dist, num_class)
             else:
