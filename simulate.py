@@ -15,20 +15,20 @@ h = 1024
 f = 58e-3
 
 # field of view angle in degrees
-FOV = 15
+FOV = 10
 
 # camera total length and width in metres
 mtot = 2*tan(radians(FOV/2))*f
 
 # camera magnitude sensitivity limitation
-mv_limit = 6.5
+mv_limit = 6.0
 
 # pixel num per length
 xpixel = w/mtot
 ypixel = h/mtot
 
 # star catalogue path
-catalogue_path = f'catalogue/SAO7.0.csv'
+catalogue_path = f'catalogue/sao7.0.csv'
 
 # read star catalogue
 col_list = ["Star ID", "RA", "DE", "Magnitude"]
@@ -38,7 +38,7 @@ catalogue = pd.read_csv(catalogue_path, usecols=col_list)
 sim_cfg = f"{os.path.basename(catalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOV}x{FOV}_{mv_limit}"
 
 
-def create_star_image(ra: float, de: float, roll: float, white_noise_std: float = 10, pos_noise_std: float = 0, mv_noise_std: float = 0, ratio_false_star: int = 0, pure_point: bool = False) -> tuple[np.ndarray, list]:
+def create_star_image(ra: float, de: float, roll: float, white_noise_std: float = 10, pos_noise_std: float = 0, mv_noise_std: float = 0, ratio_false_star: int = 0, pure_point: bool = False, simulate_test: bool = False) -> tuple[np.ndarray, list]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
@@ -102,8 +102,8 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
             for v in range(y-ROI, y+ROI+1):
                 if v < 0 or v >= len(img):
                     continue
-                if (u-x)**2+(v-y)**2 > ROI**2:
-                    continue
+                # if (u-x)**2+(v-y)**2 > ROI**2:
+                #     continue
                 raw_intensity = int(H*exp(-((u-x)**2+(v-y)**2)/(2*ROI**2)))
                 img[v ,u] = 255 #raw_intensity
 
@@ -155,7 +155,7 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
     stars_within_FOV = catalogue[(ra1 <= catalogue['RA']) & (catalogue['RA'] <= ra2) & 
                                 (de1 <= catalogue['DE']) & (catalogue['DE'] <= de2)].copy()
 
-    # convert to celestial rectangular coordinate system
+    # convert to celestial cartesian coordinate system
     stars_within_FOV['X1'] = np.cos(stars_within_FOV['RA'])*np.cos(stars_within_FOV['DE'])
     stars_within_FOV['Y1'] = np.sin(stars_within_FOV['RA'])*np.cos(stars_within_FOV['DE'])
     stars_within_FOV['Z1'] = np.sin(stars_within_FOV['DE'])
@@ -207,25 +207,47 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
     # add white noise
     img = add_white_noise(img)
 
+    if simulate_test:
+        stars_within_FOV = stars_within_FOV.reset_index(drop=True)
+        return img, stars, stars_within_FOV
+    
     return img, stars
 
 
-if __name__ == '__main__':
-    # # simulation accuracy check
-    # col_list = ["Star ID", "RA", "DE", "Magnitude"]
-    # df = pd.read_csv(catalogue_path, usecols=col_list)
-    # for i in range(10):
-    #     ra, de = df.loc[i, 'RA'], df.loc[i, 'DE']
-    #     img, stars = create_star_image(ra, de, 0, ratio_false_star=0)
-    #     star_table = dict(map(lambda x: (x[1], x[0]), stars))
-    #     # when using the ra & de in star catalogue, one star must be placed in the center of image
-    #     if star_table.get((h/2, w/2), -1) == -1:
-    #         print(i, 'ra:', round(degrees(ra), 2), 'de:', round(degrees(de), 2), 'f:',f)
-    #         print(stars)
-    #         break
-    
+if __name__ == '__main__':    
     # simulate one image
-    ra, de = radians(249.2104), radians(-12.0386)
-    roll = radians(-13.3845)
-    img, stars = create_star_image(ra, de, roll, ratio_false_star=0)
-    cv2.imwrite(f'{sim_cfg}.png', img)
+    ra, de, roll = radians(29.2104), radians(-12.0386), radians(0)
+    img, _, stars = create_star_image(ra, de, roll, ratio_false_star=0, simulate_test=True)
+    cv2.imwrite(f'{sim_cfg}_{ra}_{de}_{roll}.png', img)
+
+    stars['RA'], stars['DE'] = np.degrees(stars['RA']), np.degrees(stars['DE'])
+
+    print(stars[['Star ID', 'RA', 'DE', 'X4', 'Y4', 'Magnitude']])
+    for i in range(len(stars)):
+        idi = stars.loc[i, 'Star ID']
+        # celestial cartesian coordinate vector
+        Xi = stars.loc[i, 'X1']
+        Yi = stars.loc[i, 'Y1']
+        Zi = stars.loc[i, 'Z1']
+        Vci = np.array([Xi, Yi, Zi]).transpose()
+        # screen(image) coordinate vector
+        xi = stars.loc[i, 'X3']
+        yi = stars.loc[i, 'Y3']
+        Vsi = np.array([xi, yi, f]).transpose()
+        
+        for j in range(i+1, len(stars)):
+            idj = stars.loc[j, 'Star ID']
+            # celestial cartesian coordinate vector
+            Xj = stars.loc[j, 'X1']
+            Yj = stars.loc[j, 'Y1']
+            Zj = stars.loc[j, 'Z1']
+            Vcj = np.array([Xj, Yj, Zj])
+            # screen(image) coordinate vector
+            xj = stars.loc[j, 'X3']
+            yj = stars.loc[j, 'Y3']
+            Vsj = np.array([xj, yj, f])
+
+            dc = np.arccos(np.dot(Vci, Vcj) / (np.linalg.norm(Vci) * np.linalg.norm(Vcj)))
+            ds = np.arccos(np.dot(Vsi, Vsj) / (np.linalg.norm(Vsi) * np.linalg.norm(Vsj)))
+
+            print(idi, idj, dc, ds)
