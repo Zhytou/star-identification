@@ -79,7 +79,9 @@ class RACDataset(Dataset):
         label_file = os.path.join(root_dir, 'labels.csv')
         if not os.path.exists(label_file):
             raise FileNotFoundError(f'{label_file} does not exist')
-        self.num_ring, self.num_sector, self.num_neighbor_limit = list(map(int, gen_cfg.split('_')[-3:]))
+        arr_nr, ns, nn = gen_cfg.split('_')[-3:]
+        self.num_ring = sum(list(map(int, arr_nr.strip('[]').split(', '))))
+        self.num_sector, self.num_neighbor = int(ns), int(nn)
         self.label_df = pd.read_csv(label_file)
 
     def __len__(self):
@@ -91,8 +93,8 @@ class RACDataset(Dataset):
 
         cols = [f'ring{i}' for i in range(self.num_ring)]
         rings = self.label_df.loc[idx, cols].to_numpy(float)
-        cols = [f'n{i}_sector{j}' for i in range(self.num_neighbor_limit) for j in range(self.num_sector)]
-        sectors = self.label_df.loc[idx, cols].to_numpy(float).reshape(self.num_neighbor_limit, -1)
+        cols = [f'n{i}_sector{j}' for i in range(self.num_neighbor) for j in range(self.num_sector)]
+        sectors = self.label_df.loc[idx, cols].to_numpy(float).reshape(self.num_neighbor, -1)
         cata_idx = self.label_df.loc[idx, 'cata_idx'].astype(int)
 
         return idx, torch.from_numpy(rings).float(), torch.from_numpy(sectors).float(), cata_idx

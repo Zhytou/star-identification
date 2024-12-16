@@ -132,11 +132,12 @@ if __name__ == '__main__':
 
     for method in os.listdir(dataset_path):
         for gen_cfg in os.listdir(os.path.join(dataset_path, method)):
-            if method != 'daa_1dcnn':
+            if method != 'rac_1dcnn':
                 continue
             
             if method == 'rac_1dcnn':
-                arr_nr, num_sector, num_neighbor = list(map(int, gen_cfg.split('_')[-3:]))
+                arr_nr, num_sector, num_neighbor = gen_cfg.split('_')[-3:]
+                num_sector, num_neighbor = int(num_sector), int(num_neighbor)
                 arr_nr = list(map(int, arr_nr.strip('[]').split(', ')))
                 num_ring = sum(arr_nr)
                 # define datasets for train validate and test
