@@ -103,7 +103,7 @@ def draw_probability_versus_star_num_within_FOV(catalogue: pd.DataFrame, ax: axe
     # sort table items by key
     num_stars = sorted(table.keys())
     probability = [(table[num_star]*100.0)/num_vec for num_star in num_stars]
-    print(num_stars, probability)
+    # print(num_stars, probability)
 
     # calculate average number of star in FOV
     avg = sum([num_star*table[num_star] for num_star in num_stars])/num_vec
@@ -113,21 +113,21 @@ def draw_probability_versus_star_num_within_FOV(catalogue: pd.DataFrame, ax: axe
     print('avg: ', avg, ' std: ', std)
 
     if ax == None:
-        plt.plot(num_stars, probability)
-        plt.vlines(avg, 0, 100, linestyles='dashed', colors='red')
+        plt.bar(num_stars, probability)
         plt.title(title)
         plt.xlim(0, 100)
         plt.ylim(0, 20)
         plt.xlabel('Number of stars within FOV')
         plt.ylabel('Probability%')
+        plt.grid(True)
     else:
-        ax.plot(num_stars, probability)
-        ax.vlines(avg, 0, 100, linestyles='dashed', colors='red')
+        ax.bar(num_stars, probability)
         ax.set_title(title)
         ax.set_xlim(0, 100)
         ax.set_ylim(0, 20)
         ax.set_xlabel('Number of stars within FOV')
         ax.set_ylabel('Probability%')
+        ax.grid(True)
     
     plt.show()
 
@@ -261,8 +261,13 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.
     # calculate the half of FOV diagonal distance
     R = sqrt((radians(FOV)**2)+(radians(FOV)**2))/2
 
+    num_dark_star_excl = len(catalogue)
+
     # eliminate the stars with magnitude > mv_limit
     catalogue = catalogue[catalogue['Magnitude'] <= mv_limit].reset_index(drop=True)
+
+    num_dark_star_excl -= len(catalogue)
+    print('the number of dark stars excluded: ', num_dark_star_excl)
 
     # convert to celestial rectangular coordinate system
     positions = pd.DataFrame()
@@ -302,9 +307,12 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.
     # eliminate the darker stars from small angular distance star pairs
     catalogue = catalogue[~catalogue.index.isin(darker_idxs)]
 
+    print('the number of darker star pairs excluded: ', len(darker_idxs))
+
     if not uniform:
         return catalogue
 
+    num_uniform_star_excl = len(catalogue)
     ras = np.arange(0, 2*pi, 2*pi/num_vec)
     des = np.arcsin(np.arange(-1, 1, 2/num_vec))
     for ra in ras:
@@ -349,6 +357,9 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.
                 stars_within_sector = stars_within_sector.nlargest(tot-num_limit//num_sector-1, 'Magnitude')
                 catalogue = catalogue[~catalogue.index.isin(stars_within_sector.index)]
 
+    num_uniform_star_excl -= len(catalogue)
+    print('the number of uniform stars excluded: ', num_uniform_star_excl)
+
     return catalogue
 
 
@@ -357,38 +368,37 @@ if __name__ == '__main__':
     FOV = 15
     f = 58e-3
     num_limit = 20
-    mv_limit = 6.0
+    mv_limit = 5.6
+    agd_limit = 0.2
 
     raw_file = 'raw_catalogue/sao_j2000.dat'
     parsed_file = 'catalogue/sao.csv'
     limit_parsed_file = 'catalogue/sao7.0.csv'
-    filtered_file = f'catalogue/sao{mv_limit}_d.csv' # process double star and magnitude threshold
-    uniform_filtered_file = f'catalogue/sao{mv_limit}_{FOV}_{num_limit}.csv'
-    old_file = 'old_catalogue/sao7.0.csv'
+    filtered_file = f'catalogue/sao{mv_limit}_d{agd_limit}.csv' # process double star and magnitude threshold
+    uniform_filtered_file = f'catalogue/sao{mv_limit}_d{agd_limit}_{FOV}_{num_limit}.csv'
 
     df = parse_heasarc_sao(raw_file, parsed_file)
     df = df[df['Magnitude'] <= 7.0].reset_index(drop=True)
     if not os.path.exists(limit_parsed_file):
         df.to_csv(limit_parsed_file)
 
-    old_df = pd.read_csv(old_file)
+    if os.path.exists(filtered_file):
+        f_df = pd.read_csv(filtered_file)
+    else:
+        f_df = filter_catalogue(df, num_limit, mv_limit, agd_limit, FOV=FOV, f=f, uniform=False).reset_index(drop=True)
+        f_df.to_csv(filtered_file)
 
-    # if os.path.exists(filtered_file):
-    #     f_df = pd.read_csv(filtered_file)
-    # else:
-    #     f_df = filter_catalogue(df, num_limit, mv_limit, FOV=FOV, f=f, uniform=False).reset_index(drop=True)
-    #     f_df.to_csv(filtered_file)
-
-    # draw_probability_versus_star_num_within_FOV(f_df, FOV=FOV, f=f, num_vec=1000)
+    # draw_star_distribution(f_df)
+    draw_probability_versus_star_num_within_FOV(f_df, FOV=FOV, f=f, num_vec=3000)
 
     if os.path.exists(uniform_filtered_file):
         uf_df = pd.read_csv(uniform_filtered_file)
     else:
-        uf_df = filter_catalogue(df, num_limit, mv_limit, FOV=FOV, f=f).reset_index(drop=True)
+        uf_df = filter_catalogue(df, num_limit, mv_limit, agd_limit, FOV=FOV, f=f).reset_index(drop=True)
         uf_df.to_csv(uniform_filtered_file)
     
-    draw_star_distribution(uf_df)
-    # draw_probability_versus_star_num_within_FOV(uf_df, FOV=FOV, f=f, num_vec=1000)
+    # draw_star_distribution(uf_df)
+    draw_probability_versus_star_num_within_FOV(uf_df, FOV=FOV, f=f, num_vec=3000)
 
     # fig1, axs1 = plt.subplots(1, 2)
     # draw_star_distribution(df, axs1[0], "Original")
