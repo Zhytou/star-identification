@@ -368,7 +368,7 @@ if __name__ == '__main__':
     FOV = 15
     f = 58e-3
     num_limit = 20
-    mv_limit = 5.6
+    mv_limit = 5.3
     agd_limit = 0.2
 
     raw_file = 'raw_catalogue/sao_j2000.dat'
@@ -388,9 +388,9 @@ if __name__ == '__main__':
         f_df = filter_catalogue(df, num_limit, mv_limit, agd_limit, FOV=FOV, f=f, uniform=False).reset_index(drop=True)
         f_df.to_csv(filtered_file)
 
-    # draw_star_distribution(f_df)
-    draw_probability_versus_star_num_within_FOV(f_df, FOV=FOV, f=f, num_vec=3000)
-
+    draw_star_distribution(f_df)
+    # draw_probability_versus_star_num_within_FOV(f_df, FOV=FOV, f=f, num_vec=3000)
+    
     if os.path.exists(uniform_filtered_file):
         uf_df = pd.read_csv(uniform_filtered_file)
     else:
@@ -398,7 +398,7 @@ if __name__ == '__main__':
         uf_df.to_csv(uniform_filtered_file)
     
     # draw_star_distribution(uf_df)
-    draw_probability_versus_star_num_within_FOV(uf_df, FOV=FOV, f=f, num_vec=3000)
+    # draw_probability_versus_star_num_within_FOV(uf_df, FOV=FOV, f=f, num_vec=3000)
 
     # fig1, axs1 = plt.subplots(1, 2)
     # draw_star_distribution(df, axs1[0], "Original")

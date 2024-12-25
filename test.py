@@ -8,8 +8,8 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 
 from generate import database_path, test_path, sim_cfg, num_class
-from dataset import LPTDataset, RACDataset
-from models import CNN, FNN
+from dataset import LPTDataset, RACDataset, DAADataset
+from models import RAC_CNN, DAA_CNN, FNN
 
 
 def check_pm_accuracy(method: str, db: pd.DataFrame, df: pd.DataFrame):
@@ -106,7 +106,7 @@ def check_nn_accuracy(method: str, model: nn.Module, loader: DataLoader, img_ids
     # dict to store the number of correctly predicted samples for each star image
     freqs = {}
 
-    if method == 'proposed':
+    if method == 'rac_1dcnn':
         for idxs, rings, sectors, labels in loader:
             idxs, rings, sectors, labels = idxs.to(device), rings.to(device), sectors.to(device), labels.to(device)
             # forward pass only to get logits/output
@@ -117,11 +117,11 @@ def check_nn_accuracy(method: str, model: nn.Module, loader: DataLoader, img_ids
             idxs = idxs[predicted == labels].tolist()
             # update number of successfully predicted star images
             img_ids[idxs].apply(lambda x: freqs.update({x: freqs.get(x, 0)+1}))
-    elif method == 'lpt_nn':
-        for idxs, dists, labels in loader:
-            idxs, dists, labels = idxs.to(device), dists.to(device), labels.to(device)
+    elif method == 'daa_1dcnn' or method == 'lpt_nn':
+        for idxs, feats, labels in loader:
+            idxs, feats, labels = idxs.to(device), feats.to(device), labels.to(device)
             # forward pass only to get logits/output
-            outputs = model(dists)
+            outputs = model(feats)
             # get predictions from the maximum value
             predicted = torch.argmax(outputs.data, 1)
             # correctly predicted sample indexes
@@ -144,7 +144,7 @@ if __name__ == '__main__':
     res = {}
 
     # conventional pattern match method accuracy
-    for method in ['grid', 'lpt']:
+    for method in []:
         res[method] = {}
         for gen_cfg in os.listdir(os.path.join(test_path, method)):
             db = pd.read_csv(os.path.join(database_path, gen_cfg, f'{method}.csv'))
@@ -168,19 +168,29 @@ if __name__ == '__main__':
                     res[method][name].append((x, y))
             
     # nn model accuracy
-    for method in []:
+    for method in ['daa_1dcnn']:
         res[method] = {}
         batch_size = 100
         # use gpu if available
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         for gen_cfg in os.listdir(os.path.join(test_path, method)):
             # parse gen_cfg
-            if method == 'proposed':
-                num_ring, num_sector, num_neighbor = list(map(int, gen_cfg.split('_')[-3:]))
-                best_model = CNN(num_ring, (num_neighbor, num_sector), num_class)
-            else:
+            if method == 'rac_1dcnn':
+                arr_nr, num_sector, num_neighbor = gen_cfg.split('_')[-3:]
+                num_sector, num_neighbor = int(num_sector), int(num_neighbor)
+                arr_nr = list(map(int, arr_nr.strip('[]').split(', ')))
+                num_ring = sum(arr_nr)
+                best_model = RAC_CNN(num_ring, (num_neighbor, num_sector), num_class)
+            elif method == 'daa_1dcnn':
+                arr_n = list(map(int, gen_cfg.split('_')[-1].strip('[]').split(', ')))
+                num_feat = sum(arr_n) + 4
+                best_model = DAA_CNN((2, num_feat), num_class)
+            elif method == 'lpt_nn':
                 num_dist = int(gen_cfg.split('_')[-1])
                 best_model = FNN(num_dist, num_class)
+            else:
+                print('Invalid method')
+                continue
             # load best model
             best_model.load_state_dict(torch.load(os.path.join('model', sim_cfg, method, gen_cfg, 'best_model.pth')))
             best_model.to(device)
@@ -196,9 +206,11 @@ if __name__ == '__main__':
                     x = float(x)
                 # calculate accuracy
                 df = pd.read_csv(os.path.join(path, s, 'labels.csv'))
-                if method == 'proposed':
+                if method == 'rac_1dcnn':
                     dataset = RACDataset(os.path.join(path, s), gen_cfg)
-                else:
+                elif method == 'daa_1dcnn':
+                    dataset = DAADataset(os.path.join(path, s), gen_cfg)
+                elif method == 'lpt_nn':
                     dataset = LPTDataset(os.path.join(path, s), gen_cfg)
                 loader = DataLoader(dataset, batch_size)
                 y = check_nn_accuracy(method, best_model, loader, df['img_id'], device=device)

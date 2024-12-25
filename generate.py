@@ -12,7 +12,7 @@ from preprocess import get_star_centroids
 
 
 # guide star catalogue for pattern match database and nn dataset generation
-gcata_path = 'catalogue/sao5.6_15_20.csv'
+gcata_path = 'catalogue/sao5.3_d0.2_15_20.csv'
 # use for generation config
 gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
 # guide star catalogue
@@ -1031,6 +1031,6 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
 if __name__ == '__main__':
     # generate_pm_database({'grid': [0, 6, 50], 'lpt': [0, 6, 50, 50]})
-    aggregate_nn_dataset({'train': 50, 'validate': 1, 'test': 3}, {'rac_1dcnn': [6, [30, 50, 80], 16, 3,]}, use_preprocess=False, default_ratio=0.7, fine_grained=True, pos_noise_stds=[0.5], mv_noise_stds=[0.3], ratio_false_stars=[0.3], num_thread=20)
-    # aggregate_test_samples(1000, {'rac_1dcnn': [6, 50, 16, 3], 'lpt_nn': [6, 50]}, use_preprocess=False, generate_default=False, mv_noise_stds=[0.1, 0.2, 0.3, 0.4, 0.5], pos_noise_stds=[0.5, 1, 1.5, 2, 2.5])
+    aggregate_nn_dataset({'train': 60, 'validate': 1, 'test': 1}, {'daa_1dcnn': [6, [30, 50, 80]]}, use_preprocess=False, default_ratio=0.7, fine_grained=True, pos_noise_stds=[0.5], mv_noise_stds=[0.5], ratio_false_stars=[0.3], num_thread=20)
+    # aggregate_test_samples(200, {'daa_1dcnn': [6, [30, 50, 80]]}, use_preprocess=False, generate_default=False, mv_noise_stds=[0.1, 0.2, 0.3, 0.4, 0.5], pos_noise_stds=[0.5, 1, 1.5, 2, 2.5])
     # aggregate_test_samples(100, {'grid': [0, 6, 50], 'lpt': [0, 6, 50, 50]}, use_preprocess=False, generate_default=False, ratio_false_stars=[0.1, 0.2, 0.3, 0.4, 0.5])

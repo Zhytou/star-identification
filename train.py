@@ -129,12 +129,12 @@ if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f'Using device: {device}')
 
-
     for method in os.listdir(dataset_path):
         for gen_cfg in os.listdir(os.path.join(dataset_path, method)):
-            if method != 'rac_1dcnn':
+            if method != 'daa_1dcnn':
                 continue
-            
+            if gen_cfg != 'sao5.3_d0.2_15_20_0_6_[30, 50, 80]':
+                continue
             if method == 'rac_1dcnn':
                 arr_nr, num_sector, num_neighbor = gen_cfg.split('_')[-3:]
                 num_sector, num_neighbor = int(num_sector), int(num_neighbor)
@@ -142,7 +142,7 @@ if __name__ == '__main__':
                 num_ring = sum(arr_nr)
                 # define datasets for train validate and test
                 train_dataset, val_dataset, test_dataset = [RACDataset(os.path.join(dataset_path, method, gen_cfg, type), gen_cfg) for type in ['train', 'validate', 'test']]
-                print('Method: ', method, 'Generate config: ', gen_cfg, 'Num ring: ', num_ring, 'Num sector: ', num_sector, 'Num neighbor: ', num_neighbor)
+                print('Method:', method, 'Generate config:', gen_cfg, 'Num ring:', num_ring, 'Num sector:', num_sector, 'Num neighbor:', num_neighbor)
                 # define model
                 model = RAC_CNN(num_ring, (num_neighbor, num_sector), num_class)
             elif method == 'daa_1dcnn':

@@ -8,20 +8,20 @@ import cv2
 ROI = 2
 
 # star sensor pixel num
-w = 512
-h = 512
+w = 1024
+h = 1024
 
 # star sensor foucs in metres
 f = 58e-3
 
 # field of view angle in degrees
-FOV = 10
+FOV = 15
 
 # camera total length and width in metres
 mtot = 2*tan(radians(FOV/2))*f
 
 # camera magnitude sensitivity limitation
-mv_limit = 6.0
+mv_limit = 6.5
 
 # pixel num per length
 xpixel = w/mtot
@@ -260,13 +260,13 @@ if __name__ == '__main__':
 
     if noise_test:
         ra, de, roll = radians(29.2104), radians(-12.0386), radians(0)
-        img, _ = create_star_image(ra, de, roll, white_noise_std=20)
+        img, _ = create_star_image(ra, de, roll, white_noise_std=5)
         cv2.imwrite('white_1.png', img)
         cv2.imwrite('white_2.png', img[50:350, 50:350])
 
-        img, _ = create_star_image(ra, de, roll, pos_noise_std=3)
-        cv2.imwrite('pos_1.png', img)
-        cv2.imwrite('pos_2.png', img[50:350, 50:350])
+        # img, _ = create_star_image(ra, de, roll, pos_noise_std=3)
+        # cv2.imwrite('pos_1.png', img)
+        # cv2.imwrite('pos_2.png', img[50:350, 50:350])
 
         # while 1:
         #     img, stars = create_star_image(ra, de, roll, mv_noise_std=0.2, simulate_test=True)
@@ -276,6 +276,6 @@ if __name__ == '__main__':
         # cv2.imwrite('mv_1.png', img)
         # cv2.imwrite('mv_2.png', img[50:350, 50:350])
 
-        img, _ = create_star_image(ra, de, roll, ratio_false_star=0.3)
-        cv2.imwrite('fs_1.png', img)
+        # img, _ = create_star_image(ra, de, roll, ratio_false_star=0.3)
+        # cv2.imwrite('fs_1.png', img)
         # cv2.imwrite('fs_2.png', img[50:350, 50:350])
