@@ -8,20 +8,20 @@ import cv2
 ROI = 2
 
 # star sensor pixel num
-w = 1024
-h = 1024
+w = 512
+h = 512
 
 # star sensor foucs in metres
 f = 58e-3
 
 # field of view angle in degrees
-FOV = 15
+FOV = 10
 
 # camera total length and width in metres
 mtot = 2*tan(radians(FOV/2))*f
 
 # camera magnitude sensitivity limitation
-mv_limit = 6.5
+mv_limit = 6.0
 
 # pixel num per length
 xpixel = w/mtot
@@ -36,6 +36,25 @@ catalogue = pd.read_csv(catalogue_path, usecols=col_list)
 
 # define simulation config
 sim_cfg = f"{os.path.basename(catalogue_path).rsplit('.', 1)[0]}_{w}x{h}_{FOV}x{FOV}_{mv_limit}"
+
+
+def add_stary_light_noise(img: np.ndarray, rc: int, cc: int, std: int, A: int) -> np.ndarray:
+    '''
+        Add stary light noise to the image.
+    Args:
+        img: the image to add stary light noise
+    Returns:
+        noised_img: the image with stary light noise
+    '''
+    h, w = img.shape
+
+    row = np.arange(w).reshape(-1, 1) - rc
+    col = np.arange(h).reshape(1, -1) - cc
+
+    stary = 200 * np.exp(-(row**2 + col**2) / (2 * std**2))
+    noised_img = np.clip(img + stary, 0, 255).astype(np.uint8)
+
+    return noised_img
 
 
 def create_star_image(ra: float, de: float, roll: float, white_noise_std: float = 10, pos_noise_std: float = 0, mv_noise_std: float = 0, ratio_false_star: int = 0, pure_point: bool = False, simulate_test: bool = False) -> tuple[np.ndarray, list]:
@@ -79,12 +98,12 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
             
         return M
 
-    def draw_star(x: int, y: int, magnitude: float, img: np.ndarray) -> np.ndarray:
+    def draw_star(x: float, y: float, magnitude: float, img: np.ndarray) -> np.ndarray:
         """
-            Draw star at yth row and xth column in the image.
+            Draw star at x(row) and y(column) in the image.
         Args:
-            x: the x coordinate in pixel (starting from left to right)
-            y: the y coordinate in pixel (starting from top to bottom)
+            x: starting from top to bottom
+            y: starting from left to right
             magnitude: the stellar magnitude
             img: background image
         Returns:
@@ -95,19 +114,24 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
             return img
 
         # stellar magnitude to intensity
-        H = 80/(2.51**(magnitude-6))
+        H = 40/(2.51**(magnitude-6))
 
-        for u in range(x-ROI, x+ROI+1):
-            if u < 0 or u >= len(img[0]):
-                continue
-            for v in range(y-ROI, y+ROI+1):
-                if v < 0 or v >= len(img):
-                    continue
-                if (u-x)**2+(v-y)**2 > ROI**2:
-                    continue
-                raw_intensity = int(H*exp(-((u-x)**2+(v-y)**2)/(2*ROI**2)))
-                img[v ,u] = raw_intensity
+        top = max(0, int(x)-ROI-1)
+        bottom = min(h, int(x)+ROI+1)
 
+        left = max(0, int(y)-ROI-1)
+        right = min(w, int(y)+ROI+1)
+
+        for u in range(top, bottom):
+            for v in range(left, right):
+                # msaa
+                intensity_sum = 0
+                for (du, dv) in [(0.25, 0.25), (0.25, 0.75), (0.75, 0.25), (0.75, 0.75)]: 
+                    square_d = (u+du-x)**2+(v+dv-y)**2
+                    if square_d > ROI**2:
+                        continue
+                    intensity_sum += H*exp(-square_d/(2*ROI**2))
+                img[v ,u] = intensity_sum // 4
         return img
 
     def add_white_noise(img: np.ndarray) -> np.ndarray:
@@ -198,8 +222,8 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
     for i in range(len(star_magnitudes)):
         # draw imagable star at (row, col)
         x, y = star_positions[i]
-        img = draw_star(int(round(x)), int(round(y)), star_magnitudes[i], img)
-        stars.append([star_ids[i], (round(y, 3), round(x, 3)), star_magnitudes[i]])
+        img = draw_star(x, y, star_magnitudes[i], img)
+        stars.append([star_ids[i], (round(x, 3), round(y, 3)), star_magnitudes[i]])
 
     # add false stars with random magitudes at random positions
     if ratio_false_star > 0:
