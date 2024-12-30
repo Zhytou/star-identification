@@ -98,12 +98,11 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
             
         return M
 
-    def draw_star(x: float, y: float, magnitude: float, img: np.ndarray) -> np.ndarray:
+    def draw_star(position: tuple[float, float], magnitude: float, img: np.ndarray) -> np.ndarray:
         """
-            Draw star at x(row) and y(column) in the image.
+            Draw star at position[0](row) and position[1](column) in the image.
         Args:
-            x: starting from top to bottom
-            y: starting from left to right
+            position: (starting from top to bottom, starting from left to right)
             magnitude: the stellar magnitude
             img: background image
         Returns:
@@ -116,11 +115,13 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
         # stellar magnitude to intensity
         H = 40/(2.51**(magnitude-6))
 
-        top = max(0, int(x)-ROI-1)
-        bottom = min(h, int(x)+ROI+1)
+        x, y = int(position[0]), int(position[1])
 
-        left = max(0, int(y)-ROI-1)
-        right = min(w, int(y)+ROI+1)
+        top = max(0, x-ROI-1)
+        bottom = min(h, x+ROI+1)
+
+        left = max(0, y-ROI-1)
+        right = min(w, y+ROI+1)
 
         for u in range(top, bottom):
             for v in range(left, right):
@@ -131,7 +132,7 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
                     if square_d > ROI**2:
                         continue
                     intensity_sum += H*exp(-square_d/(2*ROI**2))
-                img[v ,u] = intensity_sum // 4
+                img[u ,v] = intensity_sum // 4
         return img
 
     def add_white_noise(img: np.ndarray) -> np.ndarray:
@@ -212,7 +213,7 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
     # exclude stars too dark to identify
     stars_within_FOV = stars_within_FOV[stars_within_FOV['Magnitude'] <= mv_limit]
 
-    star_positions = list(zip(stars_within_FOV['X4'], stars_within_FOV['Y4']))
+    star_positions = list(zip(stars_within_FOV['Y4'], stars_within_FOV['X4']))
     star_magnitudes = list(stars_within_FOV['Magnitude'])
     star_ids = list(stars_within_FOV['Star ID'])
     
@@ -220,10 +221,10 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
     img = np.zeros((h,w))
     stars = []
     for i in range(len(star_magnitudes)):
-        # draw imagable star at (row, col)
-        x, y = star_positions[i]
-        img = draw_star(x, y, star_magnitudes[i], img)
-        stars.append([star_ids[i], (round(x, 3), round(y, 3)), star_magnitudes[i]])
+        # draw imagable star at (Y4, X4) (Y4 is row number, X4 is column number)
+        star_positions[i] = round(star_positions[i][0], 3), round(star_positions[i][1], 3)
+        img = draw_star(star_positions[i], star_magnitudes[i], img)
+        stars.append([star_ids[i], star_positions[i], star_magnitudes[i]])
 
     # add false stars with random magitudes at random positions
     if ratio_false_star > 0:
