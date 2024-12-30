@@ -134,7 +134,66 @@ def group_star(img: np.ndarray, threshold: int, connectivity: int) -> list[list[
     return group_coords
 
 
-def get_star_centroids(img: np.ndarray, method: str, wind_size: int=9) -> list[tuple[float, float]]:
+def cal_wind_boundary(center: tuple[int, int], wind_size: int, h: int, w: int) -> tuple[int, int, int, int]:
+    '''
+        Calculate the boundary of the window.
+    Args:
+        center: the center of the window
+        wind_size: the size of the window
+    Returns:
+        t: the top boundary of the window
+        b: the bottom boundary of the window
+        l: the left boundary of the window
+        r: the right boundary of the window
+    '''
+    # construct window
+    t = max(0, center[0] - wind_size//2)
+    b = min(h, center[0] + wind_size//2)
+    l = max(0, center[1] - wind_size//2)
+    r = min(w, center[1] + wind_size//2)
+
+    return t, b, l, r
+
+
+def cal_center_of_gravity(img: np.ndarray, coords: list[tuple[int,int]], method: str, T: int=-1) -> tuple[float, float]:
+    '''
+        Calculate the centroid of the star in the window.
+    Args:
+        img: the image to be processed
+        coords: the coordinates of the star
+        method: centroid algorithm
+            'CoG': center of gravity
+            'MCoG': modified center of gravity
+            'WCoG': weighed center of gravity
+        T: the threshold of the star
+    Returns:
+        centroid: the centroid of the star
+    '''
+    # calculate the centroid in the window
+    row_sum = 0
+    col_sum = 0
+    gray_sum = 0
+    # get the centroid coordinate
+    for (r, c) in coords:
+        if method == 'CoG':
+            row_sum += r * img[r][c]
+            col_sum += c * img[r][c]
+            gray_sum += img[r][c]
+        elif method == 'WCoG':
+            row_sum += r * pow(img[r][c], 2)
+            col_sum += c * pow(img[r][c], 2)
+            gray_sum += pow(img[r][c], 2)
+        elif method == 'MCoG':
+            row_sum += r * (img[r][c] - T)
+            col_sum += c * (img[r][c] - T)
+            gray_sum += img[r][c] - T
+        else:
+            print('wrong gravity method!')
+            return [0.0, 0.0]
+    return round(row_sum/gray_sum, 3), round(col_sum/gray_sum, 3)
+
+
+def get_star_centroids(img: np.ndarray, method: str, wind_size: int=-1) -> list[tuple[float, float]]:
     '''
         Get the centroids of the stars in the image.
     Args:
@@ -160,39 +219,103 @@ def get_star_centroids(img: np.ndarray, method: str, wind_size: int=9) -> list[t
     # calculate the centroid coordinate with threshold and weight
     centroids = []
     for (rows, cols) in group_coords:
-        vals = filtered_img[rows, cols]
+        if wind_size != -1:
+            vals = filtered_img[rows, cols]
+            # get the brightest pixel and use it as the center
+            idx = np.argmax(vals)
+            # construct window
+            top, bottom, left, right = cal_wind_boundary((rows[idx], cols[idx]), wind_size, h, w)
+            coords = [(r, c) for r in range(top, bottom) for c in range(left, right)]
+        else:
+            coords = [(r, c) for r, c in zip(rows, cols)]
+
+        centroids.append(cal_center_of_gravity(filtered_img, coords, method, threshold))
+
+    return centroids
+
+
+def get_star_centroids_with_pca(img: np.ndarray, K: int, L: int, method: str, noiseless_img: np.ndarray) -> list[tuple[float, float]]:
+    '''
+        Get the centroids of the stars in the image using PCA-LPG(principal component analysis with local pixel grouping).
+    Args:
+        img: the image to be processed
+        K: the size of denoising window
+        L: the size of training window
+    Returns:
+        centroids: the centroids of the stars in the image
+    '''
+    # get the image size
+    h, w = img.shape
+
+    # calaculate the threshold
+    threshold = cal_multiwind_threshold(img, wind_len=int(max(h*0.7, w*0.7)), num_wind=10)
+
+    # rough group star using connectivity
+    group_coords = group_star(img, threshold, 2)
+
+    centroids = []
+    for (rows, cols) in group_coords:
         # get the brightest pixel
-        idx = np.argmax(vals)
-        row, col = rows[idx], cols[idx]
-        # construct window
-        top = max(0, row - wind_size//2)
-        bottom = min(h, row + wind_size//2)
-        left = max(0, col - wind_size//2)
-        right = min(w, col + wind_size//2)
-        # calculate the centroid in the window
-        row_sum = 0
-        col_sum = 0
-        gray_sum = 0
-        for r in range(top, bottom):
-            for c in range(left, right):
-                if method == 'default centroid':
-                    row_sum += r * filtered_img[r][c]
-                    col_sum += c * filtered_img[r][c]
-                    gray_sum += filtered_img[r][c]
-                elif method == 'square centroid':
-                    row_sum += r * pow(filtered_img[r][c], 2)
-                    col_sum += c * pow(filtered_img[r][c], 2)
-                    gray_sum += pow(filtered_img[r][c], 2)
-                elif method == 'centroid with threshold':
-                    row_sum += r * (filtered_img[r][c] - threshold)
-                    col_sum += c * (filtered_img[r][c] - threshold)
-                    gray_sum += filtered_img[r][c] - threshold
-                else:
-                    print('wrong centroid method!')
-                    return []
+        idx = np.argmax(img[rows, cols])
+        # use the brightest pixel to both training and denoising window
+        t1, b1, l1, r1 = cal_wind_boundary((rows[idx], cols[idx]), K, h, w)
+        t2, b2, l2, r2 = cal_wind_boundary((rows[idx], cols[idx]), L, h, w)
 
-        centroids.append((round(row_sum/gray_sum, 3), round(col_sum/gray_sum, 3)))
+        # LPG
+        # target block
+        target_block = img[t1:b1+1, l1:r1+1].reshape(1, -1).astype(np.float64)
+        # get all the blocks similar to the target block in the training window
+        similar_blocks = []
+        corner = t2, l2
+        while corner[0] + K <= b2:
+            while corner[1] + K <= r2:
+                # calculate the similarity between the target block and the sample block
+                if corner[0] == t1 and corner[1] == l1:
+                    corner = corner[0], corner[1] + 1
+                    continue
 
+                sample_block = img[corner[0]:corner[0]+K, corner[1]:corner[1]+K].reshape(1, -1).astype(np.float64)
+                diff = np.linalg.norm(target_block - sample_block)
+                if diff < 20 * K * K:
+                    similar_blocks.append(sample_block.reshape(-1))
+                corner = corner[0], corner[1] + 1
+            corner = corner[0] + 1, l2
+        
+        # PCA
+        similar_blocks = np.array(similar_blocks).astype(np.float64)
+        # each block is a row vector with size equal to K*K, which means the number of features is K*K
+        mean = np.mean(similar_blocks, axis=0)
+        # centralize the similar blocks
+        similar_blocks -= mean
+        cov = np.cov(similar_blocks, rowvar=False)
+        eigvals, eigvecs = np.linalg.eig(cov)
+        
+        # sort the eigenvectors by the eigenvalues
+        idx = np.argsort(eigvals)
+        # select the top 90% eigenvectors
+        len = int(0.9 * K * K)
+        eigvals, eigvecs = eigvals[idx[-len:]], eigvecs[:, idx[-len:]]
+
+        # project the target block to the eigenvector space
+        eigdomain_target_block = np.dot(target_block - mean, eigvecs)
+        
+        # reconstruct the target block
+        denoise_target_block = np.dot(eigdomain_target_block, eigvecs.T) + mean
+
+        # get the noiseless target block and reshape the both the target and denoised target block
+        noiseless_target_block = noiseless_img[t1:b1+1, l1:r1+1]
+        target_block = target_block.reshape(K, K)
+        denoise_target_block = denoise_target_block.reshape(K, K)
+        # calculate the mse and psnr
+        mse1, psnr1 = cal_mse_psnr(noiseless_target_block, target_block)
+        mse2, psnr2 = cal_mse_psnr(noiseless_target_block, denoise_target_block)
+        print('mse:', mse1, mse2, 'psnr:', psnr1, psnr2)
+
+        # get the centroid of the star
+        coords = [(r, c) for r in range(0, K) for c in range(0, K)]
+        centroid = cal_center_of_gravity(denoise_target_block, coords, method)
+        centroids.append((centroid[0]+t1, centroid[1]+l1))
+    
     return centroids
 
 
