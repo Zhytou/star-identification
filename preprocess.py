@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from skimage import measure
 from math import radians
 
-from simulate import create_star_image, add_stary_light_noise, ROI
+from simulate import create_star_image, cal_avg_star_num_within_fov, roi
 
 
 def draw_gray_3d(img: np.ndarray):
@@ -43,7 +43,7 @@ def filter_image(img: np.ndarray, method='gaussian') -> np.ndarray:
     '''
     if method == 'gaussian':
         # low pass filter for noise
-        filtered_img = cv2.GaussianBlur(img, (2*ROI+1, 2*ROI+1), 1)
+        filtered_img = cv2.GaussianBlur(img, (2*roi+1, 2*roi+1), 1)
     elif method == 'median':
         filtered_img = cv2.medianBlur(img, 3)
     elif method == 'wavelet':
@@ -146,40 +146,86 @@ def cal_mse_psnr(img: np.ndarray, filtered_img: np.ndarray):
     return mse, psnr
 
 
-def cal_multiwind_threshold(img: np.ndarray, wind_len: int=40, num_wind: int=20) -> int:
+def cal_threshold(img: np.ndarray, method: str, wind_len: int=200, num_wind: int=20, delta: float=0.1) -> int:
     """
-        Calculate the threshold of the image using the method "multi-window threshold division" from https://ieeexplore.ieee.org/abstract/document/1008988.
+        Calculate the threshold for image segmentation.
     Args:
-        wind_len: the length of the window
-        num_wind: the number of the windows
+        img: the image to be processed
+        method: the method used to calculate the threshold
+            'Otsu': Otsu thresholding(which minimizes the within-class variances for threshold selection)
+                https://ieeexplore.ieee.org/document/4310076/?arnumber=4310076
+            'Liebe': adaptive thresholding
+                http://ieeexplore.ieee.org/document/1008988/
+            'Xu': weighted iterative thresholding
+                https://linkinghub.elsevier.com/retrieve/pii/S0030402613002490
+        epsilon: stop parameter used in 'Xu' method
+        delta: scale parameter used for new threshold iterative calculation in 'Xu' method
+        wind_len: the length of window used in 'Liebe' method
+        num_wind: the number of the windows in 'Liebe' method
     Returns:
-        threshold: the threshold of the image
+        T: the threshold of the image
     """        
     # initialize random windows
-    threshold = 0
+    T = 0
 
     # get the image size
     h, w = img.shape
 
-    for i in range(num_wind):
-        x = np.random.randint(0, w - wind_len)
-        y = np.random.randint(0, h - wind_len)
+    if method == 'Otsu':
+        # use cv2 threshold function to get otsu threshold
+        T, _ = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    elif method == 'Xu':
+        #? Xu method is not validated yet
+        # get the avg number of fov
+        avg_star_num = cal_avg_star_num_within_fov()
+        # get the gray distribution of the image(histgram)
+        hist = cv2.calcHist([img], [0], None, [256], [0, 256])
+        hist = hist.ravel()
+        # use 'Liebe' method to get the initial threshold
+        T = cal_threshold(img, wind_len=int(max(h, w)*0.9), num_wind=num_wind, method='Liebe')
+        
+        while True:
+            num1, num2 = 0, 0
+            denom1, denom2 = 0, 0
+            for i in range(256):
+                if i < T:
+                    num1 += i * hist[i]
+                    denom1 += hist[i]
+                else:
+                    num2 += i * hist[i]
+                    denom2 += hist[i]
+            # background and foreground mean
+            mean1 = num1/denom1 if denom1 != 0 else 0
+            mean2 = num2/denom2 if denom2 != 0 else 0
+            # get the number of stars
+            _, star_num = group_star(img, T, connectivity=2)
+            print(T, mean1, mean2, star_num)
+            if star_num < 0.5 * avg_star_num:
+                T = (1-delta) * mean1 + (1+delta) * mean2
+            elif star_num > 1.5 * avg_star_num:
+                T = (1+delta) * mean1 + (1-delta) * mean2
+            else:
+                break
+    elif method == 'Liebe':
+        # calculate the threshold using the mean and standard deviation of multiple windows
+        mean = np.mean(img)
+        std = np.std(img)
+        T = mean + 4 * std
+    else:
+        print('wrong threshold method!')
+    
+    return T
 
-        wind = img[y:y+wind_len, x:x+wind_len]    
-        mean = np.mean(wind)  
-        std = np.std(wind)
-        threshold += mean + 5 * std
 
-    return round(threshold/num_wind)
-
-
-def group_star(img: np.ndarray, threshold: int, connectivity: int) -> list[list[tuple[int, int]]]:
+def group_star(img: np.ndarray, threshold: int, connectivity: int) -> tuple[list[list[tuple[int, int]]], int]:
     """
         Group the facula(potential star) in the image.
     Args:
         img: the image to be processed
         connectivity: method of connectivity
     Returns:
+        group_coords: the coordinates of the grouped pixels(which are the potential stars)
+        num_group: the number of the grouped
     """
     # if img[u, v] < threshold: 0, else: img[u, v]
     _, img = cv2.threshold(img, threshold, 255, cv2.THRESH_TOZERO)
@@ -195,11 +241,11 @@ def group_star(img: np.ndarray, threshold: int, connectivity: int) -> list[list[
         # get the coords for each label
         rows, cols = np.nonzero(labeled_img == label)
         # two small to be a star
-        if len(rows) < 3 and len(cols) < 3:
+        if len(rows) < 9 and len(cols) < 9:
             continue
         group_coords.append((rows, cols))
 
-    return group_coords
+    return group_coords, len(group_coords)
 
 
 def cal_wind_boundary(center: tuple[int, int], wind_size: int, h: int, w: int) -> tuple[int, int, int, int]:
@@ -281,12 +327,13 @@ def cal_center_of_gravity(img: np.ndarray, coords: list[tuple[int,int]], method:
     return center
 
 
-def get_star_centroids(img: np.ndarray, method: str, wind_size: int=-1) -> list[tuple[float, float]]:
+def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, wind_size: int=-1) -> list[tuple[float, float]]:
     '''
         Get the centroids of the stars in the image.
     Args:
         img: the image to be processed
-        method: centroid algorithm
+        thr_method: threshold calculation method
+        cen_method: centroid algorithm
         wind_size: the size of the window used to calculate the centroid
     Returns:
         centroids: the centroids of the stars in the image
@@ -299,10 +346,10 @@ def get_star_centroids(img: np.ndarray, method: str, wind_size: int=-1) -> list[
     filtered_img = filter_image(img)
 
     # calaculate the threshold
-    threshold = cal_multiwind_threshold(filtered_img, wind_len=int(max(h*0.7, w*0.7)), num_wind=10)
+    threshold = cal_threshold(filtered_img, thr_method, wind_len=int(max(h*0.7, w*0.7)), num_wind=10)
 
     # rough group star using connectivity
-    group_coords = group_star(filtered_img, threshold, 2)
+    group_coords, _ = group_star(filtered_img, threshold, connectivity=2)
 
     # calculate the centroid coordinate with threshold and weight
     centroids = []
@@ -317,12 +364,12 @@ def get_star_centroids(img: np.ndarray, method: str, wind_size: int=-1) -> list[
         else:
             coords = [(r, c) for r, c in zip(rows, cols)]
 
-        centroids.append(cal_center_of_gravity(filtered_img, coords, method, threshold))
+        centroids.append(cal_center_of_gravity(filtered_img, coords, cen_method, threshold))
 
     return centroids
 
 
-def get_star_centroids_with_pca(img: np.ndarray, method: str, K: int, L: int) -> list[tuple[float, float]]:
+def get_star_centroids_with_pca(img: np.ndarray, thr_method: str, cen_method: str, K: int=2*roi+1, L: int=4*roi+1) -> list[tuple[float, float]]:
     '''
         Get the centroids of the stars in the image using PCA-LPG(principal component analysis with local pixel grouping).
     Args:
@@ -337,13 +384,13 @@ def get_star_centroids_with_pca(img: np.ndarray, method: str, K: int, L: int) ->
     h, w = img.shape
 
     # calaculate the threshold
-    threshold = cal_multiwind_threshold(img, wind_len=int(max(h*0.8, w*0.8)), num_wind=10)
+    threshold = cal_threshold(img, thr_method, wind_len=int(max(h*0.8, w*0.8)), num_wind=10)
 
     # rough group star using connectivity
-    group_coords = group_star(img, threshold, 2)
+    group_coords, _ = group_star(img, threshold, 2)
 
     centroids = []
-    for (rows, cols) in group_coords:
+    for rows, cols in group_coords:
         # get the brightest pixel
         idx = np.argmax(img[rows, cols])
         # set the brightest pixel as the center of window
@@ -356,7 +403,7 @@ def get_star_centroids_with_pca(img: np.ndarray, method: str, K: int, L: int) ->
         #! subtract the offset for later centroid calculation and add the offset back after calculation
         center = center[0]-t, center[1]-l
         coords = [(r, c) for r in range(0, K) for c in range(0, K)]
-        centroid = cal_center_of_gravity(denoise_target_block, coords, method, T=np.mean(img), center=center, n=10)
+        centroid = cal_center_of_gravity(denoise_target_block, coords, cen_method, T=np.mean(img), center=center, n=10)
         centroids.append((centroid[0]+t, centroid[1]+l))
     
     return centroids
@@ -384,7 +431,7 @@ if __name__ == '__main__':
         img, _ = create_star_image(ra, de, roll, white_noise_std=10)
         h, w = img.shape
         filtered_img = filter_image(img)
-        threshold = cal_multiwind_threshold(filtered_img, wind_len=int(max(h*0.7, w*0.7)), num_wind=10)
+        threshold = cal_threshold(filtered_img, wind_len=int(max(h*0.7, w*0.7)), num_wind=10)
         print(threshold)
         binary_img = cv2.threshold(filtered_img, threshold, 255, cv2.THRESH_TOZERO)[1]
         cv2.imwrite('after_seg.png', binary_img)
