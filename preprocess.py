@@ -43,7 +43,7 @@ def filter_image(img: np.ndarray, method='gaussian') -> np.ndarray:
     '''
     if method == 'gaussian':
         # low pass filter for noise
-        filtered_img = cv2.GaussianBlur(img, (2*roi+1, 2*roi+1), 1)
+        filtered_img = cv2.GaussianBlur(img, (2*roi+1, 2*roi+1), 0.5)
     elif method == 'median':
         filtered_img = cv2.medianBlur(img, 3)
     elif method == 'wavelet':
@@ -146,7 +146,7 @@ def cal_mse_psnr(img: np.ndarray, filtered_img: np.ndarray):
     return mse, psnr
 
 
-def cal_threshold(img: np.ndarray, method: str, wind_len: int=200, num_wind: int=20, delta: float=0.1) -> int:
+def cal_threshold(img: np.ndarray, method: str, delta: float=0.1) -> int:
     """
         Calculate the threshold for image segmentation.
     Args:
@@ -158,18 +158,12 @@ def cal_threshold(img: np.ndarray, method: str, wind_len: int=200, num_wind: int
                 http://ieeexplore.ieee.org/document/1008988/
             'Xu': weighted iterative thresholding
                 https://linkinghub.elsevier.com/retrieve/pii/S0030402613002490
-        epsilon: stop parameter used in 'Xu' method
         delta: scale parameter used for new threshold iterative calculation in 'Xu' method
-        wind_len: the length of window used in 'Liebe' method
-        num_wind: the number of the windows in 'Liebe' method
     Returns:
         T: the threshold of the image
     """        
     # initialize random windows
     T = 0
-
-    # get the image size
-    h, w = img.shape
 
     if method == 'Otsu':
         # use cv2 threshold function to get otsu threshold
@@ -182,7 +176,7 @@ def cal_threshold(img: np.ndarray, method: str, wind_len: int=200, num_wind: int
         hist = cv2.calcHist([img], [0], None, [256], [0, 256])
         hist = hist.ravel()
         # use 'Liebe' method to get the initial threshold
-        T = cal_threshold(img, wind_len=int(max(h, w)*0.9), num_wind=num_wind, method='Liebe')
+        T = cal_threshold(img, method='Liebe')
         
         while True:
             num1, num2 = 0, 0
@@ -199,7 +193,6 @@ def cal_threshold(img: np.ndarray, method: str, wind_len: int=200, num_wind: int
             mean2 = num2/denom2 if denom2 != 0 else 0
             # get the number of stars
             _, star_num = group_star(img, T, connectivity=2)
-            print(T, mean1, mean2, star_num)
             if star_num < 0.5 * avg_star_num:
                 T = (1-delta) * mean1 + (1+delta) * mean2
             elif star_num > 1.5 * avg_star_num:
@@ -210,19 +203,21 @@ def cal_threshold(img: np.ndarray, method: str, wind_len: int=200, num_wind: int
         # calculate the threshold using the mean and standard deviation of multiple windows
         mean = np.mean(img)
         std = np.std(img)
-        T = mean + 4 * std
+        T = mean + 3 * std
     else:
         print('wrong threshold method!')
     
     return T
 
 
-def group_star(img: np.ndarray, threshold: int, connectivity: int) -> tuple[list[list[tuple[int, int]]], int]:
+def group_star(img: np.ndarray, threshold: int, connectivity: int, pixel_limit: int=5) -> tuple[list[list[tuple[int, int]]], int]:
     """
         Group the facula(potential star) in the image.
     Args:
         img: the image to be processed
+        threshold: the threshold used to segment the image
         connectivity: method of connectivity
+        pixel_limit: the minimum number of pixels for a group
     Returns:
         group_coords: the coordinates of the grouped pixels(which are the potential stars)
         num_group: the number of the grouped
@@ -241,7 +236,7 @@ def group_star(img: np.ndarray, threshold: int, connectivity: int) -> tuple[list
         # get the coords for each label
         rows, cols = np.nonzero(labeled_img == label)
         # two small to be a star
-        if len(rows) < 9 and len(cols) < 9:
+        if len(rows) < pixel_limit and len(cols) < pixel_limit:
             continue
         group_coords.append((rows, cols))
 
@@ -269,6 +264,40 @@ def cal_wind_boundary(center: tuple[int, int], wind_size: int, h: int, w: int) -
     return t, b, l, r
 
 
+def cal_center_of_guassian_curve(img: np.ndarray, center: tuple[int,int], wind_size: int) -> tuple[float, float]:
+    '''
+        Calculate the centroid of the star using the gaussian fitting.
+    Args:
+        img: the image to be processed
+        center: the center of the window
+        wind_size: the size of the window
+    Returns:
+        centroid: the centroid of the star
+    '''
+    h, w = img.shape
+    t, b, l, r = cal_wind_boundary(center, wind_size, h, w)
+
+    # get the window
+    x, y = np.meshgrid(range(t, b+1), range(l, r+1))
+    x, y = x.flatten()+0.5, y.flatten()+0.5
+
+    # construct the matrix A
+    A = np.column_stack([
+        x**2 + y**2,
+        x,
+        y,
+        -np.ones_like(x)
+    ]).astype(np.float64)
+
+    # ln(I(x, y))
+    Y = np.log(img[t:b+1, l:r+1].flatten(order='F')).astype(np.float64)
+
+    # solve the linear equation X = ||Y - AX||min
+    X, _, _, _ = np.linalg.lstsq(A, Y, rcond=None)
+
+    return round(-X[1]/(2*X[0]), 3), round(-X[2]/(2*X[0]), 3)
+
+
 def cal_center_of_gravity(img: np.ndarray, coords: list[tuple[int,int]], method: str, T: int=-1, center: tuple[int, int]=None, A: float=200, sigma: float=1.0, n: int=1) -> tuple[float, float]:
     '''
         Calculate the centroid of the star in the window.
@@ -290,40 +319,32 @@ def cal_center_of_gravity(img: np.ndarray, coords: list[tuple[int,int]], method:
     if method != 'IWCoG':
         n = 1
 
+    coords = np.array(coords)
+    print(coords.shape)
+    # row and column add 0.5 to get the center of the pixel
+    r, c = coords[:, 0]+0.5, coords[:, 1]+0.5
+    # gray
+    g = img[coords[:, 0], coords[:, 1]]
+
     # iterate n times
     while n > 0:
         n -= 1
-        # calculate the centroid in the window
-        row_sum = 0
-        col_sum = 0
-        gray_sum = 0
-        # get the centroid coordinate
-        for (r, c) in coords:
-            if method == 'CoG':
-                row_sum += r * img[r][c]
-                col_sum += c * img[r][c]
-                gray_sum += img[r][c]
-            elif method == 'MCoG':
-                row_sum += r * (img[r][c] - T)
-                col_sum += c * (img[r][c] - T)
-                gray_sum += img[r][c] - T
-            elif method == 'WCoG':
-                dd = (r-center[0])**2 + (c-center[1])**2
-                w = A*np.exp(-dd/(2*sigma**2))
-                row_sum += r * img[r][c] * w
-                col_sum += c * img[r][c] * w
-                gray_sum += img[r][c] * w
-            elif method == 'IWCoG':
-                dd = (r-center[0])**2 + (c-center[1])**2
-                w = A*np.exp(-dd/(2*sigma**2))
-                row_sum += r * img[r][c] * w
-                col_sum += c * img[r][c] * w
-                gray_sum += img[r][c] * w
-                print(dd, w, img[r][c])
-            else:
-                print('wrong gravity method!')
-                return [0.0, 0.0]
-        center = round(row_sum/gray_sum, 3), round(col_sum/gray_sum, 3)
+        if method == 'CoG':
+            rs, cs = np.sum(r * g), np.sum(c * g)
+            gs = np.sum(g)
+        elif method == 'MCoG':
+            rs, cs = np.sum(r * (g - T)), np.sum(c * (g - T))
+            gs = np.sum(g - T)
+        elif method == 'WCoG' or method == 'IWCoG':
+            # weight for each pixel used in WCoG and IWCoG
+            d = (r-center[0])**2 + (c-center[1])**2
+            w = A*np.exp(-d/(2*sigma**2))
+            rs, cs = np.sum(r * g * w), np.sum(c * g * w)
+            gs = np.sum(g * w)
+        else:
+            print('wrong gravity method!')
+            return [0.0, 0.0]
+        center = round(rs/gs, 3), round(cs/gs, 3)
     return center
 
 
@@ -343,28 +364,36 @@ def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, wind_s
     h, w = img.shape
 
     # low pass filter for noise
-    filtered_img = filter_image(img)
+    filtered_img = img#filter_image(img)
 
     # calaculate the threshold
-    threshold = cal_threshold(filtered_img, thr_method, wind_len=int(max(h*0.7, w*0.7)), num_wind=10)
+    T = cal_threshold(filtered_img, thr_method)
+
+    print(T)
 
     # rough group star using connectivity
-    group_coords, _ = group_star(filtered_img, threshold, connectivity=2)
+    group_coords, _ = group_star(filtered_img, T, connectivity=2, pixel_limit=5)
 
     # calculate the centroid coordinate with threshold and weight
     centroids = []
     for (rows, cols) in group_coords:
-        if wind_size != -1:
-            vals = filtered_img[rows, cols]
-            # get the brightest pixel and use it as the center
-            idx = np.argmax(vals)
+        vals = filtered_img[rows, cols]
+        # get the brightest pixel and use it as the center
+        idx = np.argmax(vals)
+        brightest = rows[idx], cols[idx]
+
+        if wind_size != -1:    
             # construct window
-            top, bottom, left, right = cal_wind_boundary((rows[idx], cols[idx]), wind_size, h, w)
-            coords = [(r, c) for r in range(top, bottom) for c in range(left, right)]
+            t, b, l, r = cal_wind_boundary(brightest, wind_size, h, w)
+            sub_img = cv2.resize(filtered_img[t:b+1, l:r+1], (wind_size*2, wind_size*2), interpolation=cv2.INTER_LINEAR)
+            coords = [(r, c) for r in range(0, wind_size*2) for c in range(0, wind_size*2)]
+            centroid = cal_center_of_gravity(sub_img, coords, cen_method, T, center=brightest, n=10)
+            centroid = centroid[0]/2+t, centroid[1]/2+l
         else:
             coords = [(r, c) for r, c in zip(rows, cols)]
+            centroid = cal_center_of_gravity(filtered_img, coords, cen_method, T, center=brightest, n=10)
 
-        centroids.append(cal_center_of_gravity(filtered_img, coords, cen_method, threshold))
+        centroids.append(centroid)
 
     return centroids
 
@@ -384,10 +413,10 @@ def get_star_centroids_with_pca(img: np.ndarray, thr_method: str, cen_method: st
     h, w = img.shape
 
     # calaculate the threshold
-    threshold = cal_threshold(img, thr_method, wind_len=int(max(h*0.8, w*0.8)), num_wind=10)
+    T = cal_threshold(img, thr_method)
 
-    # rough group star using connectivity
-    group_coords, _ = group_star(img, threshold, 2)
+    # get the local maxium pixel
+    group_coords, _ = group_star(img, T, connectivity=2, pixel_limit=1)
 
     centroids = []
     for rows, cols in group_coords:
@@ -410,81 +439,52 @@ def get_star_centroids_with_pca(img: np.ndarray, thr_method: str, cen_method: st
 
 
 if __name__ == '__main__':
-    filter_test = False
-    segment_test = False
-    centroid_test = True
 
-    if filter_test:
-        ra, de, roll = radians(161.7048), radians(4.2806), radians(0)
-        img, _ = create_star_image(ra, de, roll, white_noise_std=0)
-        noised_img, _ = create_star_image(ra, de, roll, white_noise_std=10)
-
-        for method in  ['gaussian', 'median', 'wavelet']:
-            filtered_img = filter_image(noised_img, method)
-            mse, psnr = cal_mse_psnr(img, filtered_img)
-            cv2.imwrite(f'filtered_img_{method}.png', filtered_img)
-            cv2.imwrite(f'filtered_img_{method}_scale.png', filtered_img[50:200, 350:500])
-            print(method, 'mse:', mse, 'psnr:', psnr)
-
-    if segment_test:
-        ra, de, roll = radians(161.7048), radians(4.2806), radians(0)
-        img, _ = create_star_image(ra, de, roll, white_noise_std=10)
-        h, w = img.shape
-        filtered_img = filter_image(img)
-        threshold = cal_threshold(filtered_img, wind_len=int(max(h*0.7, w*0.7)), num_wind=10)
-        print(threshold)
-        binary_img = cv2.threshold(filtered_img, threshold, 255, cv2.THRESH_TOZERO)[1]
-        cv2.imwrite('after_seg.png', binary_img)
-        cv2.imwrite('after_seg_scale.png', binary_img[50:200, 350:500])
-
-    if centroid_test:
-        white_noise_stds = [10]
-        arr_pos_err = {
-            'default centroid': [],
-            'square centroid': [],
-            'centroid with threshold': []
+    white_noise_stds = [10]
+    arr_pos_err = {
+        'CoG': [],
+        'MCoG': [],
+    }
+    for white_noise_std in white_noise_stds:
+        # times of estimation using centroid algorithm
+        num_esti_times = 3
+        # random ra & de test
+        num_test = 10
+        # generate random right ascension[0, 360] and declination[-90, 90]
+        ras = np.random.uniform(0, 2*np.pi, num_test)
+        des = np.arcsin(np.random.uniform(-1, 1, num_test))
+        # centroid position error
+        pos_err = {
+            'CoG': 0,
+            'MCoG': 0
         }
-        for white_noise_std in white_noise_stds:
-            # times of estimation using centroid algorithm
-            num_esti_times = 3
-            # random ra & de test
-            num_test = 10
-            # generate random right ascension[0, 360] and declination[-90, 90]
-            ras = np.random.uniform(0, 2*np.pi, num_test)
-            des = np.arcsin(np.random.uniform(-1, 1, num_test))
-            # centroid position error
-            pos_err = {
-                'default centroid': 0,
-                'square centroid': 0,
-                'centroid with threshold': 0
-            }
-            # generate the star image
-            for i in range(num_test):
-                img, star_info = create_star_image(ras[i], des[i], 0, white_noise_std=0)
-                real_coords = np.array([x[1] for x in star_info])
-                # estimate the centroids of the stars in the image
-                for method in pos_err.keys():
-                    arr_esti_coords = []
-                    for _ in range(num_esti_times):
-                        esti_coords = np.array(get_star_centroids(img, method))
-                        if len(real_coords) != len(esti_coords):
-                            print('Wrong star number extracted: ', len(real_coords), len(esti_coords))
-                            continue
-                        arr_esti_coords.append(esti_coords)
-                    if len(arr_esti_coords) == 0:
-                        continue
-                    avg_esti_coords = np.mean(arr_esti_coords, axis=0)
-                    # calculate the position error
-                    diff = real_coords[:, None] - avg_esti_coords
-                    dist = np.linalg.norm(diff, axis=-1)
-                    pos_err[method] += np.sum(np.min(dist, axis=0))
-
+        # generate the star image
+        for i in range(num_test):
+            img, star_info = create_star_image(ras[i], des[i], 0, white_noise_std=0)
+            real_coords = np.array([x[1] for x in star_info])
+            # estimate the centroids of the stars in the image
             for method in pos_err.keys():
-                arr_pos_err[method].append(pos_err[method]/num_test)
-        
-        print(arr_pos_err)
+                arr_esti_coords = []
+                for _ in range(num_esti_times):
+                    esti_coords = np.array(get_star_centroids(img, 'Liebe', method, wind_size=10))
+                    if len(real_coords) != len(esti_coords):
+                        print('Wrong star number extracted: ', len(real_coords), len(esti_coords))
+                        continue
+                    arr_esti_coords.append(esti_coords)
+                if len(arr_esti_coords) == 0:
+                    continue
+                avg_esti_coords = np.mean(arr_esti_coords, axis=0)
+                # calculate the position error
+                diff = real_coords[:, None] - avg_esti_coords
+                dist = np.linalg.norm(diff, axis=-1)
+                pos_err[method] += np.sum(np.min(dist, axis=1))
 
-        for method in arr_pos_err.keys():
-            plt.plot(white_noise_stds, arr_pos_err[method], label=method)
-        plt.grid()
-        plt.show()
+        for method in pos_err.keys():
+            arr_pos_err[method].append(pos_err[method]/num_test)
+    
+    print(arr_pos_err)
+
+    # for method in arr_pos_err.keys():
+    #     plt.plot(white_noise_stds, arr_pos_err[method], label=method)
+    # plt.grid()
+    # plt.show()
