@@ -18,8 +18,10 @@ def draw_gray_3d(img: np.ndarray):
     h, w = img.shape
 
     # generate the coordinates
-    x = np.linspace(-w/2, w/2, w)
-    y = np.linspace(-h/2, h/2, h)
+    # x = np.linspace(-w/2, w/2, w)
+    x = np.linspace(0, w, w)
+    # y = np.linspace(-h/2, h/2, h)
+    y = np.linspace(0, h, h)
     X, Y = np.meshgrid(x, y)
 
     # create 3D image
@@ -97,6 +99,9 @@ def denoise_window_with_pca(img: np.ndarray, center: tuple[int, int], K: int, L:
             corner = corner[0], corner[1] + 1
         corner = corner[0] + 1, l2
     
+    if len(similar_blocks) == 0:
+        return target_block.reshape(K, K)
+
     # PCA
     similar_blocks = np.array(similar_blocks).astype(np.float64)
     # each block is a row vector with size equal to K*K, which means the number of features is K*K
@@ -109,8 +114,8 @@ def denoise_window_with_pca(img: np.ndarray, center: tuple[int, int], K: int, L:
     # sort the eigenvectors by the absolute value of eigenvalues
     idx = np.argsort(eigvals)
     # select the top 90% eigenvectors
-    len = int(0.9 * K * K)
-    eigvals, eigvecs = eigvals[idx[-len:]], eigvecs[:, idx[-len:]]
+    num = int(0.80 * K * K)
+    eigvals, eigvecs = eigvals[idx[-num:]], eigvecs[:, idx[-num:]]
 
     # project the target block to the eigenvector space
     eigdomain_target_block = np.dot(target_block - mean, eigvecs)
@@ -146,7 +151,7 @@ def cal_mse_psnr(img: np.ndarray, filtered_img: np.ndarray):
     return mse, psnr
 
 
-def cal_threshold(img: np.ndarray, method: str, delta: float=0.1) -> int:
+def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int=5, gray_diff: int=4) -> int:
     """
         Calculate the threshold for image segmentation.
     Args:
@@ -158,16 +163,29 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1) -> int:
                 http://ieeexplore.ieee.org/document/1008988/
             'Xu': weighted iterative thresholding
                 https://linkinghub.elsevier.com/retrieve/pii/S0030402613002490
+            'Abutaleb': automatic thresholding of gray-level pictures using two-dimensional entropy
+                https://www.sciencedirect.com/science/article/abs/pii/0734189X89900510?via%3Dihub
+            'Xiao': entropic thresholding based on GLSC 2D histogram
+                https://ieeexplore.ieee.org/document/4761626/?arnumber=4761626
         delta: scale parameter used for new threshold iterative calculation in 'Xu' method
+        wind_size: the size of the window used to calculate the threshold in 'Abutaleb'/'Xiao' method
+        gray_diff: the max difference of the gray value to count the similarity in 'Xiao' method
     Returns:
         T: the threshold of the image
-    """        
-    # initialize random windows
+    """
+    h, w = img.shape
+
+    # initialize threshold
     T = 0
 
     if method == 'Otsu':
         # use cv2 threshold function to get otsu threshold
         T, _ = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    elif method == 'Liebe':
+        # calculate the threshold using the mean and standard deviation of multiple windows
+        mean = np.mean(img)
+        std = np.std(img)
+        T = mean + 3 * std
     elif method == 'Xu':
         #? Xu method is not validated yet
         # get the avg number of fov
@@ -177,7 +195,6 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1) -> int:
         hist = hist.ravel()
         # use 'Liebe' method to get the initial threshold
         T = cal_threshold(img, method='Liebe')
-        
         while True:
             num1, num2 = 0, 0
             denom1, denom2 = 0, 0
@@ -199,11 +216,81 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1) -> int:
                 T = (1+delta) * mean1 + (1-delta) * mean2
             else:
                 break
-    elif method == 'Liebe':
-        # calculate the threshold using the mean and standard deviation of multiple windows
-        mean = np.mean(img)
-        std = np.std(img)
-        T = mean + 3 * std
+    elif method == 'Abutaleb':
+        # average gray level matrix for each pixel's window
+        avg_glw = np.zeros_like(img, dtype=np.uint8)
+        for i in range(h):
+            for j in range(w):
+                # window
+                t, b, l, r = cal_wind_boundary((i, j), wind_size, h, w)
+                wind = img[t:b + 1, l:r + 1]
+                # quantize the gray level
+                avg_glw[i, j] = round(np.average(wind), 0)
+        
+        # get the 2d histogram
+        hist = np.zeros((256, 256), dtype=np.float64)
+        for i in range(h):
+            for j in range(w):
+                hist[img[i, j], avg_glw[i, j]] += 1
+        hist /= h*w
+
+        # iterate to get the threshold with max entropy
+        max_entropy = 0.0
+        S = 0
+        for t in range(256):
+            for s in range(256):
+                # background and object entropy(edge not concerned)
+                Pb, Po = np.sum(hist[:t, :s]), np.sum(hist[t:, s:])
+                if Pb == 0.0 or Po == 0.0:
+                    continue
+                Hb = -np.sum(hist[:t, :s]/Pb * np.log(hist[:t, :s]/Pb, where=(hist[:t, :s]/Pb>= 1e-7)))
+                Ho = -np.sum(hist[t:, s:]/Po * np.log(hist[t:, s:]/Po, where=(hist[t:, s:]/Po>= 1e-7)))
+                entropy = Hb + Ho
+                if entropy < 0:
+                    print('error', entropy, Hb, Ho)
+                if entropy > max_entropy:
+                    max_entropy = entropy
+                    T = t
+                    S = s
+                print('T', t, 'S', s, 'entropy', entropy)
+    elif method == 'Xiao':
+        # !still error, and need to be fixed
+        # gray similarity matrix for each pixel
+        sim = np.zeros_like(img)
+        for i in range(h):
+            for j in range(w):
+                # window
+                t, b, l, r = cal_wind_boundary((i, j), wind_size, h, w)
+                wind = img[t:b + 1, l:r + 1]
+                sim[i, j] = np.sum(np.abs(wind - img[i, j]) <= gray_diff)
+        
+        # get the 2d histogram
+        hist = np.zeros((256, wind_size**2), dtype=np.float64)
+        for i in range(h):
+            for j in range(w):
+                hist[img[i, j], sim[i, j]-1] += 1
+        hist /= h*w
+        # draw_gray_3d(hist)
+
+        max_entropy = 0
+        weights = np.exp(-9 * (np.arange(wind_size ** 2) + 1) / (wind_size ** 2))
+        weights = (1 + weights) / (1 - weights)
+        # iterate to get the threshold with max entropy
+        for t in range(256):
+            Pb = np.sum(hist[:t, :])
+            if Pb == 0.0 or Pb == 1.0:
+                continue
+            Pf = 1 - Pb
+            # background and foreground entropy
+            Hb = -np.sum(hist[:t, :]/Pb * np.log(hist[:t, :]/Pb, where=(hist[:t, :]/Pb>= 1e-7)) * weights)
+            Hf = -np.sum(hist[t:, :]/Pf * np.log(hist[t:, :]/Pf, where=(hist[t:, :]/Pf>= 1e-7)) * weights)
+            entropy = Hb + Hf
+            if entropy < 0:
+                print('error', entropy, Hb, Hf)
+            if entropy > max_entropy:
+                max_entropy = entropy
+                T = t
+            print('T', t, 'entropy', entropy)
     else:
         print('wrong threshold method!')
     
@@ -257,9 +344,9 @@ def cal_wind_boundary(center: tuple[int, int], wind_size: int, h: int, w: int) -
     '''
     # construct window
     t = max(0, center[0] - wind_size//2)
-    b = min(h, center[0] + wind_size//2)
+    b = min(h-1, center[0] + wind_size//2)
     l = max(0, center[1] - wind_size//2)
-    r = min(w, center[1] + wind_size//2)
+    r = min(w-1, center[1] + wind_size//2)
 
     return t, b, l, r
 
@@ -320,7 +407,9 @@ def cal_center_of_gravity(img: np.ndarray, coords: list[tuple[int,int]], method:
         n = 1
 
     coords = np.array(coords)
-    print(coords.shape)
+    # move the initial centroid to the center of the pixel
+    if center is not None:
+        center = center[0]+0.5, center[1]+0.5
     # row and column add 0.5 to get the center of the pixel
     r, c = coords[:, 0]+0.5, coords[:, 1]+0.5
     # gray
@@ -341,9 +430,12 @@ def cal_center_of_gravity(img: np.ndarray, coords: list[tuple[int,int]], method:
             w = A*np.exp(-d/(2*sigma**2))
             rs, cs = np.sum(r * g * w), np.sum(c * g * w)
             gs = np.sum(g * w)
+            print(rs, cs, gs)
+            if gs == 0.0:
+                return 0.0, 0.0
         else:
             print('wrong gravity method!')
-            return [0.0, 0.0]
+            return 0.0, 0.0
         center = round(rs/gs, 3), round(cs/gs, 3)
     return center
 
@@ -369,8 +461,6 @@ def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, wind_s
     # calaculate the threshold
     T = cal_threshold(filtered_img, thr_method)
 
-    print(T)
-
     # rough group star using connectivity
     group_coords, _ = group_star(filtered_img, T, connectivity=2, pixel_limit=5)
 
@@ -385,10 +475,8 @@ def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, wind_s
         if wind_size != -1:    
             # construct window
             t, b, l, r = cal_wind_boundary(brightest, wind_size, h, w)
-            sub_img = cv2.resize(filtered_img[t:b+1, l:r+1], (wind_size*2, wind_size*2), interpolation=cv2.INTER_LINEAR)
-            coords = [(r, c) for r in range(0, wind_size*2) for c in range(0, wind_size*2)]
-            centroid = cal_center_of_gravity(sub_img, coords, cen_method, T, center=brightest, n=10)
-            centroid = centroid[0]/2+t, centroid[1]/2+l
+            coords = [(x, y) for x in range(t, b+1) for y in range(l, r+1)]
+            centroid = cal_center_of_gravity(filtered_img, coords, cen_method, T, center=brightest, n=10)
         else:
             coords = [(r, c) for r, c in zip(rows, cols)]
             centroid = cal_center_of_gravity(filtered_img, coords, cen_method, T, center=brightest, n=10)
@@ -416,7 +504,9 @@ def get_star_centroids_with_pca(img: np.ndarray, thr_method: str, cen_method: st
     T = cal_threshold(img, thr_method)
 
     # get the local maxium pixel
-    group_coords, _ = group_star(img, T, connectivity=2, pixel_limit=1)
+    group_coords, _ = group_star(img, T, connectivity=2, pixel_limit=5)
+
+    print(T, len(group_coords))
 
     centroids = []
     for rows, cols in group_coords:
