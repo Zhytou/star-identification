@@ -1,12 +1,10 @@
 import cv2
-import pywt
 import numpy as np
 import matplotlib.pyplot as plt
 from skimage import measure
-from math import radians
 
 from simulate import create_star_image, cal_avg_star_num_within_fov, roi
-
+from denoise import filter_image
 
 def draw_gray_3d(img: np.ndarray):
     '''
@@ -35,122 +33,6 @@ def draw_gray_3d(img: np.ndarray):
     plt.show()
 
 
-def filter_image(img: np.ndarray, method='gaussian') -> np.ndarray:
-    '''
-        Use gaussian filter to reduce the noise in the image.
-    Args:
-        img: the image to be processed
-    Returns:
-        filtered_img: the image after filtering
-    '''
-    if method == 'gaussian':
-        # low pass filter for noise
-        filtered_img = cv2.GaussianBlur(img, (2*roi+1, 2*roi+1), 0.5)
-    elif method == 'median':
-        filtered_img = cv2.medianBlur(img, 3)
-    elif method == 'wavelet':
-        cA, (cH, cV, cD) = pywt.dwt2(img, 'sym8')
-        filtered_img = pywt.idwt2((cA, (cH, cV, cD)), 'sym8')
-    elif method == 'pca':
-        pass
-    else:
-        print('wrong filter method!')
-        return None
-    
-    return filtered_img
-
-
-def denoise_window_with_pca(img: np.ndarray, center: tuple[int, int], K: int, L: int, epsilon: float=20) -> np.ndarray:
-    '''
-        Use PCA to reduce the noise in the window of a image.
-    Args:
-        img: the image to be processed
-        center: the center of the window
-        K: the size of denoising window
-        L: the size of training window
-        epsilon: the threshold of the similarity
-    Returns:
-        filtered_img: the image after filtering
-    '''
-    # get the image size
-    h, w = img.shape
-
-    # get both the target window and training window
-    t1, b1, l1, r1 = cal_wind_boundary(center, K, h, w)
-    t2, b2, l2, r2 = cal_wind_boundary(center, L, h, w)
-
-    # LPG
-    # target block
-    target_block = img[t1:b1+1, l1:r1+1].reshape(1, -1).astype(np.float64)
-    # get all the blocks similar to the target block in the training window
-    similar_blocks = []
-    corner = t2, l2
-    while corner[0] + K <= b2:
-        while corner[1] + K <= r2:
-            # calculate the similarity between the target block and the sample block
-            if corner[0] == t1 and corner[1] == l1:
-                corner = corner[0], corner[1] + 1
-                continue
-
-            sample_block = img[corner[0]:corner[0]+K, corner[1]:corner[1]+K].reshape(1, -1).astype(np.float64)
-            diff = np.linalg.norm(target_block - sample_block)
-            if diff < epsilon * K * K:
-                similar_blocks.append(sample_block.reshape(-1))
-            corner = corner[0], corner[1] + 1
-        corner = corner[0] + 1, l2
-    
-    if len(similar_blocks) == 0:
-        return target_block.reshape(K, K)
-
-    # PCA
-    similar_blocks = np.array(similar_blocks).astype(np.float64)
-    # each block is a row vector with size equal to K*K, which means the number of features is K*K
-    mean = np.mean(similar_blocks, axis=0)
-    # centralize the similar blocks
-    similar_blocks -= mean
-    cov = np.cov(similar_blocks, rowvar=False)
-    eigvals, eigvecs = np.linalg.eig(cov)
-    
-    # sort the eigenvectors by the absolute value of eigenvalues
-    idx = np.argsort(eigvals)
-    # select the top 90% eigenvectors
-    num = int(0.80 * K * K)
-    eigvals, eigvecs = eigvals[idx[-num:]], eigvecs[:, idx[-num:]]
-
-    # project the target block to the eigenvector space
-    eigdomain_target_block = np.dot(target_block - mean, eigvecs)
-    
-    # reconstruct the target block
-    denoise_target_block = np.dot(eigdomain_target_block, eigvecs.T) + mean
-
-    #? make sure every pixel is in the range of [0, 255]
-    denoise_target_block = np.clip(denoise_target_block, 0, 255)
-
-    return denoise_target_block.reshape(K, K)
-
-
-def cal_mse_psnr(img: np.ndarray, filtered_img: np.ndarray):
-    '''
-        Calculate the mean square error and peak signal-to-noise ratio between the original image and the filtered image.
-    Args:
-        img: the image to be processed
-        filtered_img: the image after filtering
-    Returns:
-        mse: the mean square error between the original image and the filtered image
-        psnr: the peak signal-to-noise ratio between the original image and the filtered image
-    '''
-    # get the image size
-    h, w = img.shape
-
-    # caculate the MSE
-    mse = np.sum((img - filtered_img)**2) / (h * w)
-    
-    # caculate the PSNR
-    psnr = 10 * np.log10(255**2 / mse)
-    
-    return mse, psnr
-
-
 def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int=5, gray_diff: int=4) -> int:
     """
         Calculate the threshold for image segmentation.
@@ -167,6 +49,8 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
                 https://www.sciencedirect.com/science/article/abs/pii/0734189X89900510?via%3Dihub
             'Xiao': entropic thresholding based on GLSC 2D histogram
                 https://ieeexplore.ieee.org/document/4761626/?arnumber=4761626
+            'Yang': proposed method
+                2d histogram otsu(adding a max value axis)
         delta: scale parameter used for new threshold iterative calculation in 'Xu' method
         wind_size: the size of the window used to calculate the threshold in 'Abutaleb'/'Xiao' method
         gray_diff: the max difference of the gray value to count the similarity in 'Xiao' method
@@ -218,20 +102,13 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
                 break
     elif method == 'Abutaleb':
         # average gray level matrix for each pixel's window
-        avg_glw = np.zeros_like(img, dtype=np.uint8)
-        for i in range(h):
-            for j in range(w):
-                # window
-                t, b, l, r = cal_wind_boundary((i, j), wind_size, h, w)
-                wind = img[t:b + 1, l:r + 1]
-                # quantize the gray level
-                avg_glw[i, j] = round(np.average(wind), 0)
+        avg_img = cv2.medianBlur(img, wind_size)
         
         # get the 2d histogram
         hist = np.zeros((256, 256), dtype=np.float64)
         for i in range(h):
             for j in range(w):
-                hist[img[i, j], avg_glw[i, j]] += 1
+                hist[img[i, j], avg_img[i, j]] += 1
         hist /= h*w
 
         # iterate to get the threshold with max entropy
@@ -290,7 +167,33 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
             if entropy > max_entropy:
                 max_entropy = entropy
                 T = t
-            print('T', t, 'entropy', entropy)
+    elif method == 'Yang':
+        fimg = cv2.dilate(img, cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3)), iterations=1)
+
+        # get the 2d histogram
+        hist = np.zeros((256, 256), dtype=np.float64)
+        for i in range(h):
+            for j in range(w):
+                hist[img[i, j], fimg[i, j]] += 1
+        hist /= h*w
+        draw_gray_3d(hist)
+
+        # iterate to get the threshold with max entropy
+        # for t in range(256):
+        #     Pb = np.sum(hist[:t, 255])
+        #     if Pb == 0.0 or Pb == 1.0:
+        #         continue
+        #     Pf = 1 - Pb
+        #     # background and foreground entropy
+        #     Hb = -np.sum(hist[:t, 255]/Pb * np.log(hist[:t, 255]/Pb, where=(hist[:t, 255]/Pb>= 1e-7)) * weights)
+        #     Hf = -np.sum(hist[t:, 255]/Pf * np.log(hist[t:, 255]/Pf, where=(hist[t:, 255]/Pf>= 1e-7)) * weights)
+        #     entropy = Hb + Hf
+        #     if entropy < 0:
+        #         print('error', entropy, Hb, Hf)
+        #     if entropy > max_entropy:
+        #         max_entropy = entropy
+        #         T = t
+        #     print('T', t, 'entropy', entropy)
     else:
         print('wrong threshold method!')
     
@@ -456,13 +359,14 @@ def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, wind_s
     h, w = img.shape
 
     # low pass filter for noise
-    filtered_img = img#filter_image(img)
+    filtered_img = filter_image(img)
 
     # calaculate the threshold
     T = cal_threshold(filtered_img, thr_method)
+    print(thr_method, T)
 
     # rough group star using connectivity
-    group_coords, _ = group_star(filtered_img, T, connectivity=2, pixel_limit=5)
+    group_coords, _ = group_star(filtered_img, T, connectivity=1, pixel_limit=5)
 
     # calculate the centroid coordinate with threshold and weight
     centroids = []
@@ -483,48 +387,6 @@ def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, wind_s
 
         centroids.append(centroid)
 
-    return centroids
-
-
-def get_star_centroids_with_pca(img: np.ndarray, thr_method: str, cen_method: str, K: int=2*roi+1, L: int=4*roi+1) -> list[tuple[float, float]]:
-    '''
-        Get the centroids of the stars in the image using PCA-LPG(principal component analysis with local pixel grouping).
-    Args:
-        img: the image to be processed
-        method: centroid algorithm
-        K: the size of denoising window
-        L: the size of training window
-    Returns:
-        centroids: the centroids of the stars in the image
-    '''
-    # get the image size
-    h, w = img.shape
-
-    # calaculate the threshold
-    T = cal_threshold(img, thr_method)
-
-    # get the local maxium pixel
-    group_coords, _ = group_star(img, T, connectivity=2, pixel_limit=5)
-
-    print(T, len(group_coords))
-
-    centroids = []
-    for rows, cols in group_coords:
-        # get the brightest pixel
-        idx = np.argmax(img[rows, cols])
-        # set the brightest pixel as the center of window
-        center = (rows[idx], cols[idx])
-        # get the boundary of the window
-        t, _, l, _ = cal_wind_boundary(center, K, h, w)
-        # denoise the target block
-        denoise_target_block = denoise_window_with_pca(img, center, K, L)
-        
-        #! subtract the offset for later centroid calculation and add the offset back after calculation
-        center = center[0]-t, center[1]-l
-        coords = [(r, c) for r in range(0, K) for c in range(0, K)]
-        centroid = cal_center_of_gravity(denoise_target_block, coords, cen_method, T=np.mean(img), center=center, n=10)
-        centroids.append((centroid[0]+t, centroid[1]+l))
-    
     return centroids
 
 
