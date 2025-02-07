@@ -6,6 +6,7 @@ from skimage import measure
 from simulate import create_star_image, cal_avg_star_num_within_fov, roi
 from denoise import filter_image
 
+
 def draw_gray_3d(img: np.ndarray):
     '''
         Draw the 3D gray image.
@@ -254,22 +255,15 @@ def cal_wind_boundary(center: tuple[int, int], wind_size: int, h: int, w: int) -
     return t, b, l, r
 
 
-def cal_center_of_guassian_curve(img: np.ndarray, center: tuple[int,int], wind_size: int) -> tuple[float, float]:
+def cal_center_of_guassian_curve(img: np.ndarray, rows, cols) -> tuple[float, float]:
     '''
         Calculate the centroid of the star using the gaussian fitting.
     Args:
         img: the image to be processed
-        center: the center of the window
-        wind_size: the size of the window
     Returns:
         centroid: the centroid of the star
     '''
-    h, w = img.shape
-    t, b, l, r = cal_wind_boundary(center, wind_size, h, w)
-
-    # get the window
-    x, y = np.meshgrid(range(t, b+1), range(l, r+1))
-    x, y = x.flatten()+0.5, y.flatten()+0.5
+    x, y = rows+0.5, cols+0.5
 
     # construct the matrix A
     A = np.column_stack([
@@ -280,7 +274,7 @@ def cal_center_of_guassian_curve(img: np.ndarray, center: tuple[int,int], wind_s
     ]).astype(np.float64)
 
     # ln(I(x, y))
-    Y = np.log(img[t:b+1, l:r+1].flatten(order='F')).astype(np.float64)
+    Y = np.log(img[rows, cols].flatten(order='F')).astype(np.float64)
 
     # solve the linear equation X = ||Y - AX||min
     X, _, _, _ = np.linalg.lstsq(A, Y, rcond=None)
@@ -288,7 +282,7 @@ def cal_center_of_guassian_curve(img: np.ndarray, center: tuple[int,int], wind_s
     return round(-X[1]/(2*X[0]), 3), round(-X[2]/(2*X[0]), 3)
 
 
-def cal_center_of_gravity(img: np.ndarray, coords: list[tuple[int,int]], method: str, T: int=-1, center: tuple[int, int]=None, A: float=200, sigma: float=1.0, n: int=1) -> tuple[float, float]:
+def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, method: str, T: int=-1, center: tuple[int, int]=None, A: float=200, sigma: float=1.0, n: int=1) -> tuple[float, float]:
     '''
         Calculate the centroid of the star in the window.
     Args:
@@ -309,14 +303,14 @@ def cal_center_of_gravity(img: np.ndarray, coords: list[tuple[int,int]], method:
     if method != 'IWCoG':
         n = 1
 
-    coords = np.array(coords)
     # move the initial centroid to the center of the pixel
     if center is not None:
         center = center[0]+0.5, center[1]+0.5
-    # row and column add 0.5 to get the center of the pixel
-    r, c = coords[:, 0]+0.5, coords[:, 1]+0.5
+    
     # gray
-    g = img[coords[:, 0], coords[:, 1]]
+    g = img[rows, cols]
+    # row and column add 0.5 to get the center of the pixel
+    r, c = rows+0.5, cols+0.5
 
     # iterate n times
     while n > 0:
@@ -379,11 +373,11 @@ def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, wind_s
         if wind_size != -1:    
             # construct window
             t, b, l, r = cal_wind_boundary(brightest, wind_size, h, w)
-            coords = [(x, y) for x in range(t, b+1) for y in range(l, r+1)]
-            centroid = cal_center_of_gravity(filtered_img, coords, cen_method, T, center=brightest, n=10)
+            nrows, ncols = np.meshgrid(np.arange(t, b+1), np.arange(l, r+1))
+            nrows, ncols = nrows.flatten(), ncols.flatten()
+            centroid = cal_center_of_gravity(filtered_img, nrows, ncols, cen_method, T, center=brightest, n=10)
         else:
-            coords = [(r, c) for r, c in zip(rows, cols)]
-            centroid = cal_center_of_gravity(filtered_img, coords, cen_method, T, center=brightest, n=10)
+            centroid = cal_center_of_gravity(filtered_img, rows, cols, cen_method, T, center=brightest, n=10)
 
         centroids.append(centroid)
 
@@ -391,7 +385,6 @@ def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, wind_s
 
 
 if __name__ == '__main__':
-
     white_noise_stds = [10]
     arr_pos_err = {
         'CoG': [],
