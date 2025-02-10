@@ -5,7 +5,7 @@ import pandas as pd
 import cv2
 
 # region of interest for point spread function
-roi = 2
+roi = 3
 
 # star sensor pixel num
 w = 512
@@ -21,7 +21,7 @@ fov = 10
 mtot = 2*tan(radians(fov/2))*f
 
 # camera magnitude sensitivity limitation
-mv_limit = 5.0
+mv_limit = 6.0
 
 # pixel num per length
 xpixel = w/mtot
@@ -65,14 +65,47 @@ def add_stary_light_noise(img: np.ndarray, rc: int, cc: int, std: int, A: int) -
     return noised_img
 
 
-def create_star_image(ra: float, de: float, roll: float, white_noise_std: float = 10, pos_noise_std: float = 0, mv_noise_std: float = 0, ratio_false_star: int = 0, pure_point: bool = False, simulate_test: bool = False) -> tuple[np.ndarray, list]:
+def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float) -> np.ndarray:
+    """
+        Adds white noise to an image.
+    Args:
+        img: the image to put noise on
+    Returns:
+        noised_img: the image with white noise
+    """
+    # normalize image
+    img = img / 255.0
+
+    # add pepper noise
+    num_pepper = int(prob_p * img.size)
+    for i in range(num_pepper):
+        x, y = np.random.randint(0, img.shape[0]), np.random.randint(0, img.shape[1])
+        if img[x, y] != 0:
+            continue
+        if np.random.rand() > 0.5:
+            img[x, y] = 0
+        else:
+            img[x, y] = 1.0
+
+    # add gaussian noise
+    noise = np.random.normal(0, sigma_g, img.shape)
+    noised_img = np.clip(img + noise, 0, 1.0)
+
+    # denormalize image
+    noised_img = (noised_img * 255).astype(np.uint8)
+
+    return noised_img
+
+
+def create_star_image(ra: float, de: float, roll: float, sigma_g: float = 0.01, prob_p: float = 0.001, pos_noise_std: float = 0, mv_noise_std: float = 0, ratio_false_star: int = 0, pure_point: bool = False, simulate_test: bool = False) -> tuple[np.ndarray, list]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
         ra: right ascension in radians
         de: declination in radians
         roll: roll in radians
-        white_noise_std: the standard deviation of white noise
+        sigma_g: the nomalized standard deviation of gaussian noise
+        prob_p: the probability of pepper noise
         pos_noise_std: the standard deviation of positional noise
         mv_noise_std: the standard deviation of maginatitude noise
         ratio_false_star: the ratio of false stars
@@ -106,7 +139,7 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
             
         return M
 
-    def draw_star(position: tuple[float, float], magnitude: float, img: np.ndarray, sigma: float=0.5) -> np.ndarray:
+    def draw_star(position: tuple[float, float], magnitude: float, img: np.ndarray, sigma: float=1.5) -> np.ndarray:
         """
             Draw star at position[0](row) and position[1](column) in the image.
         Args:
@@ -122,7 +155,7 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
             return img
 
         # stellar magnitude to intensity
-        H = 225 * (6.0 - magnitude) / 6.0 + 30
+        H = 255 * 2.51 ** (5 - magnitude)
 
         x, y = position
         top, bottom = int(max(0, x-roi)), int(min(h, x+roi+1))
@@ -140,19 +173,6 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
                     intensity += H*exp(-dd/(2*sigma**2))
                 img[u ,v] = intensity // 4
         return img
-
-    def add_white_noise(img: np.ndarray) -> np.ndarray:
-        """
-            Adds white noise to an image.
-        Args:
-            img: the image to put noise on
-        Returns:
-            noised_img: the image with white noise
-        """
-        noise = np.random.normal(0, white_noise_std, img.shape)
-        # make sure no pixel value is less than 0 or greater than 255
-        noised_img = np.clip(img + noise, 0, 255).astype(np.uint8)
-        return noised_img
 
     def add_false_stars(img: np.ndarray, num: int, pos: np.array, min_d: int=4*roi) -> tuple[np.ndarray, list]:
         '''
@@ -237,8 +257,8 @@ def create_star_image(ra: float, de: float, roll: float, white_noise_std: float 
         img, false_stars = add_false_stars(img, max(1, int(ratio_false_star*len(star_ids))), np.array(star_positions))
         stars.extend(false_stars)
 
-    # add white noise
-    img = add_white_noise(img)
+    # add noise
+    img = add_gaussian_and_pepper_noise(img, sigma_g, prob_p)
 
     if simulate_test:
         stars_within_fov = stars_within_fov.reset_index(drop=True)
