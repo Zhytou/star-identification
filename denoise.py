@@ -3,6 +3,7 @@ import pywt
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import convolve2d
+from scipy.ndimage import maximum_filter
 from skimage.metrics import structural_similarity
 from math import radians
 
@@ -87,11 +88,27 @@ def denoise_with_nlm(img: np.ndarray, h: int=10, K: int=7, L: int=21):
         K: the size of the template window
         L: the size of the search window
     Returns:
-        filtered_img: the image after filtering
+        denoised_img: the image after filtering
     '''
-    filtered_img = cv2.fastNlMeansDenoising(img, None, h, K, L)
+    denoised_img = cv2.fastNlMeansDenoising(img, None, h, K, L)
 
-    return filtered_img
+    return denoised_img
+
+
+def denoise_with_psf_nlm(img: np.ndarray, h: int=10, K: int=7, L: int=21, psf_size=5, psf_sigma=1.0):
+    '''
+        PSF NLM denoising.
+    Args:
+        img: the image to be processed
+        h: the parameter regulating filter strength
+        K: the size of the template window
+        L: the size of the search window
+        psf_size: the size of the point spread function
+        psf_sigma: the sigma of the point spread function
+    Returns:
+        denoised_img: the image after filtering
+    '''
+    pass
 
 
 def denoise_with_wavelet(img: np.ndarray, wavelet='sym4', thr_method='bayes'):
@@ -123,39 +140,70 @@ def denoise_with_wavelet(img: np.ndarray, wavelet='sym4', thr_method='bayes'):
     # wavelet decomposition
     coeffs = pywt.wavedec2(img, wavelet, level=2)
 
-    print(coeffs[0].shape, coeffs[1][0].shape, coeffs[2][0].shape)
-
     # iterate through the wavelet coefficients, and skip the lowest frequency subband
     for i in range(1, len(coeffs)):
         tr_coeff = pywt.threshold(coeffs[i], 0, mode='soft')
         coeffs[i] = (tr_coeff[0], tr_coeff[1], tr_coeff[2])
 
-    filtered_img = pywt.waverec2(coeffs, wavelet)
-    filtered_img = np.clip(filtered_img, 0, 255).astype(np.uint8)
+    denoised_img = pywt.waverec2(coeffs, wavelet)
+    denoised_img = np.clip(denoised_img, 0, 255).astype(np.uint8)
 
-    return filtered_img
+    return denoised_img
 
 
-def denoise(img: np.ndarray):
+def denoise(img: np.ndarray, wind_size: int=5):
     '''
         Proposed denoising method.
     '''
+    # get image size
+    h, w = img.shape
+
+    # copy the image
+    denoised_img = img.copy()
+
+    # get local max pixels
+    binary_img = (img == maximum_filter(img, size=3)).astype(np.uint8)
+    num_label, label_img = cv2.connectedComponents(binary_img, connectivity=8)
+
+    # iterate through the connected pixel
+    for i in range(num_label):
+        mask = label_img == (i+1)
+        if np.sum(mask) != 1:
+            continue
+
+        # only one pixel
+        row, col = np.nonzero(mask)
+        row, col = row[0], col[0]
+
+        for drow, dcol in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+            if row+drow >= 0 and row +drow < h and col+dcol >= 0 and col+dcol < w and img[row+drow][col+dcol] == 0:
+                denoised_img[row][col] = 0
+
+        if denoised_img[row][col] == 0:
+            continue
+
+        # fit the local region with a 2D gaussian
+        # if fit_gaussian_curve(img, (row, col), wind_size):
+        #     continue
+
+        denoised_img[row][col] = 0
 
     # multi-scale nlm denoising
-    pyramid = gen_laplacian_pyramid(img)
-    pyramid = pyramid[::-1]
+    img1 = denoise_with_nlm(denoised_img, 10, 5, 13)
+    img2 = denoise_with_nlm(denoised_img, 10, 7, 21)
 
-    for i in range(len(pyramid)-1):
-        # img = denoise_with_nlm(pyramid[i], 12-2*i, 7, 21)
-        img = filter_image(pyramid[i], 'gaussian', 1)
-        img = cv2.pyrUp(img) + pyramid[i+1]
+    # pyramid = gen_laplacian_pyramid(denoised_img, 4)
+    # pyramid = pyramid[::-1]
+
+    # for i in range(len(pyramid)-1):
+        # img = denoise_with_nlm(pyramid[i], 16-2*i, 5, 21)
+        # img = filter_image(pyramid[i], 'gaussian', 1)
+        # img = cv2.pyrUp(img) + pyramid[i+1]
 
     # merge
-    img = np.clip(img, 0, 255).astype(np.uint8)
+    denoised_img = np.clip(img1*0.5 + img2*0.5, 0, 255).astype(np.uint8)
 
-    # img = denoise_with_wavelet(img)    
-
-    return img
+    return denoised_img
 
 
 def draw_freq_spectrum(imgs: list[np.ndarray]):
@@ -250,8 +298,11 @@ if __name__ == '__main__':
     ra, de, roll = radians(29.2104), radians(-12.0386), radians(0)
     original_img, stars = create_star_image(ra, de, roll, sigma_g=0, prob_p=0)
 
-    noised_img, _ = create_star_image(ra, de, roll, sigma_g=0.05, prob_p=0.001)
+    noised_img, _ = create_star_image(ra, de, roll, sigma_g=0.1, prob_p=0.0001)
     real_coords = np.array([star[1] for star in stars])
+
+    # freq spectrum
+    draw_freq_spectrum([original_img, noised_img])
 
     # imgs = gen_laplacian_pyramid(noised_img, 3)
     # for i, img in enumerate(imgs):
@@ -268,30 +319,24 @@ if __name__ == '__main__':
     denoised_imgs['mean'] = filter_image(noised_img, 'mean')
     denoised_imgs['median'] = filter_image(noised_img, 'median')
     denoised_imgs['gaussian'] = filter_image(noised_img, 'gaussian', 1)
+    denoised_imgs['glp'] = filter_image(noised_img, 'gaussian low pass', 1)
 
     # mle
     kernel = cv2.getGaussianKernel(3, 1.0)
     kernel = np.outer(kernel, kernel.transpose())
-    denoised_imgs['mle'] = denoise_with_mle(noised_img, kernel, 10)
+    # denoised_imgs['mle'] = denoise_with_mle(noised_img, kernel, 10)
 
     # wavelet
-    denoised_imgs['wavelet'] = denoise_with_wavelet(noised_img)
+    # denoised_imgs['wavelet'] = denoise_with_wavelet(noised_img)
     
     # median+nlm
-    denoised_imgs['proposed'] = denoise(noised_img)
+    # denoised_imgs['proposed'] = denoise(noised_img)
 
-    # psf nlm
-    # denoised_imgs['psf_nlm'] = denoise_with_psf_nlm(noised_img)
-
-    cv2.imwrite('example/star.png', original_img)
-    cv2.imwrite('example/n_star.png', noised_img)
-    cv2.imwrite('example/m_star.png', denoised_imgs['median'])
-    cv2.imwrite('example/g_star.png', denoised_imgs['gaussian'])
-    cv2.imwrite('example/w_star.png', denoised_imgs['wavelet'])
-    cv2.imwrite('example/p_star.png', denoised_imgs['proposed'])
-
+    cv2.imwrite('example/original.png', original_img)
+    cv2.imwrite('example/noised.png', noised_img)
     print('noised', *cal_psnr_ssim(original_img, noised_img))
-
-    for name, denoised_img in denoised_imgs.items():
-        pnr, ssim = cal_psnr_ssim(original_img, denoised_img)
+    for name in denoised_imgs:
+        # cv2.imwrite(f'example/{name}.png', denoised_imgs[name])
+        pnr, ssim = cal_psnr_ssim(original_img, denoised_imgs[name])
         print(name, pnr, ssim)
+        
