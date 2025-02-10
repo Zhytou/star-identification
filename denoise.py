@@ -111,6 +111,32 @@ def denoise_with_psf_nlm(img: np.ndarray, h: int=10, K: int=7, L: int=21, psf_si
     pass
 
 
+def denoise_with_multi_scale_nlm(img: np.ndarray, levels: int=3, h: int=10, K: int=7, L: int=21):
+    '''
+        Multi-scale NLM denoising.
+    Args:
+        img: the image to be processed
+        h: the parameter regulating filter strength
+        K: the size of the template window
+        L: the size of the search window
+        levels: the number of levels of the pyramid
+    '''
+
+    pyramid = gen_laplacian_pyramid(img, levels)
+    pyramid = pyramid[::-1]
+
+    for i in range(len(pyramid)):
+        if i == 0:
+            denoised_img = pyramid[i]
+        else:
+            denoised_img = cv2.pyrUp(denoised_img) + pyramid[i]
+        denoised_img = denoise_with_nlm(denoised_img, h, K, L)
+
+    denoised_img = np.clip(denoised_img, 0, 255).astype(np.uint8)
+
+    return denoised_img
+
+
 def denoise_with_wavelet(img: np.ndarray, wavelet='sym4', thr_method='bayes'):
     '''
         Wavelet denoising.
@@ -216,7 +242,7 @@ def draw_freq_spectrum(imgs: list[np.ndarray]):
     for i, img in enumerate(imgs):
         f = np.fft.fft2(img)
         fshift = np.fft.fftshift(f)    
-        fdb = 20 * np.log(np.abs(fshift))
+        fdb_img = 20 * np.log(np.abs(fshift))
 
         plt.subplot(n, 2, i*2+1)
         plt.imshow(img, cmap='gray')
@@ -224,7 +250,7 @@ def draw_freq_spectrum(imgs: list[np.ndarray]):
         plt.axis('off')
     
         plt.subplot(n, 2, i*2+2)
-        plt.imshow(fdb, cmap='gray')
+        plt.imshow(fdb_img, cmap='gray')
         plt.title('Frequency Spectrum')
         plt.axis('off')
     
@@ -272,7 +298,7 @@ def cal_snr(img: np.ndarray, noised_img: np.ndarray):
     return snr
 
 
-def cal_psnr_ssim(img: np.ndarray, filtered_img: np.ndarray):
+def cal_mse_psnr_ssim(img: np.ndarray, filtered_img: np.ndarray):
     '''
         Calculate peak signal-to-noise ratio and the structural similarity between the original image and the filtered image.
     Args:
@@ -291,52 +317,51 @@ def cal_psnr_ssim(img: np.ndarray, filtered_img: np.ndarray):
     # caculate the SSIM
     mssim = structural_similarity(img, filtered_img, data_range=255)
 
-    return psnr, mssim
+    mse, psnr, mssim = round(mse, 2), round(psnr, 2), round(mssim, 2)
+
+    return mse, psnr, mssim
 
 
 if __name__ == '__main__':
-    ra, de, roll = radians(29.2104), radians(-12.0386), radians(0)
-    original_img, stars = create_star_image(ra, de, roll, sigma_g=0, prob_p=0)
+    imgs = {}
 
-    noised_img, _ = create_star_image(ra, de, roll, sigma_g=0.1, prob_p=0.0001)
+    ra, de, roll = radians(29.2104), radians(-12.0386), radians(0)
+    imgs['original'], stars = create_star_image(ra, de, roll, sigma_g=0, prob_p=0)
+    imgs['noised'], _ = create_star_image(ra, de, roll, sigma_g=0.1, prob_p=0.0001)
     real_coords = np.array([star[1] for star in stars])
 
     # freq spectrum
-    draw_freq_spectrum([original_img, noised_img])
+    # draw_freq_spectrum([imgs['original'], imgs['noised']])
+    # snr
+    snr = cal_snr(imgs['original'], imgs['noised'])
+    print(snr)
 
-    # imgs = gen_laplacian_pyramid(noised_img, 3)
-    # for i, img in enumerate(imgs):
+    # pyramid = gen_laplacian_pyramid(imgs['noised'], 3)
+    # for i, img in enumerate(pyramid):
     #     plt.subplot(2, 2, i+1)
     #     plt.imshow(img, cmap='gray')
     # plt.show()
     
-    # snr
-    snr = cal_snr(original_img, noised_img)
-    print(snr)
-
-    denoised_imgs = {}
     # conventional filters
-    denoised_imgs['mean'] = filter_image(noised_img, 'mean')
-    denoised_imgs['median'] = filter_image(noised_img, 'median')
-    denoised_imgs['gaussian'] = filter_image(noised_img, 'gaussian', 1)
-    denoised_imgs['glp'] = filter_image(noised_img, 'gaussian low pass', 1)
+    # imgs['mean'] = filter_image(imgs['noised'], 'mean')
+    # imgs['median'] = filter_image(imgs['noised'], 'median')
+    # imgs['gaussian'] = filter_image(imgs['noised'], 'gaussian', 1)
+    # imgs['glp'] = filter_image(imgs['noised'], 'gaussian low pass', 1)
 
-    # mle
-    kernel = cv2.getGaussianKernel(3, 1.0)
-    kernel = np.outer(kernel, kernel.transpose())
-    # denoised_imgs['mle'] = denoise_with_mle(noised_img, kernel, 10)
+    # nlm
+    imgs['nlm'] = denoise_with_nlm(imgs['noised'], 10, 7, 256)
+
+    draw_freq_spectrum([imgs['original'], imgs['noised'], imgs['nlm']])
 
     # wavelet
-    # denoised_imgs['wavelet'] = denoise_with_wavelet(noised_img)
+    # imgs['wavelet'] = denoise_with_wavelet(imgs['noised'])
     
     # median+nlm
-    # denoised_imgs['proposed'] = denoise(noised_img)
+    # imgs['proposed'] = denoise(imgs['noised'])
 
-    cv2.imwrite('example/original.png', original_img)
-    cv2.imwrite('example/noised.png', noised_img)
-    print('noised', *cal_psnr_ssim(original_img, noised_img))
-    for name in denoised_imgs:
-        # cv2.imwrite(f'example/{name}.png', denoised_imgs[name])
-        pnr, ssim = cal_psnr_ssim(original_img, denoised_imgs[name])
-        print(name, pnr, ssim)
+    for name in imgs:
+        if name != 'original':
+            mse, pnr, ssim = cal_mse_psnr_ssim(imgs['original'], imgs[name])
+            print(name, mse, pnr, ssim)
+        cv2.imwrite(f'example/star/{name}.png', imgs[name])
         
