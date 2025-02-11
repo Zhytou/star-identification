@@ -31,6 +31,14 @@ def filter_image(img: np.ndarray, method='gaussian', method_args=None) -> np.nda
         filtered_img = cv2.medianBlur(img, 3)
     elif method == 'bilateral':
         filtered_img = cv2.bilateralFilter(img, 5, *method_args)
+    elif method == 'max':
+        filtered_img = cv2.dilate(img, np.ones((3, 3), np.uint8))
+    elif method == 'min':
+        filtered_img = cv2.erode(img, np.ones((3, 3), np.uint8))
+    elif method == 'open':
+        filtered_img = cv2.morphologyEx(img, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8), iterations=1)
+    elif method == 'close':
+        filtered_img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=1)
     elif method == 'gaussian low pass':
         f = np.fft.fft2(img)
         fshift = np.fft.fftshift(f)
@@ -95,22 +103,6 @@ def denoise_with_nlm(img: np.ndarray, h: int=10, K: int=7, L: int=21):
     return denoised_img
 
 
-def denoise_with_psf_nlm(img: np.ndarray, h: int=10, K: int=7, L: int=21, psf_size=5, psf_sigma=1.0):
-    '''
-        PSF NLM denoising.
-    Args:
-        img: the image to be processed
-        h: the parameter regulating filter strength
-        K: the size of the template window
-        L: the size of the search window
-        psf_size: the size of the point spread function
-        psf_sigma: the sigma of the point spread function
-    Returns:
-        denoised_img: the image after filtering
-    '''
-    pass
-
-
 def denoise_with_multi_scale_nlm(img: np.ndarray, levels: int=3, h: int=10, K: int=7, L: int=21):
     '''
         Multi-scale NLM denoising.
@@ -121,7 +113,6 @@ def denoise_with_multi_scale_nlm(img: np.ndarray, levels: int=3, h: int=10, K: i
         L: the size of the search window
         levels: the number of levels of the pyramid
     '''
-
     pyramid = gen_laplacian_pyramid(img, levels)
     pyramid = pyramid[::-1]
 
@@ -177,19 +168,19 @@ def denoise_with_wavelet(img: np.ndarray, wavelet='sym4', thr_method='bayes'):
     return denoised_img
 
 
-def denoise(img: np.ndarray, wind_size: int=5):
+def denoise_with_star_distri(img: np.ndarray):
     '''
-        Proposed denoising method.
+        Star distrition based denoising.
     '''
     # get image size
     h, w = img.shape
+    
+    # get local max pixels
+    binary_img = (img == filter_image(img, 'max')).astype(np.uint8)
+    num_label, label_img = cv2.connectedComponents(binary_img, connectivity=8)
 
     # copy the image
     denoised_img = img.copy()
-
-    # get local max pixels
-    binary_img = (img == maximum_filter(img, size=3)).astype(np.uint8)
-    num_label, label_img = cv2.connectedComponents(binary_img, connectivity=8)
 
     # iterate through the connected pixel
     for i in range(num_label):
@@ -214,20 +205,22 @@ def denoise(img: np.ndarray, wind_size: int=5):
 
         denoised_img[row][col] = 0
 
-    # multi-scale nlm denoising
+
+def denoise(img: np.ndarray):
+    '''
+        Proposed denoising method.
+    '''
+    # multi patch size nlm denoising
     img1 = denoise_with_nlm(denoised_img, 10, 5, 13)
     img2 = denoise_with_nlm(denoised_img, 10, 7, 21)
 
-    # pyramid = gen_laplacian_pyramid(denoised_img, 4)
-    # pyramid = pyramid[::-1]
-
-    # for i in range(len(pyramid)-1):
-        # img = denoise_with_nlm(pyramid[i], 16-2*i, 5, 21)
-        # img = filter_image(pyramid[i], 'gaussian', 1)
-        # img = cv2.pyrUp(img) + pyramid[i+1]
-
     # merge
-    denoised_img = np.clip(img1*0.5 + img2*0.5, 0, 255).astype(np.uint8)
+    denoised_img = 0.5*img1 + 0.5*img2
+
+    # star distribution based denoising
+    denoised_img = denoise_with_star_distri(denoised_img)
+
+    denoised_img = np.clip(denoised_img, 0, 255).astype(np.uint8)
 
     return denoised_img
 
@@ -349,14 +342,14 @@ if __name__ == '__main__':
     # imgs['glp'] = filter_image(imgs['noised'], 'gaussian low pass', 1)
 
     # nlm
-    imgs['nlm'] = denoise_with_nlm(imgs['noised'], 10, 7, 256)
+    imgs['nlm'] = denoise_with_nlm(imgs['noised'], 10, 7, 21)
 
-    draw_freq_spectrum([imgs['original'], imgs['noised'], imgs['nlm']])
+    # multi-scale non-local mean
+    # imgs['ms_nlm'] = denoise_with_multi_scale_nlm(imgs['noised'], 3, 10, 7, 21)
 
     # wavelet
     # imgs['wavelet'] = denoise_with_wavelet(imgs['noised'])
     
-    # median+nlm
     # imgs['proposed'] = denoise(imgs['noised'])
 
     for name in imgs:
@@ -364,4 +357,12 @@ if __name__ == '__main__':
             mse, pnr, ssim = cal_mse_psnr_ssim(imgs['original'], imgs[name])
             print(name, mse, pnr, ssim)
         cv2.imwrite(f'example/star/{name}.png', imgs[name])
+
+        save_scale_image = True
+        if save_scale_image:
+            # half length
+            d = 64
+            x, y = 188, 169
+            cv2.imwrite(f'example/star/scale_{name}.png', imgs[name][x-d:x+d, y-d:y+d])
         
+    
