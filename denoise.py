@@ -10,40 +10,34 @@ from math import radians
 from simulate import create_star_image
 
 
-def filter_image(img: np.ndarray, method='gaussian', method_args=None) -> np.ndarray:
+def filter_image(img: np.ndarray, method: str='gaussian', size: int=3, sigma: float=0.5) -> np.ndarray:
     '''
         Conventional noise reducing filters.
     Args:
         img: the image to be processed
         method: the method of filtering
-        method_args: the arguments of the method
-            gaussian: sigma
-            bilateral: sigma_s, sigma_c
-            gaussian low pass: sigma/cutoff frequency
     Returns:
         filtered_img: the image after filtering
     '''
     if method == 'gaussian':
-        filtered_img = cv2.GaussianBlur(img, (3, 3), method_args)
+        filtered_img = cv2.GaussianBlur(img, (size, size), sigma)
     elif method == 'mean':
-        filtered_img = cv2.blur(img, (3, 3))
+        filtered_img = cv2.blur(img, (size, size))
     elif method == 'median':
-        filtered_img = cv2.medianBlur(img, 3)
-    elif method == 'bilateral':
-        filtered_img = cv2.bilateralFilter(img, 5, *method_args)
+        filtered_img = cv2.medianBlur(img, size)
     elif method == 'max':
-        filtered_img = cv2.dilate(img, np.ones((3, 3), np.uint8))
+        filtered_img = cv2.dilate(img, np.ones((size, size), np.uint8))
     elif method == 'min':
-        filtered_img = cv2.erode(img, np.ones((3, 3), np.uint8))
+        filtered_img = cv2.erode(img, np.ones((size, size), np.uint8))
     elif method == 'open':
-        filtered_img = cv2.morphologyEx(img, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8), iterations=1)
+        filtered_img = cv2.morphologyEx(img, cv2.MORPH_OPEN, np.ones((size, size), np.uint8))
     elif method == 'close':
-        filtered_img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=1)
+        filtered_img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, np.ones((size, size), np.uint8))
     elif method == 'gaussian low pass':
         f = np.fft.fft2(img)
         fshift = np.fft.fftshift(f)
 
-        kernel = cv2.getGaussianKernel(3, method_args)
+        kernel = cv2.getGaussianKernel(size, sigma)
         kernel = np.outer(kernel, kernel.transpose())
         kernel_padded = np.pad(kernel, ((0, img.shape[0] - kernel.shape[0]), (0, img.shape[1] - kernel.shape[1])), mode='constant')
         kernel_f = np.fft.fft2(kernel_padded)
@@ -54,7 +48,6 @@ def filter_image(img: np.ndarray, method='gaussian', method_args=None) -> np.nda
         filtered_img = np.fft.ifft2(filtered_f)
         filtered_img = np.abs(filtered_img)
     else:
-        print('wrong filter method!')
         return None
     
     return filtered_img
@@ -168,7 +161,7 @@ def denoise_with_wavelet(img: np.ndarray, wavelet='sym4', thr_method='bayes'):
     return denoised_img
 
 
-def denoise_with_star_distri(img: np.ndarray):
+def denoise_with_star_distri(img: np.ndarray, wind_size: int=5, epsilon: float=5):
     '''
         Star distrition based denoising.
     '''
@@ -176,7 +169,7 @@ def denoise_with_star_distri(img: np.ndarray):
     h, w = img.shape
     
     # get local max pixels
-    binary_img = (img == filter_image(img, 'max')).astype(np.uint8)
+    binary_img = (img == filter_image(img, 'max', wind_size)).astype(np.uint8)
     num_label, label_img = cv2.connectedComponents(binary_img, connectivity=8)
 
     # copy the image
@@ -192,30 +185,48 @@ def denoise_with_star_distri(img: np.ndarray):
         row, col = np.nonzero(mask)
         row, col = row[0], col[0]
 
-        for drow, dcol in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
-            if row+drow >= 0 and row +drow < h and col+dcol >= 0 and col+dcol < w and img[row+drow][col+dcol] == 0:
-                denoised_img[row][col] = 0
-
-        if denoised_img[row][col] == 0:
+        half_size = wind_size // 2
+        quarter_size = half_size // 2
+        if row < half_size or row >= h -half_size or col < half_size or col >= w - half_size:
             continue
 
-        # fit the local region with a 2D gaussian
-        # if fit_gaussian_curve(img, (row, col), wind_size):
-        #     continue
+        # exclude center pixel
+        center_pixel = img[row, col]
+        img[row, col] = 0 
 
-        denoised_img[row][col] = 0
+        # calculate the mean value of inner box and outer box
+        inner_box = img[row-quarter_size:row+quarter_size+1, col-quarter_size:col+quarter_size+1]
+        outer_box = img[row-half_size:row+half_size+1, col-half_size:col+half_size+1]
+
+        inner_mean = np.mean(inner_box)
+        outer_mean = np.mean(outer_box)
+
+        if center_pixel == 255:
+            print(row, col)
+            print(outer_box)
+            print(inner_mean, outer_mean)
+
+        # restore the center pixel
+        img[row, col] = center_pixel
+        if np.abs(inner_mean - outer_mean) < epsilon:
+            
+            denoised_img[row, col] = 0
+    
+    return denoised_img
 
 
-def denoise(img: np.ndarray):
+def denoise_with_nlm_and_star_distri(img: np.ndarray):
     '''
         Proposed denoising method.
     '''
+
     # multi patch size nlm denoising
-    img1 = denoise_with_nlm(denoised_img, 10, 5, 13)
-    img2 = denoise_with_nlm(denoised_img, 10, 7, 21)
+    img1 = denoise_with_nlm(img, 10, 5, 128)
+    img2 = denoise_with_nlm(img, 10, 9, 128)
+    img3 = denoise_with_nlm(img, 10, 7, 21)
 
     # merge
-    denoised_img = 0.5*img1 + 0.5*img2
+    denoised_img = 0.2*img1 + 0.4*img2 + 0.4*img3
 
     # star distribution based denoising
     denoised_img = denoise_with_star_distri(denoised_img)
@@ -223,6 +234,21 @@ def denoise(img: np.ndarray):
     denoised_img = np.clip(denoised_img, 0, 255).astype(np.uint8)
 
     return denoised_img
+
+
+def denoise_image(img: np.ndarray, method: str='nlm'):
+    '''
+        Denoise the image.
+    '''
+    denoised_img = filter_image(img, method)
+    if denoised_img is not None:
+        return denoised_img
+    elif method == 'nlm':
+        return denoise_with_nlm(img)
+    elif method == 'wavelet':
+        return denoise_with_wavelet(img)
+    else:
+        return denoise_with_nlm_and_star_distri(img)
 
 
 def draw_freq_spectrum(imgs: list[np.ndarray]):
@@ -301,6 +327,18 @@ def cal_mse_psnr_ssim(img: np.ndarray, filtered_img: np.ndarray):
         psnr: the peak signal-to-noise ratio
         mssim: the mean structural similarity
     '''
+    # diff = (img - filtered_img)**2
+    # max_val = np.max(diff)
+    # rows, cols = np.where(diff == max_val)
+    # print(rows, cols)
+
+    # for row, col in zip(rows, cols):
+    #     t, b = max(0, row-2), min(img.shape[0], row+3)
+    #     l, r = max(0, col-2), min(img.shape[1], col+3)
+
+    #     print(img[t:b, l:r])
+    #     print(filtered_img[t:b, l:r])
+
     # caculate the MSE
     mse = np.mean((img - filtered_img)**2)
     
@@ -320,7 +358,7 @@ if __name__ == '__main__':
 
     ra, de, roll = radians(29.2104), radians(-12.0386), radians(0)
     imgs['original'], stars = create_star_image(ra, de, roll, sigma_g=0, prob_p=0)
-    imgs['noised'], _ = create_star_image(ra, de, roll, sigma_g=0.1, prob_p=0.0001)
+    imgs['noised'], _ = create_star_image(ra, de, roll, sigma_g=0.05, prob_p=0.0001)
     real_coords = np.array([star[1] for star in stars])
 
     # freq spectrum
@@ -336,13 +374,10 @@ if __name__ == '__main__':
     # plt.show()
     
     # conventional filters
-    # imgs['mean'] = filter_image(imgs['noised'], 'mean')
-    # imgs['median'] = filter_image(imgs['noised'], 'median')
-    # imgs['gaussian'] = filter_image(imgs['noised'], 'gaussian', 1)
-    # imgs['glp'] = filter_image(imgs['noised'], 'gaussian low pass', 1)
-
-    # nlm
-    imgs['nlm'] = denoise_with_nlm(imgs['noised'], 10, 7, 21)
+    imgs['mean'] = filter_image(imgs['noised'], 'mean')
+    imgs['median'] = filter_image(imgs['noised'], 'median')
+    imgs['gaussian'] = filter_image(imgs['noised'], 'gaussian', sigma=1)
+    # imgs['glp'] = filter_image(imgs['noised'], 'gaussian low pass', sigma=1)
 
     # multi-scale non-local mean
     # imgs['ms_nlm'] = denoise_with_multi_scale_nlm(imgs['noised'], 3, 10, 7, 21)
@@ -350,19 +385,20 @@ if __name__ == '__main__':
     # wavelet
     # imgs['wavelet'] = denoise_with_wavelet(imgs['noised'])
     
-    # imgs['proposed'] = denoise(imgs['noised'])
+    # imgs['distri'] = denoise_with_star_distri(imgs['noised'])
+
+    imgs['proposed'] = denoise_with_nlm_and_star_distri(imgs['noised'])
 
     for name in imgs:
-        if name != 'original':
+        if name != 'original' and name != 'noised':
             mse, pnr, ssim = cal_mse_psnr_ssim(imgs['original'], imgs[name])
             print(name, mse, pnr, ssim)
         cv2.imwrite(f'example/star/{name}.png', imgs[name])
 
-        save_scale_image = True
+        save_scale_image = False
         if save_scale_image:
             # half length
             d = 64
             x, y = 188, 169
             cv2.imwrite(f'example/star/scale_{name}.png', imgs[name][x-d:x+d, y-d:y+d])
         
-    
