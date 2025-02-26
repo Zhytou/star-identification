@@ -161,75 +161,51 @@ def denoise_with_wavelet(img: np.ndarray, wavelet='sym4', thr_method='bayes'):
     return denoised_img
 
 
-def denoise_with_star_distri(img: np.ndarray, wind_size: int=5, epsilon: float=5):
+def denoise_with_star_distri(img: np.ndarray, half_size: int=2):
     '''
         Star distrition based denoising.
     '''
-    # get image size
-    h, w = img.shape
+    quarter_size = half_size // 2
+
+    # filter operation
+    open_img = filter_image(img, 'open', quarter_size*2+1)
+    max_img = filter_image(img, 'max', half_size*2+1)
     
     # get local max pixels
-    binary_img = (img == filter_image(img, 'max', wind_size)).astype(np.uint8)
-    num_label, label_img = cv2.connectedComponents(binary_img, connectivity=8)
+    mask1 = (img == max_img).astype(np.uint8)
+    coords1 = np.transpose(np.nonzero(mask1))
 
-    # copy the image
-    denoised_img = img.copy()
+    # potential star pixels
+    _, mask2 = cv2.threshold(open_img, 10, 255, cv2.THRESH_BINARY)
+    coords2 = np.transpose(np.nonzero(mask2))
 
-    # iterate through the connected pixel
-    for i in range(num_label):
-        mask = label_img == (i+1)
-        if np.sum(mask) != 1:
-            continue
+    cv2.imshow('1', mask1*255)
+    cv2.waitKey(-1)
 
-        # only one pixel
-        row, col = np.nonzero(mask)
-        row, col = row[0], col[0]
+    # intersection
+    star_coords = np.array(list((set(map(tuple, coords1)) & set(map(tuple, coords2)))))
 
-        half_size = wind_size // 2
-        quarter_size = half_size // 2
-        if row < half_size or row >= h -half_size or col < half_size or col >= w - half_size:
-            continue
-
-        # exclude center pixel
-        center_pixel = img[row, col]
-        img[row, col] = 0 
-
-        # calculate the mean value of inner box and outer box
-        inner_box = img[row-quarter_size:row+quarter_size+1, col-quarter_size:col+quarter_size+1]
-        outer_box = img[row-half_size:row+half_size+1, col-half_size:col+half_size+1]
-
-        inner_mean = np.mean(inner_box)
-        outer_mean = np.mean(outer_box)
-
-        if center_pixel == 255:
-            print(row, col)
-            print(outer_box)
-            print(inner_mean, outer_mean)
-
-        # restore the center pixel
-        img[row, col] = center_pixel
-        if np.abs(inner_mean - outer_mean) < epsilon:
-            
-            denoised_img[row, col] = 0
+    # iterate through the local max pixels
+    denoised_img = np.zeros_like(img, dtype=np.uint8)
+    for row, col in star_coords:
+        denoised_img[row-half_size:row+half_size+1, col-half_size:col+half_size+1] = img[row-half_size:row+half_size+1, col-half_size:col+half_size+1]
     
-    return denoised_img
+    return denoised_img, star_coords
 
 
 def denoise_with_nlm_and_star_distri(img: np.ndarray):
     '''
         Proposed denoising method.
     '''
-
     # multi patch size nlm denoising
-    img1 = denoise_with_nlm(img, 10, 5, 128)
-    img2 = denoise_with_nlm(img, 10, 9, 128)
-    img3 = denoise_with_nlm(img, 10, 7, 21)
+    img1 = denoise_with_nlm(img, 10, 5, 21)
+    img2 = denoise_with_nlm(img, 10, 7, 39)
 
     # merge
-    denoised_img = 0.2*img1 + 0.4*img2 + 0.4*img3
+    denoised_img = cv2.addWeighted(img1, 0.5, img2, 0.5, 0)
 
     # star distribution based denoising
-    denoised_img = denoise_with_star_distri(denoised_img)
+    denoised_img = denoise_with_star_distri(denoised_img, 2)
 
     denoised_img = np.clip(denoised_img, 0, 255).astype(np.uint8)
 
@@ -358,7 +334,7 @@ if __name__ == '__main__':
 
     ra, de, roll = radians(29.2104), radians(-12.0386), radians(0)
     imgs['original'], stars = create_star_image(ra, de, roll, sigma_g=0, prob_p=0)
-    imgs['noised'], _ = create_star_image(ra, de, roll, sigma_g=0.05, prob_p=0.0001)
+    imgs['noised'], _ = create_star_image(ra, de, roll, sigma_g=0.05, prob_p=0.001)
     real_coords = np.array([star[1] for star in stars])
 
     # freq spectrum
@@ -375,7 +351,7 @@ if __name__ == '__main__':
     
     # conventional filters
     imgs['mean'] = filter_image(imgs['noised'], 'mean')
-    imgs['median'] = filter_image(imgs['noised'], 'median')
+    imgs['median'] = filter_image(imgs['noised'], 'median', size=3)
     imgs['gaussian'] = filter_image(imgs['noised'], 'gaussian', sigma=1)
     # imgs['glp'] = filter_image(imgs['noised'], 'gaussian low pass', sigma=1)
 
@@ -385,7 +361,7 @@ if __name__ == '__main__':
     # wavelet
     # imgs['wavelet'] = denoise_with_wavelet(imgs['noised'])
     
-    # imgs['distri'] = denoise_with_star_distri(imgs['noised'])
+    # imgs['distri'] = denoise_with_star_distri(imgs['noised'], half_size=3)
 
     imgs['proposed'] = denoise_with_nlm_and_star_distri(imgs['noised'])
 
