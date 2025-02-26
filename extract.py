@@ -3,8 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from skimage import measure
 
-from simulate import create_star_image, cal_avg_star_num_within_fov, roi
-from denoise import filter_image
+from simulate import create_star_image, cal_avg_star_num_within_fov
+from denoise import denoise_image
 
 
 def draw_gray_3d(img: np.ndarray):
@@ -273,8 +273,12 @@ def cal_center_of_guassian_curve(img: np.ndarray, rows, cols) -> tuple[float, fl
         -np.ones_like(x)
     ]).astype(np.float64)
 
+    if np.linalg.cond(A) > 1e12:
+        print('A is ill-conditioned')
+        return 0.0, 0.0 
+
     # ln(I(x, y))
-    Y = np.log(img[rows, cols].flatten(order='F')).astype(np.float64)
+    Y = np.log(img[rows, cols].flatten(order='F')+1e-11).astype(np.float64)
 
     # solve the linear equation X = ||Y - AX||min
     X, _, _, _ = np.linalg.lstsq(A, Y, rcond=None)
@@ -337,11 +341,12 @@ def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, m
     return center
 
 
-def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, wind_size: int=-1) -> list[tuple[float, float]]:
+def get_star_centroids(img: np.ndarray, den_method: str, thr_method: str, cen_method: str, wind_size: int=-1) -> list[tuple[float, float]]:
     '''
         Get the centroids of the stars in the image.
     Args:
         img: the image to be processed
+        den_method: denoising method
         thr_method: threshold calculation method
         cen_method: centroid algorithm
         wind_size: the size of the window used to calculate the centroid
@@ -352,12 +357,11 @@ def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, wind_s
     # get the image size
     h, w = img.shape
 
-    # low pass filter for noise
-    filtered_img = filter_image(img)
+    # denoise
+    filtered_img = denoise_image(img, den_method)
 
     # calaculate the threshold
     T = cal_threshold(filtered_img, thr_method)
-    print(thr_method, T)
 
     # rough group star using connectivity
     group_coords, _ = group_star(filtered_img, T, connectivity=1, pixel_limit=5)
@@ -385,51 +389,40 @@ def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, wind_s
 
 
 if __name__ == '__main__':
-    white_noise_stds = [10]
-    arr_pos_err = {
-        'CoG': [],
-        'MCoG': [],
+    # times of estimation using centroid algorithm
+    num_esti_times = 3
+    # random ra & de test
+    num_test = 10
+    # generate random right ascension[0, 360] and declination[-90, 90]
+    ras = np.random.uniform(0, 2*np.pi, num_test)
+    des = np.arcsin(np.random.uniform(-1, 1, num_test))
+    # centroid position error
+    pos_err = {
+        'proposed': 0.0,
+        'gaussian': 0.0,
+        'mean': 0.0,
+        'median': 0.0,
     }
-    for white_noise_std in white_noise_stds:
-        # times of estimation using centroid algorithm
-        num_esti_times = 3
-        # random ra & de test
-        num_test = 10
-        # generate random right ascension[0, 360] and declination[-90, 90]
-        ras = np.random.uniform(0, 2*np.pi, num_test)
-        des = np.arcsin(np.random.uniform(-1, 1, num_test))
-        # centroid position error
-        pos_err = {
-            'CoG': 0,
-            'MCoG': 0
-        }
-        # generate the star image
-        for i in range(num_test):
-            img, star_info = create_star_image(ras[i], des[i], 0, white_noise_std=0)
-            real_coords = np.array([x[1] for x in star_info])
-            # estimate the centroids of the stars in the image
-            for method in pos_err.keys():
-                arr_esti_coords = []
-                for _ in range(num_esti_times):
-                    esti_coords = np.array(get_star_centroids(img, 'Liebe', method, wind_size=10))
-                    if len(real_coords) != len(esti_coords):
-                        print('Wrong star number extracted: ', len(real_coords), len(esti_coords))
-                        continue
-                    arr_esti_coords.append(esti_coords)
-                if len(arr_esti_coords) == 0:
-                    continue
-                avg_esti_coords = np.mean(arr_esti_coords, axis=0)
-                # calculate the position error
-                diff = real_coords[:, None] - avg_esti_coords
-                dist = np.linalg.norm(diff, axis=-1)
-                pos_err[method] += np.sum(np.min(dist, axis=1))
-
+    # generate the star image
+    for i in range(num_test):
+        img, star_info = create_star_image(ras[i], des[i], 0, sigma_g=0.05, prob_p=0.0001)
+        real_coords = np.array([x[1] for x in star_info])
+        # estimate the centroids of the stars in the image
         for method in pos_err.keys():
-            arr_pos_err[method].append(pos_err[method]/num_test)
-    
-    print(arr_pos_err)
+            arr_esti_coords = []
+            for _ in range(num_esti_times):
+                esti_coords = np.array(get_star_centroids(img, method, 'Liebe', 'CoG', wind_size=10))
+                if len(real_coords) != len(esti_coords):
+                    print('Wrong star number extracted: ', len(real_coords), len(esti_coords))
+                    continue
+                arr_esti_coords.append(esti_coords)
+            if len(arr_esti_coords) == 0:
+                continue
+            avg_esti_coords = np.mean(arr_esti_coords, axis=0)
+            
+            # calculate the position error
+            diff = real_coords[:, None] - avg_esti_coords
+            dist = np.min(np.sum(diff**2, axis=-1), axis=-1)
+            pos_err[method] += np.mean(dist)
 
-    # for method in arr_pos_err.keys():
-    #     plt.plot(white_noise_stds, arr_pos_err[method], label=method)
-    # plt.grid()
-    # plt.show()
+    print(pos_err)
