@@ -8,7 +8,7 @@ from collections import defaultdict
 from scipy.spatial.distance import cdist
 
 from simulate import w, h, FOV, sim_cfg, create_star_image
-from preprocess import get_star_centroids
+from extract import get_star_centroids
 
 
 # guide star catalogue for pattern match database and nn dataset generation

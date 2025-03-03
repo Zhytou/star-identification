@@ -1,10 +1,9 @@
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-from skimage import measure
 
-from simulate import create_star_image, cal_avg_star_num_within_fov
-from denoise import denoise_image
+from simulate import create_star_image
+from denoise import filter_image, denoise_image
 
 
 def draw_gray_3d(img: np.ndarray):
@@ -71,36 +70,6 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
         mean = np.mean(img)
         std = np.std(img)
         T = mean + 3 * std
-    elif method == 'Xu':
-        #? Xu method is not validated yet
-        # get the avg number of fov
-        avg_star_num = cal_avg_star_num_within_fov()
-        # get the gray distribution of the image(histgram)
-        hist = cv2.calcHist([img], [0], None, [256], [0, 256])
-        hist = hist.ravel()
-        # use 'Liebe' method to get the initial threshold
-        T = cal_threshold(img, method='Liebe')
-        while True:
-            num1, num2 = 0, 0
-            denom1, denom2 = 0, 0
-            for i in range(256):
-                if i < T:
-                    num1 += i * hist[i]
-                    denom1 += hist[i]
-                else:
-                    num2 += i * hist[i]
-                    denom2 += hist[i]
-            # background and foreground mean
-            mean1 = num1/denom1 if denom1 != 0 else 0
-            mean2 = num2/denom2 if denom2 != 0 else 0
-            # get the number of stars
-            _, star_num = group_star(img, T, connectivity=2)
-            if star_num < 0.5 * avg_star_num:
-                T = (1-delta) * mean1 + (1+delta) * mean2
-            elif star_num > 1.5 * avg_star_num:
-                T = (1+delta) * mean1 + (1-delta) * mean2
-            else:
-                break
     elif method == 'Abutaleb':
         # average gray level matrix for each pixel's window
         avg_img = cv2.medianBlur(img, wind_size)
@@ -201,12 +170,75 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
     return T
 
 
-def group_star(img: np.ndarray, threshold: int, connectivity: int, pixel_limit: int=5) -> tuple[list[list[tuple[int, int]]], int]:
+def get_seed_coords_with_star_distri(img: np.ndarray, half_size: int=2):
+    '''
+        Get the seed coordinates with the star distribution.
+    '''
+    quarter_size = half_size // 2
+
+    # filter operation
+    open_img = filter_image(img, 'open', quarter_size*2+1)
+    max_img = filter_image(img, 'max', half_size*2+1)
+    
+    # get local max pixels
+    mask1 = (img == max_img).astype(np.uint8)
+    coords1 = np.transpose(np.nonzero(mask1))
+
+    # potential star pixels
+    _, mask2 = cv2.threshold(open_img, 10, 255, cv2.THRESH_BINARY)
+    coords2 = np.transpose(np.nonzero(mask2))
+
+    cv2.imshow('1', mask1*255)
+    cv2.waitKey(-1)
+
+    # intersection
+    star_coords = np.array(list((set(map(tuple, coords1)) & set(map(tuple, coords2)))))
+
+    # iterate through the local max pixels
+    denoised_img = np.zeros_like(img, dtype=np.uint8)
+    for row, col in star_coords:
+        denoised_img[row-half_size:row+half_size+1, col-half_size:col+half_size+1] = img[row-half_size:row+half_size+1, col-half_size:col+half_size+1]
+    
+    return denoised_img, star_coords
+
+
+def region_grow(img: np.ndarray, seed: tuple[int, int]) -> np.ndarray:
+    '''
+        Region grow the image.
+    '''
+    h, w = img.shape
+
+    # initialize the segmented image
+    queue = [seed]
+
+    # offsets
+    ds = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+
+    # coords
+    xs, ys = [], []
+
+    while len(queue) > 0:
+        x, y = queue.pop(0)
+        if img[x, y] == 0:
+            continue
+        img[x, y] = 0
+        xs.append(x)
+        ys.append(y)
+        for dx, dy in ds:
+            if x + dx < 0 or x + dx >= h or y + dy < 0 or y + dy >= w:
+                continue
+            queue.append((x + dx, y + dy))
+
+    return np.array(xs), np.array(ys)
+
+
+def group_star(img: np.ndarray, threshold: int, seeds: list[tuple]=None, connectivity: int=-1, pixel_limit: int=5) -> tuple[list[list[tuple[int, int]]], int]:
     """
         Group the facula(potential star) in the image.
     Args:
         img: the image to be processed
         threshold: the threshold used to segment the image
+        seeds: the seeds used to grow the region
         connectivity: method of connectivity
         pixel_limit: the minimum number of pixels for a group
     Returns:
@@ -219,19 +251,27 @@ def group_star(img: np.ndarray, threshold: int, connectivity: int, pixel_limit: 
     # if img[u, v] > 0: 1, else: 0
     _, binary_img = cv2.threshold(img, 0, 1, cv2.THRESH_BINARY)
 
-    # label connected regions of the same value in the binary image
-    labeled_img, label_num = measure.label(binary_img, return_num=True, connectivity=connectivity)
-
     group_coords = []
-    for label in range(1, label_num + 1):
-        # get the coords for each label
-        rows, cols = np.nonzero(labeled_img == label)
-        # two small to be a star
-        if len(rows) < pixel_limit and len(cols) < pixel_limit:
-            continue
-        group_coords.append((rows, cols))
 
-    return group_coords, len(group_coords)
+    # label connected regions of the same value in the binary image
+    if seeds is not None:
+        for seed in seeds:
+            rows, cols = region_grow(binary_img, seed)
+            if len(rows) < pixel_limit and len(cols) < pixel_limit:
+                continue
+            group_coords.append((rows, cols))
+    else:
+        label_num, label_img = cv2.connectedComponents(binary_img, connectivity=connectivity)
+
+        for label in range(1, label_num + 1):
+            # get the coords for each label
+            rows, cols = np.nonzero(label_img == label)
+            # two small to be a star
+            if len(rows) < pixel_limit and len(cols) < pixel_limit:
+                continue
+            group_coords.append((rows, cols))
+
+    return group_coords
 
 
 def cal_wind_boundary(center: tuple[int, int], wind_size: int, h: int, w: int) -> tuple[int, int, int, int]:
@@ -291,7 +331,7 @@ def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, m
         Calculate the centroid of the star in the window.
     Args:
         img: the image to be processed
-        coords: the coordinates of the star
+        rows/cols: the coordinates of the pixels in the window
         method: centroid algorithm
             'CoG': center of gravity
             'MCoG': modified center of gravity
@@ -314,30 +354,30 @@ def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, m
     # gray
     g = img[rows, cols]
     # row and column add 0.5 to get the center of the pixel
-    r, c = rows+0.5, cols+0.5
+    x, y = rows+0.5, cols+0.5
 
     # iterate n times
     while n > 0:
         n -= 1
         if method == 'CoG':
-            rs, cs = np.sum(r * g), np.sum(c * g)
+            # row multiply gray and sum, column multiply gray and sum
+            xgs, ygs = np.sum(x * g), np.sum(y * g)
             gs = np.sum(g)
         elif method == 'MCoG':
-            rs, cs = np.sum(r * (g - T)), np.sum(c * (g - T))
+            xgs, xgs = np.sum(x * (g - T)), np.sum(y * (g - T))
             gs = np.sum(g - T)
         elif method == 'WCoG' or method == 'IWCoG':
             # weight for each pixel used in WCoG and IWCoG
-            d = (r-center[0])**2 + (c-center[1])**2
+            d = (x-center[0])**2 + (y-center[1])**2
             w = A*np.exp(-d/(2*sigma**2))
-            rs, cs = np.sum(r * g * w), np.sum(c * g * w)
+            xgs, ygs = np.sum(x * g * w), np.sum(y * g * w)
             gs = np.sum(g * w)
-            print(rs, cs, gs)
             if gs == 0.0:
                 return 0.0, 0.0
         else:
             print('wrong gravity method!')
             return 0.0, 0.0
-        center = round(rs/gs, 3), round(cs/gs, 3)
+        center = round(xgs/gs, 3), round(ygs/gs, 3)
     return center
 
 
@@ -359,12 +399,13 @@ def get_star_centroids(img: np.ndarray, den_method: str, thr_method: str, cen_me
 
     # denoise
     filtered_img = denoise_image(img, den_method)
-
+    filtered_img, seed_coords = get_seed_coords_with_star_distri(filtered_img, half_size=2)
+    
     # calaculate the threshold
     T = cal_threshold(filtered_img, thr_method)
 
     # rough group star using connectivity
-    group_coords, _ = group_star(filtered_img, T, connectivity=1, pixel_limit=5)
+    group_coords = group_star(filtered_img, T, seeds=seed_coords, connectivity=4, pixel_limit=5)
 
     # calculate the centroid coordinate with threshold and weight
     centroids = []

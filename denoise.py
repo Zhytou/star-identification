@@ -26,13 +26,17 @@ def filter_image(img: np.ndarray, method: str='gaussian', size: int=3, sigma: fl
     elif method == 'median':
         filtered_img = cv2.medianBlur(img, size)
     elif method == 'max':
-        filtered_img = cv2.dilate(img, np.ones((size, size), np.uint8))
+        kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (size, size))
+        filtered_img = cv2.dilate(img, kernel)
     elif method == 'min':
-        filtered_img = cv2.erode(img, np.ones((size, size), np.uint8))
+        kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (size, size))
+        filtered_img = cv2.erode(img, kernel)
     elif method == 'open':
-        filtered_img = cv2.morphologyEx(img, cv2.MORPH_OPEN, np.ones((size, size), np.uint8))
+        kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (size, size))
+        filtered_img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
     elif method == 'close':
-        filtered_img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, np.ones((size, size), np.uint8))
+        kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (size, size))
+        filtered_img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel)
     elif method == 'gaussian low pass':
         f = np.fft.fft2(img)
         fshift = np.fft.fftshift(f)
@@ -161,57 +165,6 @@ def denoise_with_wavelet(img: np.ndarray, wavelet='sym4', thr_method='bayes'):
     return denoised_img
 
 
-def denoise_with_star_distri(img: np.ndarray, half_size: int=2):
-    '''
-        Star distrition based denoising.
-    '''
-    quarter_size = half_size // 2
-
-    # filter operation
-    open_img = filter_image(img, 'open', quarter_size*2+1)
-    max_img = filter_image(img, 'max', half_size*2+1)
-    
-    # get local max pixels
-    mask1 = (img == max_img).astype(np.uint8)
-    coords1 = np.transpose(np.nonzero(mask1))
-
-    # potential star pixels
-    _, mask2 = cv2.threshold(open_img, 10, 255, cv2.THRESH_BINARY)
-    coords2 = np.transpose(np.nonzero(mask2))
-
-    cv2.imshow('1', mask1*255)
-    cv2.waitKey(-1)
-
-    # intersection
-    star_coords = np.array(list((set(map(tuple, coords1)) & set(map(tuple, coords2)))))
-
-    # iterate through the local max pixels
-    denoised_img = np.zeros_like(img, dtype=np.uint8)
-    for row, col in star_coords:
-        denoised_img[row-half_size:row+half_size+1, col-half_size:col+half_size+1] = img[row-half_size:row+half_size+1, col-half_size:col+half_size+1]
-    
-    return denoised_img, star_coords
-
-
-def denoise_with_nlm_and_star_distri(img: np.ndarray):
-    '''
-        Proposed denoising method.
-    '''
-    # multi patch size nlm denoising
-    img1 = denoise_with_nlm(img, 10, 5, 21)
-    img2 = denoise_with_nlm(img, 10, 7, 39)
-
-    # merge
-    denoised_img = cv2.addWeighted(img1, 0.5, img2, 0.5, 0)
-
-    # star distribution based denoising
-    denoised_img = denoise_with_star_distri(denoised_img, 2)
-
-    denoised_img = np.clip(denoised_img, 0, 255).astype(np.uint8)
-
-    return denoised_img
-
-
 def denoise_image(img: np.ndarray, method: str='nlm'):
     '''
         Denoise the image.
@@ -224,7 +177,7 @@ def denoise_image(img: np.ndarray, method: str='nlm'):
     elif method == 'wavelet':
         return denoise_with_wavelet(img)
     else:
-        return denoise_with_nlm_and_star_distri(img)
+        return None
 
 
 def draw_freq_spectrum(imgs: list[np.ndarray]):
@@ -362,8 +315,6 @@ if __name__ == '__main__':
     # imgs['wavelet'] = denoise_with_wavelet(imgs['noised'])
     
     # imgs['distri'] = denoise_with_star_distri(imgs['noised'], half_size=3)
-
-    imgs['proposed'] = denoise_with_nlm_and_star_distri(imgs['noised'])
 
     for name in imgs:
         if name != 'original' and name != 'noised':

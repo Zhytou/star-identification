@@ -5,7 +5,7 @@ import pandas as pd
 import cv2
 
 # region of interest for point spread function
-roi = 3
+roi = 2
 
 # star sensor pixel num
 w = 512
@@ -80,8 +80,8 @@ def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float
     num_pepper = int(prob_p * img.size)
     for i in range(num_pepper):
         x, y = np.random.randint(0, img.shape[0]), np.random.randint(0, img.shape[1])
-        if img[x, y] != 0:
-            continue
+        # if img[x, y] != 0:
+        #     continue
         if np.random.rand() > 0.5:
             img[x, y] = 0
         else:
@@ -97,7 +97,7 @@ def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float
     return noised_img
 
 
-def create_star_image(ra: float, de: float, roll: float, sigma_g: float = 0.01, prob_p: float = 0.001, pos_noise_std: float = 0, mv_noise_std: float = 0, ratio_false_star: int = 0, pure_point: bool = False, simulate_test: bool = False) -> tuple[np.ndarray, list]:
+def create_star_image(ra: float, de: float, roll: float, sigma_g: float = 0.0, prob_p: float = 0.0, pos_noise_std: float = 0, mv_noise_std: float = 0, ratio_false_star: int = 0, pure_point: bool = False, simulate_test: bool = False) -> tuple[np.ndarray, list]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
@@ -274,7 +274,7 @@ if __name__ == '__main__':
     if coord_test:    
         # simulate one image
         ra, de, roll = radians(29.2104), radians(-12.0386), radians(0)
-        img, stars = create_star_image(ra, de, roll, white_noise_std=0, simulate_test=True)
+        img, stars = create_star_image(ra, de, roll, simulate_test=True)
         cv2.imwrite(f'{sim_cfg}_{ra}_{de}_{roll}.png', img)
 
         stars['RA'], stars['DE'] = np.degrees(stars['RA']), np.degrees(stars['DE'])
@@ -311,9 +311,8 @@ if __name__ == '__main__':
 
     if noise_test:
         ra, de, roll = radians(29.2104), radians(-12.0386), radians(0)
-        img, _ = create_star_image(ra, de, roll, white_noise_std=0)
-        cv2.imwrite('white_1.png', img)
-        cv2.imwrite('white_2.png', img[50:350, 50:350])
+        img, _ = create_star_image(ra, de, roll, sigma_g=0.05, prob_p=0.0001)
+        cv2.imwrite('example/sim/noise.png', img)
 
         # img, _ = create_star_image(ra, de, roll, pos_noise_std=3)
         # cv2.imwrite('pos_1.png', img)
