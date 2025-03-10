@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from simulate import create_star_image
-from denoise import filter_image, denoise_image
+from denoise import morph_filter, denoise_with_nlm
 
 
 def draw_gray_3d(img: np.ndarray):
@@ -174,35 +174,32 @@ def get_seed_coords_with_star_distri(img: np.ndarray, half_size: int=2):
     '''
         Get the seed coordinates with the star distribution.
     '''
-    quarter_size = half_size // 2
-
     # filter operation
-    open_img = filter_image(img, 'open', quarter_size*2+1)
-    max_img = filter_image(img, 'max', half_size*2+1)
+    max_img = morph_filter(img, 'max', cv2.MORPH_RECT, half_size*2+1)
+    min_img = morph_filter(img, 'min', cv2.MORPH_ELLIPSE, 5)
+    open_img = morph_filter(img, 'open', cv2.MORPH_ELLIPSE, 3)
     
     # get local max pixels
     mask1 = (img == max_img).astype(np.uint8)
     coords1 = np.transpose(np.nonzero(mask1))
 
     # potential star pixels
-    _, mask2 = cv2.threshold(open_img, 10, 255, cv2.THRESH_BINARY)
+    T = np.mean(open_img) + 2*np.std(open_img)
+    _, mask2 = cv2.threshold(open_img, T, 255, cv2.THRESH_BINARY)
     coords2 = np.transpose(np.nonzero(mask2))
-
-    cv2.imshow('1', mask1*255)
-    cv2.waitKey(-1)
 
     # intersection
     star_coords = np.array(list((set(map(tuple, coords1)) & set(map(tuple, coords2)))))
 
     # iterate through the local max pixels
-    denoised_img = np.zeros_like(img, dtype=np.uint8)
+    denoised_img = min_img
     for row, col in star_coords:
         denoised_img[row-half_size:row+half_size+1, col-half_size:col+half_size+1] = img[row-half_size:row+half_size+1, col-half_size:col+half_size+1]
     
     return denoised_img, star_coords
 
 
-def region_grow(img: np.ndarray, seed: tuple[int, int]) -> np.ndarray:
+def region_grow(img: np.ndarray, seed: tuple[int, int], connectivity: int=4) -> np.ndarray:
     '''
         Region grow the image.
     '''
@@ -212,7 +209,13 @@ def region_grow(img: np.ndarray, seed: tuple[int, int]) -> np.ndarray:
     queue = [seed]
 
     # offsets
-    ds = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+    if connectivity == 4:
+        ds = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+    elif connectivity == 8:
+        ds = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+    else:
+        print('wrong connectivity!')
+        return np.array([]), np.array([])
 
     # coords
     xs, ys = [], []
@@ -256,7 +259,7 @@ def group_star(img: np.ndarray, threshold: int, seeds: list[tuple]=None, connect
     # label connected regions of the same value in the binary image
     if seeds is not None:
         for seed in seeds:
-            rows, cols = region_grow(binary_img, seed)
+            rows, cols = region_grow(binary_img, seed, connectivity)
             if len(rows) < pixel_limit and len(cols) < pixel_limit:
                 continue
             group_coords.append((rows, cols))
@@ -381,12 +384,11 @@ def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, m
     return center
 
 
-def get_star_centroids(img: np.ndarray, den_method: str, thr_method: str, cen_method: str, wind_size: int=-1) -> list[tuple[float, float]]:
+def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, wind_size: int=-1) -> list[tuple[float, float]]:
     '''
         Get the centroids of the stars in the image.
     Args:
         img: the image to be processed
-        den_method: denoising method
         thr_method: threshold calculation method
         cen_method: centroid algorithm
         wind_size: the size of the window used to calculate the centroid
@@ -398,14 +400,14 @@ def get_star_centroids(img: np.ndarray, den_method: str, thr_method: str, cen_me
     h, w = img.shape
 
     # denoise
-    filtered_img = denoise_image(img, den_method)
-    filtered_img, seed_coords = get_seed_coords_with_star_distri(filtered_img, half_size=2)
+    filtered_img = cv2.addWeighted(denoise_with_nlm(img, 10, 7, 49), 0.5, denoise_with_nlm(img, 10, 5, 25), 0.5, 0)
+    filtered_img, seed_coords = get_seed_coords_with_star_distri(filtered_img, half_size=3)
     
     # calaculate the threshold
-    T = cal_threshold(filtered_img, thr_method)
+    T =  cal_threshold(filtered_img, thr_method)
 
     # rough group star using connectivity
-    group_coords = group_star(filtered_img, T, seeds=seed_coords, connectivity=4, pixel_limit=5)
+    group_coords = group_star(filtered_img, T, seeds=seed_coords, connectivity=4, pixel_limit=3)
 
     # calculate the centroid coordinate with threshold and weight
     centroids = []
@@ -427,43 +429,3 @@ def get_star_centroids(img: np.ndarray, den_method: str, thr_method: str, cen_me
         centroids.append(centroid)
 
     return centroids
-
-
-if __name__ == '__main__':
-    # times of estimation using centroid algorithm
-    num_esti_times = 3
-    # random ra & de test
-    num_test = 10
-    # generate random right ascension[0, 360] and declination[-90, 90]
-    ras = np.random.uniform(0, 2*np.pi, num_test)
-    des = np.arcsin(np.random.uniform(-1, 1, num_test))
-    # centroid position error
-    pos_err = {
-        'proposed': 0.0,
-        'gaussian': 0.0,
-        'mean': 0.0,
-        'median': 0.0,
-    }
-    # generate the star image
-    for i in range(num_test):
-        img, star_info = create_star_image(ras[i], des[i], 0, sigma_g=0.05, prob_p=0.0001)
-        real_coords = np.array([x[1] for x in star_info])
-        # estimate the centroids of the stars in the image
-        for method in pos_err.keys():
-            arr_esti_coords = []
-            for _ in range(num_esti_times):
-                esti_coords = np.array(get_star_centroids(img, method, 'Liebe', 'CoG', wind_size=10))
-                if len(real_coords) != len(esti_coords):
-                    print('Wrong star number extracted: ', len(real_coords), len(esti_coords))
-                    continue
-                arr_esti_coords.append(esti_coords)
-            if len(arr_esti_coords) == 0:
-                continue
-            avg_esti_coords = np.mean(arr_esti_coords, axis=0)
-            
-            # calculate the position error
-            diff = real_coords[:, None] - avg_esti_coords
-            dist = np.min(np.sum(diff**2, axis=-1), axis=-1)
-            pos_err[method] += np.mean(dist)
-
-    print(pos_err)
