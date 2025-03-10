@@ -25,18 +25,6 @@ def filter_image(img: np.ndarray, method: str='gaussian', size: int=3, sigma: fl
         filtered_img = cv2.blur(img, (size, size))
     elif method == 'median':
         filtered_img = cv2.medianBlur(img, size)
-    elif method == 'max':
-        kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (size, size))
-        filtered_img = cv2.dilate(img, kernel)
-    elif method == 'min':
-        kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (size, size))
-        filtered_img = cv2.erode(img, kernel)
-    elif method == 'open':
-        kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (size, size))
-        filtered_img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
-    elif method == 'close':
-        kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (size, size))
-        filtered_img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel)
     elif method == 'gaussian low pass':
         f = np.fft.fft2(img)
         fshift = np.fft.fftshift(f)
@@ -52,6 +40,26 @@ def filter_image(img: np.ndarray, method: str='gaussian', size: int=3, sigma: fl
         filtered_img = np.fft.ifft2(filtered_f)
         filtered_img = np.abs(filtered_img)
     else:
+        return None
+    
+    return filtered_img
+
+
+def morph_filter(img: np.ndarray, method: str='max', se=cv2.MORPH_RECT, size: int=3) -> np.ndarray:
+    if method == 'max':
+        kernel = cv2.getStructuringElement(se, (size, size))
+        filtered_img = cv2.dilate(img, kernel)
+    elif method == 'min':
+        kernel = cv2.getStructuringElement(se, (size, size))
+        filtered_img = cv2.erode(img, kernel)
+    elif method == 'open':
+        kernel = cv2.getStructuringElement(se, (size, size))
+        filtered_img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
+    elif method == 'close':
+        kernel = cv2.getStructuringElement(se, (size, size))
+        filtered_img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel)
+    else:
+        print('Invalid method')
         return None
     
     return filtered_img
@@ -281,51 +289,3 @@ def cal_mse_psnr_ssim(img: np.ndarray, filtered_img: np.ndarray):
 
     return mse, psnr, mssim
 
-
-if __name__ == '__main__':
-    imgs = {}
-
-    ra, de, roll = radians(29.2104), radians(-12.0386), radians(0)
-    imgs['original'], stars = create_star_image(ra, de, roll, sigma_g=0, prob_p=0)
-    imgs['noised'], _ = create_star_image(ra, de, roll, sigma_g=0.05, prob_p=0.001)
-    real_coords = np.array([star[1] for star in stars])
-
-    # freq spectrum
-    # draw_freq_spectrum([imgs['original'], imgs['noised']])
-    # snr
-    snr = cal_snr(imgs['original'], imgs['noised'])
-    print(snr)
-
-    # pyramid = gen_laplacian_pyramid(imgs['noised'], 3)
-    # for i, img in enumerate(pyramid):
-    #     plt.subplot(2, 2, i+1)
-    #     plt.imshow(img, cmap='gray')
-    # plt.show()
-    
-    # conventional filters
-    imgs['mean'] = filter_image(imgs['noised'], 'mean')
-    imgs['median'] = filter_image(imgs['noised'], 'median', size=3)
-    imgs['gaussian'] = filter_image(imgs['noised'], 'gaussian', sigma=1)
-    # imgs['glp'] = filter_image(imgs['noised'], 'gaussian low pass', sigma=1)
-
-    # multi-scale non-local mean
-    # imgs['ms_nlm'] = denoise_with_multi_scale_nlm(imgs['noised'], 3, 10, 7, 21)
-
-    # wavelet
-    # imgs['wavelet'] = denoise_with_wavelet(imgs['noised'])
-    
-    # imgs['distri'] = denoise_with_star_distri(imgs['noised'], half_size=3)
-
-    for name in imgs:
-        if name != 'original' and name != 'noised':
-            mse, pnr, ssim = cal_mse_psnr_ssim(imgs['original'], imgs[name])
-            print(name, mse, pnr, ssim)
-        cv2.imwrite(f'example/star/{name}.png', imgs[name])
-
-        save_scale_image = False
-        if save_scale_image:
-            # half length
-            d = 64
-            x, y = 188, 169
-            cv2.imwrite(f'example/star/scale_{name}.png', imgs[name][x-d:x+d, y-d:y+d])
-        
