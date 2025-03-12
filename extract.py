@@ -1,36 +1,7 @@
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
 
-from simulate import create_star_image
 from denoise import morph_filter, denoise_with_nlm
-
-
-def draw_gray_3d(img: np.ndarray):
-    '''
-        Draw the 3D gray image.
-    Args:
-        img: the image to be processed
-    '''
-    # get the image size
-    h, w = img.shape
-
-    # generate the coordinates
-    # x = np.linspace(-w/2, w/2, w)
-    x = np.linspace(0, w, w)
-    # y = np.linspace(-h/2, h/2, h)
-    y = np.linspace(0, h, h)
-    X, Y = np.meshgrid(x, y)
-
-    # create 3D image
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    surf = ax.plot_surface(X, Y, img, cmap='gray')
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z (gray value)')
-    fig.colorbar(surf)
-    plt.show()
 
 
 def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int=5, gray_diff: int=4) -> int:
@@ -49,8 +20,6 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
                 https://www.sciencedirect.com/science/article/abs/pii/0734189X89900510?via%3Dihub
             'Xiao': entropic thresholding based on GLSC 2D histogram
                 https://ieeexplore.ieee.org/document/4761626/?arnumber=4761626
-            'Yang': proposed method
-                2d histogram otsu(adding a max value axis)
         delta: scale parameter used for new threshold iterative calculation in 'Xu' method
         wind_size: the size of the window used to calculate the threshold in 'Abutaleb'/'Xiao' method
         gray_diff: the max difference of the gray value to count the similarity in 'Xiao' method
@@ -117,7 +86,6 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
             for j in range(w):
                 hist[img[i, j], sim[i, j]-1] += 1
         hist /= h*w
-        # draw_gray_3d(hist)
 
         max_entropy = 0
         weights = np.exp(-9 * (np.arange(wind_size ** 2) + 1) / (wind_size ** 2))
@@ -137,33 +105,6 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
             if entropy > max_entropy:
                 max_entropy = entropy
                 T = t
-    elif method == 'Yang':
-        fimg = cv2.dilate(img, cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3)), iterations=1)
-
-        # get the 2d histogram
-        hist = np.zeros((256, 256), dtype=np.float64)
-        for i in range(h):
-            for j in range(w):
-                hist[img[i, j], fimg[i, j]] += 1
-        hist /= h*w
-        draw_gray_3d(hist)
-
-        # iterate to get the threshold with max entropy
-        # for t in range(256):
-        #     Pb = np.sum(hist[:t, 255])
-        #     if Pb == 0.0 or Pb == 1.0:
-        #         continue
-        #     Pf = 1 - Pb
-        #     # background and foreground entropy
-        #     Hb = -np.sum(hist[:t, 255]/Pb * np.log(hist[:t, 255]/Pb, where=(hist[:t, 255]/Pb>= 1e-7)) * weights)
-        #     Hf = -np.sum(hist[t:, 255]/Pf * np.log(hist[t:, 255]/Pf, where=(hist[t:, 255]/Pf>= 1e-7)) * weights)
-        #     entropy = Hb + Hf
-        #     if entropy < 0:
-        #         print('error', entropy, Hb, Hf)
-        #     if entropy > max_entropy:
-        #         max_entropy = entropy
-        #         T = t
-        #     print('T', t, 'entropy', entropy)
     else:
         print('wrong threshold method!')
     
@@ -407,7 +348,7 @@ def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, wind_s
     T =  cal_threshold(filtered_img, thr_method)
 
     # rough group star using connectivity
-    group_coords = group_star(filtered_img, T, seeds=seed_coords, connectivity=4, pixel_limit=3)
+    group_coords = group_star(filtered_img, T, seeds=seed_coords, connectivity=4, pixel_limit=7)
 
     # calculate the centroid coordinate with threshold and weight
     centroids = []

@@ -1,8 +1,7 @@
 import os
-from math import radians, degrees, sin, cos, tan, sqrt, exp
+from math import radians, sin, cos, tan, sqrt, exp
 import numpy as np
 import pandas as pd
-import cv2
 
 # region of interest for point spread function
 roi = 2
@@ -28,7 +27,7 @@ xpixel = w/mtot
 ypixel = h/mtot
 
 # star catalogue path
-catalogue_path = f'catalogue/sao7.0.csv'
+catalogue_path = f'catalogue/sao6.0_d0.2.csv'
 
 # read star catalogue
 col_list = ["Star ID", "RA", "DE", "Magnitude"]
@@ -139,6 +138,18 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float = 0.0, p
             
         return M
 
+    def get_stellar_intensity(magnitude: float) -> float:
+        """
+            Get the stellar intensity from the stellar magnitude.
+        Args:
+            magnitude: the stellar magnitude
+        Returns:
+            H: the stellar intensity
+        """
+        # stellar magnitude to intensity
+        H = 101 * 2.512 ** (6 - magnitude)
+        return H
+
     def draw_star(position: tuple[float, float], magnitude: float, img: np.ndarray, sigma: float=1.5) -> np.ndarray:
         """
             Draw star at position[0](row) and position[1](column) in the image.
@@ -154,8 +165,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float = 0.0, p
         if pure_point:
             return img
 
-        # stellar magnitude to intensity
-        H = 255 * 2.51 ** (5 - magnitude)
+        H = get_stellar_intensity(magnitude)
 
         x, y = position
         top, bottom = int(max(0, x-roi)), int(min(h, x+roi+1))
@@ -243,8 +253,10 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float = 0.0, p
     star_magnitudes = list(stars_within_fov['Magnitude'])
     star_ids = list(stars_within_fov['Star ID'])
     
-    # initialize image & star info list to return
-    img = np.zeros((h,w))
+    # background intensity
+    img = get_stellar_intensity(8.0) * np.ones((h,w))
+
+    # initialize star info list to return
     stars = []
     for i in range(len(star_magnitudes)):
         # draw imagable star at (Y4, X4) (Y4 is row number, X4 is column number)
@@ -265,67 +277,3 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float = 0.0, p
         return img, stars_within_fov
     
     return img, stars
-
-
-if __name__ == '__main__':
-    coord_test = False
-    noise_test = True
-
-    if coord_test:    
-        # simulate one image
-        ra, de, roll = radians(29.2104), radians(-12.0386), radians(0)
-        img, stars = create_star_image(ra, de, roll, simulate_test=True)
-        cv2.imwrite(f'{sim_cfg}_{ra}_{de}_{roll}.png', img)
-
-        stars['RA'], stars['DE'] = np.degrees(stars['RA']), np.degrees(stars['DE'])
-
-        print(stars[['Star ID', 'RA', 'DE', 'X4', 'Y4', 'Magnitude']])
-        for i in range(len(stars)):
-            idi = stars.loc[i, 'Star ID']
-            # celestial cartesian coordinate vector
-            Xi = stars.loc[i, 'X1']
-            Yi = stars.loc[i, 'Y1']
-            Zi = stars.loc[i, 'Z1']
-            Vci = np.array([Xi, Yi, Zi]).transpose()
-            # screen(image) coordinate vector
-            xi = stars.loc[i, 'X3']
-            yi = stars.loc[i, 'Y3']
-            Vsi = np.array([xi, yi, f]).transpose()
-            
-            for j in range(i+1, len(stars)):
-                idj = stars.loc[j, 'Star ID']
-                # celestial cartesian coordinate vector
-                Xj = stars.loc[j, 'X1']
-                Yj = stars.loc[j, 'Y1']
-                Zj = stars.loc[j, 'Z1']
-                Vcj = np.array([Xj, Yj, Zj])
-                # screen(image) coordinate vector
-                xj = stars.loc[j, 'X3']
-                yj = stars.loc[j, 'Y3']
-                Vsj = np.array([xj, yj, f])
-
-                dc = np.arccos(np.dot(Vci, Vcj) / (np.linalg.norm(Vci) * np.linalg.norm(Vcj)))
-                ds = np.arccos(np.dot(Vsi, Vsj) / (np.linalg.norm(Vsi) * np.linalg.norm(Vsj)))
-
-                print(idi, idj, dc, ds)
-
-    if noise_test:
-        ra, de, roll = radians(29.2104), radians(-12.0386), radians(0)
-        img, _ = create_star_image(ra, de, roll, sigma_g=0.05, prob_p=0.0001)
-        cv2.imwrite('example/sim/noise.png', img)
-
-        # img, _ = create_star_image(ra, de, roll, pos_noise_std=3)
-        # cv2.imwrite('pos_1.png', img)
-        # cv2.imwrite('pos_2.png', img[50:350, 50:350])
-
-        # while 1:
-        #     img, stars = create_star_image(ra, de, roll, mv_noise_std=0.2, simulate_test=True)
-        #     if len(stars) != 7:
-        #         print(stars[['Star ID', 'RA', 'DE', 'X4', 'Y4', 'Magnitude']])
-        #         break
-        # cv2.imwrite('mv_1.png', img)
-        # cv2.imwrite('mv_2.png', img[50:350, 50:350])
-
-        # img, _ = create_star_image(ra, de, roll, ratio_false_star=0.3)
-        # cv2.imwrite('fs_1.png', img)
-        # cv2.imwrite('fs_2.png', img[50:350, 50:350])

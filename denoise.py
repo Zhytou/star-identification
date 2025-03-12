@@ -1,13 +1,7 @@
 import cv2
 import pywt
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy.signal import convolve2d
-from scipy.ndimage import maximum_filter
-from skimage.metrics import structural_similarity
-from math import radians
-
-from simulate import create_star_image
 
 
 def filter_image(img: np.ndarray, method: str='gaussian', size: int=3, sigma: float=0.5) -> np.ndarray:
@@ -188,31 +182,6 @@ def denoise_image(img: np.ndarray, method: str='nlm'):
         return None
 
 
-def draw_freq_spectrum(imgs: list[np.ndarray]):
-    '''
-        Draw the frequency spectrum of the image.
-    Args:
-        imgs: the images to be processed
-    '''
-    n = len(imgs)
-    for i, img in enumerate(imgs):
-        f = np.fft.fft2(img)
-        fshift = np.fft.fftshift(f)    
-        fdb_img = 20 * np.log(np.abs(fshift))
-
-        plt.subplot(n, 2, i*2+1)
-        plt.imshow(img, cmap='gray')
-        plt.title('Original')
-        plt.axis('off')
-    
-        plt.subplot(n, 2, i*2+2)
-        plt.imshow(fdb_img, cmap='gray')
-        plt.title('Frequency Spectrum')
-        plt.axis('off')
-    
-    plt.show()
-
-
 def gen_laplacian_pyramid(img: np.ndarray, levels: int=3):
     '''
         Generate the Laplacian pyramid of the image.
@@ -239,53 +208,4 @@ def gen_laplacian_pyramid(img: np.ndarray, levels: int=3):
 
     return laplacian_pyramid
 
-
-def cal_snr(img: np.ndarray, noised_img: np.ndarray):
-    '''
-        Calculate the signal-to-noise ratio between the original image and the noised image.
-    Args:
-        img: the original image
-        noised_img: the noised image
-    Returns:
-        snr: the signal-to-noise ratio
-    '''
-    snr = 10 * np.log10(np.sum(img**2) / np.sum((img - noised_img)**2))
-
-    return snr
-
-
-def cal_mse_psnr_ssim(img: np.ndarray, filtered_img: np.ndarray):
-    '''
-        Calculate peak signal-to-noise ratio and the structural similarity between the original image and the filtered image.
-    Args:
-        img: the original image
-        filtered_img: the image after filtering
-    Returns:
-        psnr: the peak signal-to-noise ratio
-        mssim: the mean structural similarity
-    '''
-    # diff = (img - filtered_img)**2
-    # max_val = np.max(diff)
-    # rows, cols = np.where(diff == max_val)
-    # print(rows, cols)
-
-    # for row, col in zip(rows, cols):
-    #     t, b = max(0, row-2), min(img.shape[0], row+3)
-    #     l, r = max(0, col-2), min(img.shape[1], col+3)
-
-    #     print(img[t:b, l:r])
-    #     print(filtered_img[t:b, l:r])
-
-    # caculate the MSE
-    mse = np.mean((img - filtered_img)**2)
-    
-    # caculate the PSNR
-    psnr = 10 * np.log10(255**2 / mse)
-    
-    # caculate the SSIM
-    mssim = structural_similarity(img, filtered_img, data_range=255)
-
-    mse, psnr, mssim = round(mse, 2), round(psnr, 2), round(mssim, 2)
-
-    return mse, psnr, mssim
 
