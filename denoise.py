@@ -102,6 +102,35 @@ def denoise_with_nlm(img: np.ndarray, h: int=10, K: int=7, L: int=21):
     return denoised_img
 
 
+def denoise_with_star_distri(img: np.ndarray, half_size: int=2):
+    '''
+        Get the seed coordinates with the star distribution.
+    '''
+    # filter operation
+    max_img = morph_filter(img, 'max', cv2.MORPH_RECT, half_size*2+1)
+    min_img = morph_filter(img, 'min', cv2.MORPH_ELLIPSE, 5)
+    open_img = morph_filter(img, 'open', cv2.MORPH_ELLIPSE, 3)
+    
+    # get local max pixels
+    mask1 = (img == max_img).astype(np.uint8)
+    coords1 = np.transpose(np.nonzero(mask1))
+
+    # potential star pixels
+    T = np.mean(open_img) + 2*np.std(open_img)
+    _, mask2 = cv2.threshold(open_img, T, 255, cv2.THRESH_BINARY)
+    coords2 = np.transpose(np.nonzero(mask2))
+
+    # intersection
+    star_coords = np.array(list((set(map(tuple, coords1)) & set(map(tuple, coords2)))))
+
+    # iterate through the local max pixels
+    denoised_img = min_img
+    for row, col in star_coords:
+        denoised_img[row-half_size:row+half_size+1, col-half_size:col+half_size+1] = img[row-half_size:row+half_size+1, col-half_size:col+half_size+1]
+    
+    return denoised_img
+
+
 def denoise_with_multi_scale_nlm(img: np.ndarray, levels: int=3, h: int=10, K: int=7, L: int=21):
     '''
         Multi-scale NLM denoising.
