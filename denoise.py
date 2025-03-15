@@ -1,5 +1,4 @@
 import cv2
-import pywt
 import numpy as np
 from scipy.signal import convolve2d
 
@@ -19,7 +18,7 @@ def filter_image(img: np.ndarray, method: str='gaussian', size: int=3, sigma: fl
         filtered_img = cv2.blur(img, (size, size))
     elif method == 'median':
         filtered_img = cv2.medianBlur(img, size)
-    elif method == 'gaussian low pass':
+    elif method == 'glp':
         f = np.fft.fft2(img)
         fshift = np.fft.fftshift(f)
 
@@ -156,61 +155,6 @@ def denoise_with_multi_scale_nlm(img: np.ndarray, levels: int=3, h: int=10, K: i
     return denoised_img
 
 
-def denoise_with_wavelet(img: np.ndarray, wavelet='sym4', thr_method='bayes'):
-    '''
-        Wavelet denoising.
-    '''
-
-    def cal_threshold(coeffs, noise_std):
-        '''
-            Calculate the threshold for wavelet denoising.
-        '''
-
-        # use the highest level subband to estimate noise standard deviation
-        noise_std = np.median(np.abs(coeffs[1][-1])) / 0.6745
-        
-        if thr_method == 'visu':
-            threshold = noise_std * np.sqrt(2 * np.log(len(coeffs)))
-        elif thr_method == 'bayes':    
-            threshold = (noise_std**2) / np.sqrt(np.var(coeffs) + 1e-6)
-        elif thr_method == 'sure':
-            threshold = np.sqrt(2 * np.log(len(coeffs))) * noise_std
-        else:
-            threshold = 0
-        
-        print(threshold)
-
-        return threshold
-
-    # wavelet decomposition
-    coeffs = pywt.wavedec2(img, wavelet, level=2)
-
-    # iterate through the wavelet coefficients, and skip the lowest frequency subband
-    for i in range(1, len(coeffs)):
-        tr_coeff = pywt.threshold(coeffs[i], 0, mode='soft')
-        coeffs[i] = (tr_coeff[0], tr_coeff[1], tr_coeff[2])
-
-    denoised_img = pywt.waverec2(coeffs, wavelet)
-    denoised_img = np.clip(denoised_img, 0, 255).astype(np.uint8)
-
-    return denoised_img
-
-
-def denoise_image(img: np.ndarray, method: str='nlm'):
-    '''
-        Denoise the image.
-    '''
-    denoised_img = filter_image(img, method)
-    if denoised_img is not None:
-        return denoised_img
-    elif method == 'nlm':
-        return denoise_with_nlm(img)
-    elif method == 'wavelet':
-        return denoise_with_wavelet(img)
-    else:
-        return None
-
-
 def gen_laplacian_pyramid(img: np.ndarray, levels: int=3):
     '''
         Generate the Laplacian pyramid of the image.
@@ -236,5 +180,3 @@ def gen_laplacian_pyramid(img: np.ndarray, levels: int=3):
     laplacian_pyramid.append(gaussian_pyramid[-1])
 
     return laplacian_pyramid
-
-
