@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import skimage.feature as skf
 
 
 def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int=5, gray_diff: int=4) -> int:
@@ -110,6 +111,16 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
     return T
 
 
+def get_seed_coords(img: np.ndarray):
+    '''
+        Get the seed coordinates with the star distribution.
+    '''
+    coords = skf.blob_doh(img, min_sigma=1, max_sigma=20, threshold=0.001, num_sigma=10)
+    coords = np.array([[int(coord[0]), int(coord[1])] for coord in coords])
+
+    return coords
+
+
 def region_grow(img: np.ndarray, seed: tuple[int, int], connectivity: int=4) -> np.ndarray:
     '''
         Region grow the image.
@@ -169,8 +180,7 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
 
     # label connected regions of the same value in the binary image
     if method == 'RC':
-        seeds = []
-        
+        seeds = get_seed_coords(img)
         for seed in seeds:
             rows, cols = region_grow(binary_img, seed, connectivity)
             if len(rows) < pixel_limit and len(cols) < pixel_limit:
