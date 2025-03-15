@@ -1,4 +1,3 @@
-import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -51,28 +50,25 @@ def draw_gray_3d(img: np.ndarray):
     plt.show()
 
 
-def draw_freq_spectrum(imgs: list[np.ndarray]):
+def draw_freq_spectrum(img: np.ndarray):
     '''
         Draw the frequency spectrum of the image.
     Args:
-        imgs: the images to be processed
+        img: the image to be processed
     '''
-    n = len(imgs)
-    for i, img in enumerate(imgs):
-        f = np.fft.fft2(img)
-        fshift = np.fft.fftshift(f)    
-        fdb_img = 20 * np.log(np.abs(fshift))
+    f = np.fft.fft2(img)
+    fshift = np.fft.fftshift(f)    
+    fdb_img = 20 * np.log(np.abs(fshift))
 
-        plt.subplot(n, 2, i*2+1)
-        plt.imshow(img, cmap='gray')
-        plt.title('Original')
-        plt.axis('off')
-    
-        plt.subplot(n, 2, i*2+2)
-        plt.imshow(fdb_img, cmap='gray')
-        plt.title('Frequency Spectrum')
-        plt.axis('off')
-    
+    plt.subplot(1, 2, 1)
+    plt.imshow(img, cmap='gray')
+    plt.title('Original')
+    plt.axis('off')
+
+    plt.subplot(1, 2, 2)
+    plt.imshow(fdb_img, cmap='gray')
+    plt.title('Frequency Spectrum')
+    plt.axis('off')
     plt.show()
 
 
