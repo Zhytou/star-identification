@@ -111,13 +111,20 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
     return T
 
 
-def get_seed_coords(img: np.ndarray):
+def get_seed_coords(img: np.ndarray, method: str='blob') -> np.ndarray:
     '''
         Get the seed coordinates with the star distribution.
     '''
-    coords = skf.blob_doh(img, min_sigma=1, max_sigma=20, threshold=0.001, num_sigma=10)
+    if method == 'doh':
+        coords = skf.blob_doh(img, min_sigma=1, max_sigma=20, threshold=0.001, num_sigma=10)
+    elif method == 'log':
+        coords = skf.blob_log(img, min_sigma=1, max_sigma=20, threshold=0.05, num_sigma=10)
+    elif method == 'dog':
+        coords = skf.blob_dog(img, min_sigma=1, max_sigma=20, threshold=1, sigma_ratio=1.5)
+    else:
+        return []
+    
     coords = np.array([[int(coord[0]), int(coord[1])] for coord in coords])
-
     return coords
 
 
