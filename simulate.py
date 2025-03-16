@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 # region of interest for point spread function
-roi = 2
+roi = 3
 
 # star sensor pixel num
 w = 512
@@ -14,7 +14,7 @@ h = 512
 f = 58e-3
 
 # field of view angle in degrees
-fov = 10
+fov = 15
 
 # camera total length and width in metres
 mtot = 2*tan(radians(fov/2))*f
@@ -77,7 +77,7 @@ def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float
 
     # add pepper noise
     num_pepper = int(prob_p * img.size)
-    for i in range(num_pepper):
+    for _ in range(num_pepper):
         x, y = np.random.randint(0, img.shape[0]), np.random.randint(0, img.shape[1])
         # if img[x, y] != 0:
         #     continue
@@ -96,7 +96,51 @@ def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float
     return noised_img
 
 
-def create_star_image(ra: float, de: float, roll: float, sigma_g: float = 0.0, prob_p: float = 0.0, pos_noise_std: float = 0, mv_noise_std: float = 0, ratio_false_star: int = 0, pure_point: bool = False, simulate_test: bool = False) -> tuple[np.ndarray, list]:
+def get_stellar_intensity(magnitude: float) -> float:
+    """
+        Get the stellar intensity from the stellar magnitude.
+    Args:
+        magnitude: the stellar magnitude
+    Returns:
+        H: the stellar intensity
+    """
+    # stellar magnitude to intensity
+    H = 101 * 2.512 ** (6 - magnitude)
+    return H
+
+
+def draw_star(position: tuple[float, float], magnitude: float, img: np.ndarray, sigma: float=1.5) -> np.ndarray:
+    """
+        Draw star at position[0](row) and position[1](column) in the image.
+    Args:
+        position: (starting from top to bottom, starting from left to right)
+        magnitude: the stellar magnitude
+        img: background image
+        sigma: the standard deviation of the point spread function
+    Returns:
+        img: the image with the star drawn
+    """
+    H = get_stellar_intensity(magnitude)
+
+    x, y = position
+    top, bottom = int(max(0, x-roi)), int(min(h, x+roi+1))
+    left, right = int(max(0, y-roi)), int(min(w, y+roi+1))
+
+    # print(x, y, top, bottom, left, right)
+    for u in range(top, bottom):
+        for v in range(left, right):
+            # msaa
+            intensity = 0
+            for (du, dv) in [(0.25, 0.25), (0.25, 0.75), (0.75, 0.25), (0.75, 0.75)]: 
+                dd = (u+du-x)**2+(v+dv-y)**2
+                if dd > roi**2:
+                    continue
+                intensity += H*exp(-dd/(2*sigma**2))
+            img[u ,v] = intensity // 4
+    return img
+
+
+def create_star_image(ra: float, de: float, roll: float, sigma_g: float = 0.0, prob_p: float = 0.0, pos_noise_std: float = 0, mv_noise_std: float = 0, ratio_false_star: int = 0, pure_point: bool = False, simulate_test: bool = False, background: float=np.inf) -> tuple[np.ndarray, list]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
@@ -108,7 +152,8 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float = 0.0, p
         pos_noise_std: the standard deviation of positional noise
         mv_noise_std: the standard deviation of maginatitude noise
         ratio_false_star: the ratio of false stars
-        pure_point: no need to draw the star image, just pure point data
+        pure_point: no need to draw the star image, just pure point data(for generate.py)
+        background: the background intensity
     Returns:
         img: the simulated star image
         stars: stars drawn in the image
@@ -137,52 +182,6 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float = 0.0, p
         M = np.array([[a1, a2, a3], [b1, b2, b3], [c1, c2, c3]])
             
         return M
-
-    def get_stellar_intensity(magnitude: float) -> float:
-        """
-            Get the stellar intensity from the stellar magnitude.
-        Args:
-            magnitude: the stellar magnitude
-        Returns:
-            H: the stellar intensity
-        """
-        # stellar magnitude to intensity
-        H = 101 * 2.512 ** (6 - magnitude)
-        return H
-
-    def draw_star(position: tuple[float, float], magnitude: float, img: np.ndarray, sigma: float=1.5) -> np.ndarray:
-        """
-            Draw star at position[0](row) and position[1](column) in the image.
-        Args:
-            position: (starting from top to bottom, starting from left to right)
-            magnitude: the stellar magnitude
-            img: background image
-            sigma: the standard deviation of the point spread function
-        Returns:
-            img: the image with the star drawn
-        """
-        # no need to draw img
-        if pure_point:
-            return img
-
-        H = get_stellar_intensity(magnitude)
-
-        x, y = position
-        top, bottom = int(max(0, x-roi)), int(min(h, x+roi+1))
-        left, right = int(max(0, y-roi)), int(min(w, y+roi+1))
-
-        # print(x, y, top, bottom, left, right)
-        for u in range(top, bottom):
-            for v in range(left, right):
-                # msaa
-                intensity = 0
-                for (du, dv) in [(0.25, 0.25), (0.25, 0.75), (0.75, 0.25), (0.75, 0.75)]: 
-                    dd = (u+du-x)**2+(v+dv-y)**2
-                    if dd > roi**2:
-                        continue
-                    intensity += H*exp(-dd/(2*sigma**2))
-                img[u ,v] = intensity // 4
-        return img
 
     def add_false_stars(img: np.ndarray, num: int, pos: np.array, min_d: int=4*roi) -> tuple[np.ndarray, list]:
         '''
@@ -254,14 +253,18 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float = 0.0, p
     star_ids = list(stars_within_fov['Star ID'])
     
     # background intensity
-    img = get_stellar_intensity(8.0) * np.ones((h,w))
+    if background == np.inf:
+        img = np.zeros((h,w))
+    else:
+        img = get_stellar_intensity(background) * np.ones((h,w))
 
     # initialize star info list to return
     stars = []
     for i in range(len(star_magnitudes)):
         # draw imagable star at (Y4, X4) (Y4 is row number, X4 is column number)
         star_positions[i] = round(star_positions[i][0], 3), round(star_positions[i][1], 3)
-        img = draw_star(star_positions[i], star_magnitudes[i], img)
+        if not pure_point:
+            img = draw_star(star_positions[i], star_magnitudes[i], img)
         stars.append([star_ids[i], star_positions[i], star_magnitudes[i]])
 
     # add false stars with random magitudes at random positions
