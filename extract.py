@@ -57,7 +57,7 @@ def cal_center_of_guassian_curve(img: np.ndarray, rows, cols) -> tuple[float, fl
     return round(-X[1]/(2*X[0]), 3), round(-X[2]/(2*X[0]), 3)
 
 
-def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, method: str, T: int=-1, center: tuple[int, int]=None, A: float=200, sigma: float=1.0) -> tuple[float, float]:
+def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, method: str, compensated: bool, T: int=-1, center: tuple[int, int]=None, A: float=200, sigma: float=1.0) -> tuple[float, float]:
     '''
         Calculate the centroid of the star in the window.
     Args:
@@ -100,10 +100,17 @@ def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, m
         return 0.0, 0.0
     
     center = round(xgs/gs, 3), round(ygs/gs, 3)
+
+    if compensated:
+        center = center[0]+cal_compensate(center[0]), center[1]+cal_compensate(center[1])
     return center
 
 
-def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, wind_size: int=-1) -> list[tuple[float, float]]:
+def cal_compensate(esti_x):
+    return -2.4194299127361094*np.sin(0.014439263775565864*esti_x-0.007147436746119124)
+
+
+def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, compensated: bool, wind_size: int=-1) -> list[tuple[float, float]]:
     '''
         Get the centroids of the stars in the image.
     Args:
@@ -126,7 +133,7 @@ def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, wind_s
     T =  cal_threshold(filtered_img, thr_method)
 
     # rough group star using connectivity
-    group_coords = group_star(filtered_img, T, connectivity=4, pixel_limit=7)
+    group_coords = group_star(filtered_img, 'RC', T, connectivity=4, pixel_limit=7)
 
     # calculate the centroid coordinate with threshold and weight
     centroids = []
@@ -141,9 +148,9 @@ def get_star_centroids(img: np.ndarray, thr_method: str, cen_method: str, wind_s
             t, b, l, r = cal_wind_boundary(brightest, wind_size, h, w)
             nrows, ncols = np.meshgrid(np.arange(t, b+1), np.arange(l, r+1))
             nrows, ncols = nrows.flatten(), ncols.flatten()
-            centroid = cal_center_of_gravity(filtered_img, nrows, ncols, cen_method, T, center=brightest, n=10)
+            centroid = cal_center_of_gravity(filtered_img, nrows, ncols, cen_method, compensated, T, center=brightest)
         else:
-            centroid = cal_center_of_gravity(filtered_img, rows, cols, cen_method, T, center=brightest, n=10)
+            centroid = cal_center_of_gravity(filtered_img, rows, cols, cen_method, compensated, T, center=brightest)
 
         centroids.append(centroid)
 

@@ -111,7 +111,7 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
     return T
 
 
-def get_seed_coords(img: np.ndarray, method: str='blob') -> np.ndarray:
+def get_seed_coords(img: np.ndarray, method: str='doh') -> np.ndarray:
     '''
         Get the seed coordinates with the star distribution.
     '''
@@ -187,7 +187,7 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
 
     # label connected regions of the same value in the binary image
     if method == 'RC':
-        seeds = get_seed_coords(img)
+        seeds = get_seed_coords(img, 'doh')
         for seed in seeds:
             rows, cols = region_grow(binary_img, seed, connectivity)
             if len(rows) < pixel_limit and len(cols) < pixel_limit:
