@@ -116,7 +116,7 @@ def get_seed_coords(img: np.ndarray, method: str='doh') -> np.ndarray:
         Get the seed coordinates with the star distribution.
     '''
     if method == 'doh':
-        coords = skf.blob_doh(img, min_sigma=2, max_sigma=3, threshold=0.001, num_sigma=5)
+        coords = skf.blob_doh(img, min_sigma=2, max_sigma=3, threshold=0.001, num_sigma=2)
     elif method == 'log':
         coords = skf.blob_log(img, min_sigma=2, max_sigma=3, threshold=0.05, num_sigma=10)
     elif method == 'dog':
@@ -164,6 +164,36 @@ def region_grow(img: np.ndarray, seed: tuple[int, int], connectivity: int=4) -> 
     return np.array(xs), np.array(ys)
 
 
+class UnionSet:
+    '''
+        Union set for connected components label.
+    '''
+    def __init__(self):
+        self.parent = {}
+        self.rank = {}
+
+    def find(self, x):
+        if self.parent[x] != x:
+            self.parent[x] = self.find(self.parent[x])
+        return self.parent[x]
+
+    def union(self, x, y):
+        root_x = self.find(x)
+        root_y = self.find(y)
+        if root_x != root_y:
+            if self.rank[root_x] > self.rank[root_y]:
+                self.parent[root_y] = root_x
+            else:
+                self.parent[root_x] = root_y
+                if self.rank[root_x] == self.rank[root_y]:
+                    self.rank[root_y] += 1
+
+    def add(self, x):
+        if x not in self.parent:
+            self.parent[x] = x
+            self.rank[x] = 0
+
+
 def connected_components_label(img: np.ndarray, connectivity: int=4) -> tuple[int, np.ndarray]:
     '''
         Label the connected components in the image.
@@ -172,8 +202,8 @@ def connected_components_label(img: np.ndarray, connectivity: int=4) -> tuple[in
 
     # initialize the label image
     label_img = np.zeros_like(img)
-    label_num = 0
-    label_tab = {}
+    label_cnt = 0
+    label_tab = UnionSet()
 
     # offsets
     if connectivity == 4:
@@ -197,22 +227,90 @@ def connected_components_label(img: np.ndarray, connectivity: int=4) -> tuple[in
                     connected_labels.append(label_img[i + dx, j + dy])
             
             if len(connected_labels) == 0:
-                label_num += 1
-                label_img[i, j] = label_num
+                label_cnt += 1
+                label_img[i, j] = label_cnt
             else:
-                label_img[i, j] = min(connected_labels)
+                min_label = min(connected_labels)
                 for label in connected_labels:
-                    if label != label_img[i, j]:
-                        label_tab[label] = label_img[i, j]
+                    label_tab.union(min_label, label)
+                label_img[i, j] = min_label
     
+    label_num = 0
+
     # second pass
     for i in range(h):
         for j in range(w):
             if label_img[i, j] == 0:
                 continue
-            label_img[i, j] = label_tab.get(label_img[i, j], label_img[i, j])
+            label_img[i, j] = label_tab.find(label_img[i, j])
+            label_num = max(label_num, label_img[i, j])
 
     return label_num, label_img
+
+
+def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
+    '''
+        Label the connected components in the image using run length code.
+    '''
+
+    # label counter & label table for merging
+    label_cnt = 0
+    label_tab = UnionSet()
+
+    # row, start, end, label
+    runs = []
+
+    # generate runs
+    for i, row in enumerate(img):
+        for (start, end) in find_ranges(row):
+            runs.append({
+                'row': i,
+                'start': start,
+                'end': end,
+                'label': -1
+            })
+
+    # iterate the runs by row
+    prev_row_runs = []
+    curr_row_runs = []
+    for run in runs:
+        
+        if len(curr_row_runs) > 0 and curr_row_runs[0]['row'] != run['row']:
+            if curr_row_runs[0]['row'] == run['row'] - 1:
+                prev_row_runs = curr_row_runs
+            else:
+                prev_row_runs = []
+            curr_row_runs = []
+        curr_row_runs.append(run)
+
+        connected_labels = []
+        for prev_run in prev_row_runs:
+            overlap = False
+            if connectivity == 4:
+                # 4-connectivity
+                overlap = (prev_run['start'] <= run['end']) and (prev_run['end'] >= run['start'])
+            else:
+                # 8-connectivity
+                overlap = (prev_run['start'] <= run['end'] + 1) and (prev_run['end'] >= run['start'] - 1)
+            
+            if overlap:
+                connected_labels.append(prev_run['label'])
+        
+        if len(connected_labels) == 0:
+            label_cnt += 1
+            label_tab.add(label_cnt)
+            run['label'] = label_cnt
+        else:
+            min_label  = min(connected_labels)
+            for label in connected_labels:
+                label_tab.union(min_label, label)
+            run['label'] = min_label
+
+    # merge the labels
+    for run in runs:
+        run['label'] = label_tab.find(run['label'])
+    
+    return runs
 
 
 def find_ranges(nums, threshold=0) -> list[tuple[int, int]]:
@@ -251,6 +349,7 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
         method: 
             RG Region Grow
             CCL Connected Components Label
+            RLC_CCL Run Length Code Connected Components Label
             CPL Cross Project Label(https://www.sciengine.com/CJSS/doi/10.11728/cjss2006.03.209)
         threshold: the threshold used to segment the image
         connectivity: method of connectivity
@@ -259,6 +358,8 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
         group_coords: the coordinates of the grouped pixels(which are the potential stars)
         num_group: the number of the grouped
     """
+    h, w = img.shape
+
     # if img[u, v] < threshold: 0, else: img[u, v]
     _, img = cv2.threshold(img, threshold, 255, cv2.THRESH_TOZERO)
 
@@ -286,15 +387,40 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
             if len(rows) < pixel_limit and len(cols) < pixel_limit:
                 continue
             group_coords.append((rows, cols))
+    elif method == 'RLC_CCL':
+        runs = run_length_code_label(binary_img, connectivity)
+        sorted_runs = sorted(runs, key=lambda x: x['label'])
+        
+        curr_label = 1
+        curr_rows, curr_cols = [], []
+        for run in sorted_runs:
+            if run['label'] != curr_label and len(curr_rows) > pixel_limit and len(curr_cols) > pixel_limit:
+                group_coords.append((np.array(curr_rows), np.array(curr_cols)))
+                curr_rows, curr_cols = [], []
+
+            curr_label = run['label']
+            row, start, end = run['row'], run['start'], run['end']
+
+            curr_rows.extend([row] * (end - start + 1))
+            curr_cols.extend(list(range(start, end+1)))
+        
+        if len(curr_rows) > pixel_limit and len(curr_cols) > pixel_limit:
+            group_coords.append((np.array(curr_rows), np.array(curr_cols)))
     elif method == 'CPL':
-        vertical_project = np.sum(binary_img, axis=0)
+        vertical_project = np.zeros(w) #np.sum(binary_img, axis=0)
+        for i in range(w):
+            for j in range(h):
+                vertical_project[i] += binary_img[j, i]
         vranges = find_ranges(vertical_project)
 
         for (y1, y2) in vranges:
             if y1 == y2:
                 continue
 
-            horizontal_project = np.sum(binary_img[:, y1:y2], axis=1)
+            horizontal_project = np.zeros(h) #np.sum(binary_img[:, y1:y2], axis=1)
+            for i in range(h):
+                for j in range(y1, y2+1):
+                    horizontal_project[i] += binary_img[i, j]
             hranges = find_ranges(horizontal_project)
 
             for (x1, x2) in hranges:
