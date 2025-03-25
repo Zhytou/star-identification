@@ -116,11 +116,11 @@ def get_seed_coords(img: np.ndarray, method: str='doh') -> np.ndarray:
         Get the seed coordinates with the star distribution.
     '''
     if method == 'doh':
-        coords = skf.blob_doh(img, min_sigma=1, max_sigma=20, threshold=0.001, num_sigma=10)
+        coords = skf.blob_doh(img, min_sigma=2, max_sigma=3, threshold=0.001, num_sigma=5)
     elif method == 'log':
-        coords = skf.blob_log(img, min_sigma=1, max_sigma=20, threshold=0.05, num_sigma=10)
+        coords = skf.blob_log(img, min_sigma=2, max_sigma=3, threshold=0.05, num_sigma=10)
     elif method == 'dog':
-        coords = skf.blob_dog(img, min_sigma=1, max_sigma=20, threshold=1, sigma_ratio=1.5)
+        coords = skf.blob_dog(img, min_sigma=2, max_sigma=3, threshold=1, sigma_ratio=1.5)
     else:
         return []
     
@@ -164,12 +164,94 @@ def region_grow(img: np.ndarray, seed: tuple[int, int], connectivity: int=4) -> 
     return np.array(xs), np.array(ys)
 
 
+def connected_components_label(img: np.ndarray, connectivity: int=4) -> tuple[int, np.ndarray]:
+    '''
+        Label the connected components in the image.
+    '''
+    h, w = img.shape
+
+    # initialize the label image
+    label_img = np.zeros_like(img)
+    label_num = 0
+    label_tab = {}
+
+    # offsets
+    if connectivity == 4:
+        ds = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+    elif connectivity == 8:
+        ds = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+    else:
+        print('wrong connectivity!')
+        return 0, np.array([])
+
+    # first pass
+    for i in range(h):
+        for j in range(w):
+            if img[i, j] == 0:
+                continue
+            connected_labels = []
+            for dx, dy in ds:
+                if i + dx < 0 or i + dx >= h or j + dy < 0 or j + dy >= w:
+                    continue
+                if label_img[i + dx, j + dy] > 0:
+                    connected_labels.append(label_img[i + dx, j + dy])
+            
+            if len(connected_labels) == 0:
+                label_num += 1
+                label_img[i, j] = label_num
+            else:
+                label_img[i, j] = min(connected_labels)
+                for label in connected_labels:
+                    if label != label_img[i, j]:
+                        label_tab[label] = label_img[i, j]
+    
+    # second pass
+    for i in range(h):
+        for j in range(w):
+            if label_img[i, j] == 0:
+                continue
+            label_img[i, j] = label_tab.get(label_img[i, j], label_img[i, j])
+
+    return label_num, label_img
+
+
+def find_ranges(nums, threshold=0) -> list[tuple[int, int]]:
+    '''
+        Find the ranges of the continuous values in the list.
+    Args:
+        nums: the list of values
+        threshold: the threshold to segment the values
+    Returns:
+        ranges: the ranges of the continuous values
+    '''
+
+    ranges = []
+    start = -1
+    end = -1
+    for i, value in enumerate(nums):
+        if value > threshold:
+            if start == -1:
+                start = i
+            end = i
+        else:
+            if start != -1:
+                ranges.append((start, end))
+                start = -1
+                end = -1
+    if start != -1:
+        ranges.append((start, end))
+    return ranges
+
+
 def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-1, pixel_limit: int=5) -> tuple[list[list[tuple[int, int]]], int]:
     """
         Group the facula(potential star) in the image.
     Args:
         img: the image to be processed
-        method: RC('Region Grow') or CCL('Connected Components Labeling')
+        method: 
+            RG Region Grow
+            CCL Connected Components Label
+            CPL Cross Project Label(https://www.sciengine.com/CJSS/doi/10.11728/cjss2006.03.209)
         threshold: the threshold used to segment the image
         connectivity: method of connectivity
         pixel_limit: the minimum number of pixels for a group
@@ -186,7 +268,7 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
     group_coords = []
 
     # label connected regions of the same value in the binary image
-    if method == 'RC':
+    if method == 'RG':
         seeds = get_seed_coords(img, 'doh')
         for seed in seeds:
             rows, cols = region_grow(binary_img, seed, connectivity)
@@ -194,7 +276,8 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
                 continue
             group_coords.append((rows, cols))
     elif method == 'CCL':
-        label_num, label_img = cv2.connectedComponents(binary_img, connectivity=connectivity)
+        label_num, label_img = connected_components_label(binary_img, connectivity)
+        # label_num, label_img = cv2.connectedComponents(binary_img, connectivity=connectivity)
 
         for label in range(1, label_num + 1):
             # get the coords for each label
@@ -203,6 +286,29 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
             if len(rows) < pixel_limit and len(cols) < pixel_limit:
                 continue
             group_coords.append((rows, cols))
+    elif method == 'CPL':
+        vertical_project = np.sum(binary_img, axis=0)
+        vranges = find_ranges(vertical_project)
+
+        for (y1, y2) in vranges:
+            if y1 == y2:
+                continue
+
+            horizontal_project = np.sum(binary_img[:, y1:y2], axis=1)
+            hranges = find_ranges(horizontal_project)
+
+            for (x1, x2) in hranges:
+                if x1 == x2:
+                    continue
+                for x in range(x1, x2+1):
+                    for y in range(y1, y2+1):
+                        if binary_img[x, y] == 0:
+                            continue
+
+                        rows, cols = region_grow(binary_img, (x, y), connectivity)
+                        if len(rows) < pixel_limit and len(cols) < pixel_limit:
+                            continue
+                        group_coords.append((rows, cols))
     else:
         print('wrong method!')
         return []
