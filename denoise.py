@@ -101,7 +101,7 @@ def denoise_with_nlm(img: np.ndarray, h: int=10, K: int=7, L: int=21):
     return denoised_img
 
 
-def denoise_with_bf(img: np.ndarray, d: int=9, atten: float=0.2, threshold: int=150, sigma_color: float=30, sigma_space: float=1):
+def denoise_with_bf(img: np.ndarray, d: int=9, atten: float=0.1, threshold: int=150, sigma_color: float=30, sigma_space: float=1):
     '''
         Improved bilateral filter denoising.
     Args:
@@ -219,6 +219,11 @@ def denoise_with_multi_scale_nlm(img: np.ndarray, levels: int=3, h: int=10, K: i
     denoised_img = np.clip(denoised_img, 0, 255).astype(np.uint8)
 
     return denoised_img
+
+
+def denoise_with_nlm_bf(img: np.ndarray):
+    denoised_img = cv2.addWeighted(denoise_with_nlm(img, 10, 7, 49), 0.5, denoise_with_nlm(img, 10, 5, 25), 0.5, 0)
+    return denoise_with_bf(denoised_img, 3)
 
 
 def gen_laplacian_pyramid(img: np.ndarray, levels: int=3):
