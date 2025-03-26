@@ -183,10 +183,11 @@ class UnionSet:
         if root_x != root_y:
             if self.rank[root_x] > self.rank[root_y]:
                 self.parent[root_y] = root_x
-            else:
+            elif self.rank[root_x] < self.rank[root_y]:
                 self.parent[root_x] = root_y
-                if self.rank[root_x] == self.rank[root_y]:
-                    self.rank[root_y] += 1
+            else:
+                self.parent[root_y] = root_x
+                self.rank[root_x] += 1
 
     def add(self, x):
         if x not in self.parent:
@@ -229,6 +230,7 @@ def connected_components_label(img: np.ndarray, connectivity: int=4) -> tuple[in
             if len(connected_labels) == 0:
                 label_cnt += 1
                 label_img[i, j] = label_cnt
+                label_tab.add(label_cnt)
             else:
                 min_label = min(connected_labels)
                 for label in connected_labels:
@@ -407,20 +409,22 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
         if len(curr_rows) > pixel_limit and len(curr_cols) > pixel_limit:
             group_coords.append((np.array(curr_rows), np.array(curr_cols)))
     elif method == 'CPL':
-        vertical_project = np.zeros(w) #np.sum(binary_img, axis=0)
-        for i in range(w):
-            for j in range(h):
-                vertical_project[i] += binary_img[j, i]
+        vertical_project = np.sum(binary_img, axis=0)
+        # vertical_project = np.zeros(w)
+        # for i in range(w):
+        #     for j in range(h):
+        #         vertical_project[i] += binary_img[j, i]
         vranges = find_ranges(vertical_project)
 
         for (y1, y2) in vranges:
             if y1 == y2:
                 continue
 
-            horizontal_project = np.zeros(h) #np.sum(binary_img[:, y1:y2], axis=1)
-            for i in range(h):
-                for j in range(y1, y2+1):
-                    horizontal_project[i] += binary_img[i, j]
+            horizontal_project = np.sum(binary_img[:, y1:y2], axis=1)
+            # horizontal_project = np.zeros(h)
+            # for i in range(h):
+            #     for j in range(y1, y2+1):
+            #         horizontal_project[i] += binary_img[i, j]
             hranges = find_ranges(horizontal_project)
 
             for (x1, x2) in hranges:
