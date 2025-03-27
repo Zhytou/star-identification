@@ -116,7 +116,7 @@ def get_seed_coords(img: np.ndarray, method: str='doh') -> np.ndarray:
         Get the seed coordinates with the star distribution.
     '''
     if method == 'doh':
-        coords = skf.blob_doh(img, min_sigma=2, max_sigma=3, threshold=0.001, num_sigma=2)
+        coords = skf.blob_doh(img, min_sigma=2, max_sigma=3, threshold=0.003, num_sigma=1)
     elif method == 'log':
         coords = skf.blob_log(img, min_sigma=2, max_sigma=3, threshold=0.05, num_sigma=10)
     elif method == 'dog':
@@ -254,50 +254,33 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
     '''
         Label the connected components in the image using run length code.
     '''
-
+    
     # label counter & label table for merging
     label_cnt = 0
     label_tab = UnionSet()
 
-    # row, start, end, label
-    runs = []
-
-    # generate runs
-    for i, row in enumerate(img):
-        for (start, end) in find_ranges(row):
-            runs.append({
-                'row': i,
-                'start': start,
-                'end': end,
-                'label': -1
-            })
-
-    # iterate the runs by row
-    prev_row_runs = []
-    curr_row_runs = []
-    for run in runs:
-        
-        if len(curr_row_runs) > 0 and curr_row_runs[0]['row'] != run['row']:
-            if curr_row_runs[0]['row'] == run['row'] - 1:
-                prev_row_runs = curr_row_runs
-            else:
-                prev_row_runs = []
-            curr_row_runs = []
-        curr_row_runs.append(run)
-
+    def gen_curr_run(start: int, end: int):
+        '''
+            Generate the current run.
+        '''
+        nonlocal label_cnt, label_tab
+        run = {
+            'row': i,
+            'start': start,
+            'end': end,
+            'label': -1
+        }
         connected_labels = []
-        for prev_run in prev_row_runs:
-            overlap = False
+        for prev_run in prev_runs:
+            # 4-connectivity
             if connectivity == 4:
-                # 4-connectivity
-                overlap = (prev_run['start'] <= run['end']) and (prev_run['end'] >= run['start'])
+                overlap = (prev_run['start'] <= end) and (prev_run['end'] >= start)
             else:
                 # 8-connectivity
-                overlap = (prev_run['start'] <= run['end'] + 1) and (prev_run['end'] >= run['start'] - 1)
-            
+                overlap = (prev_run['start'] <= end + 1) and (prev_run['end'] >= start - 1)
             if overlap:
                 connected_labels.append(prev_run['label'])
-        
+
         if len(connected_labels) == 0:
             label_cnt += 1
             label_tab.add(label_cnt)
@@ -307,6 +290,41 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
             for label in connected_labels:
                 label_tab.union(min_label, label)
             run['label'] = min_label
+        
+        return run
+
+    # row, start, end, label
+    runs = []
+
+    # preverse row runs
+    prev_runs = []
+
+    # generate runs
+    for i, row in enumerate(img):
+        if len(prev_runs) > 0 and prev_runs[0]['row'] != i-1:
+            prev_runs = []
+        
+        # current row runs
+        curr_runs = []
+
+        # generate current row runs
+        start = -1
+        end = -1
+        for j, val in enumerate(row):
+            if val == 1:
+                if start == -1:
+                    start = j
+                end = j
+            else:
+                if start != -1:
+                    curr_runs.append(gen_curr_run(start, end))    
+                    start = -1
+                end = -1
+        
+        if start != -1:
+            curr_runs.append(gen_curr_run(start, end))
+        prev_runs = curr_runs
+        runs.extend(curr_runs)
 
     # merge the labels
     for run in runs:
@@ -360,13 +378,11 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
         group_coords: the coordinates of the grouped pixels(which are the potential stars)
         num_group: the number of the grouped
     """
-    h, w = img.shape
-
     # if img[u, v] < threshold: 0, else: img[u, v]
-    _, img = cv2.threshold(img, threshold, 255, cv2.THRESH_TOZERO)
+    # _, img = cv2.threshold(img, threshold, 255, cv2.THRESH_TOZERO)
 
     # if img[u, v] > 0: 1, else: 0
-    _, binary_img = cv2.threshold(img, 0, 1, cv2.THRESH_BINARY)
+    _, binary_img = cv2.threshold(img, threshold, 1, cv2.THRESH_BINARY)
 
     group_coords = []
 
