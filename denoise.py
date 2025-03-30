@@ -124,7 +124,7 @@ def denoise_with_bf(img: np.ndarray, d: int=9, atten: float=0.1, threshold: int=
         Returns:
             y: the output value
         '''
-        return np.where(x > threshold, -np.inf, x)
+        return np.where(x > threshold, np.inf, x)
 
     h, w = img.shape
     filtered_img = np.zeros_like(img)
@@ -136,12 +136,11 @@ def denoise_with_bf(img: np.ndarray, d: int=9, atten: float=0.1, threshold: int=
     x, y = np.meshgrid(np.arange(-r, r + 1), np.arange(-r, r + 1))
     space_kernel = np.exp(-(x ** 2 + y ** 2) / (2 * sigma_space ** 2))
 
-    padded_img = np.pad(img, ((r, r), (r, r)), mode='reflect')
-
+    padded_img = np.pad(img, ((r, r), (r, r)), mode='constant')
     for y in range(h):
         for x in range(w):
             # get the neighborhood
-            neighborhood = padded_img[y:y + d, x:x + d].astype(np.int16)
+            neighborhood = padded_img[y:y+d, x:x+d].astype(np.int16)
             center_pixel = img[y, x].astype(np.int16)
 
             # calculate the color difference
@@ -151,18 +150,69 @@ def denoise_with_bf(img: np.ndarray, d: int=9, atten: float=0.1, threshold: int=
             # calculate the bilateral weight
             bilateral_weight = color_kernel * space_kernel
 
-            # if np.sum(neighborhood == 255) > 0:
-            #     print(neighborhood)
-            #     print(custom_activation(np.abs(center_pixel - neighborhood), threshold))
-            #     print(color_kernel)
-            #     print(bilateral_weight)
-
-
             # set the center as attenuation factor
             if np.sum(bilateral_weight) == bilateral_weight[r, r]:
                 filtered_img[y, x] = center_pixel * atten
             else:
                 filtered_img[y, x] = (bilateral_weight * neighborhood).sum() / bilateral_weight.sum()
+
+    return filtered_img.astype(np.uint8)
+
+
+def denoise_with_bf_new(img: np.ndarray, d: int = 9, atten: float = 0.1, threshold: int = 150, sigma_color: float = 30, sigma_space: float = 1):
+    '''
+        Improved bilateral filter denoising.
+    Args:
+        img: the image to be processed
+        d: the diameter of the pixel neighborhood
+        atten: the attenuation factor
+        threshold: the threshold
+        sigma_color: the standard deviation of the color space
+        sigma_space: the standard deviation of the coordinate space
+    Returns:
+        filtered_img: the image after filtering
+    '''
+
+    def custom_activation(x, threshold):
+        '''
+            Custom activation function.
+        Args:
+            x: the input value
+            threshold: the threshold
+        Returns:
+            y: the output value
+        '''
+        return np.where(x > threshold, np.inf, x)
+
+    h, w = img.shape
+    if d % 2 == 0:
+        d = d + 1
+    r = d // 2
+
+    x, y = np.meshgrid(np.arange(-r, r + 1), np.arange(-r, r + 1))
+    space_kernel = np.exp(-(x ** 2 + y ** 2) / (2 * sigma_space ** 2))
+
+    # pad the image for color weight calculation and change the type in case negative overflow
+    padded_img = np.pad(img, ((r, r), (r, r)), mode='constant').astype(np.int16)
+
+    # use a strided view to get the neighborhoods(h, w, d, d)
+    neighborhoods = np.lib.stride_tricks.as_strided(padded_img, shape=(h, w, d, d), strides=padded_img.strides + padded_img.strides[:2])
+    center_pixels = img[..., np.newaxis, np.newaxis]
+
+    # calculate the color difference
+    color_diff = custom_activation(np.abs(center_pixels - neighborhoods), threshold)
+    color_kernel = np.exp(-(color_diff ** 2) / (2 * sigma_color ** 2))
+
+    # calculate the bilateral weight
+    bilateral_kernel = color_kernel * space_kernel
+    weight_sum = bilateral_kernel.sum(axis=(-2, -1))
+    center_weight = bilateral_kernel[..., r, r]
+
+    # calculate the filtered image
+    filtered_img = (bilateral_kernel * neighborhoods).sum(axis=(-2, -1)) / weight_sum
+
+    # apply the attenuation factor
+    filtered_img = np.where(weight_sum == center_weight, center_pixels.squeeze() * atten, filtered_img).astype(np.uint8)
 
     return filtered_img
 
