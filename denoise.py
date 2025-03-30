@@ -3,7 +3,7 @@ import numpy as np
 from scipy.signal import convolve2d
 
 
-def filter_image(img: np.ndarray, method: str='gaussian', size: int=3, sigma: float=0.5) -> np.ndarray:
+def filter_image(img: np.ndarray, method: str='GAUSSIAN', size: int=3, sigma: float=0.5) -> np.ndarray:
     '''
         Conventional noise reducing filters.
     Args:
@@ -12,13 +12,13 @@ def filter_image(img: np.ndarray, method: str='gaussian', size: int=3, sigma: fl
     Returns:
         filtered_img: the image after filtering
     '''
-    if method == 'gaussian':
+    if method == 'GAUSSIAN':
         filtered_img = cv2.GaussianBlur(img, (size, size), sigma)
-    elif method == 'mean':
+    elif method == 'MEAN':
         filtered_img = cv2.blur(img, (size, size))
-    elif method == 'median':
+    elif method == 'MEDIAN':
         filtered_img = cv2.medianBlur(img, size)
-    elif method == 'glp':
+    elif method == 'GLP':
         f = np.fft.fft2(img)
         fshift = np.fft.fftshift(f)
 
@@ -101,7 +101,7 @@ def denoise_with_nlm(img: np.ndarray, h: int=10, K: int=7, L: int=21):
     return denoised_img
 
 
-def denoise_with_bf(img: np.ndarray, d: int=9, atten: float=0.1, threshold: int=150, sigma_color: float=30, sigma_space: float=1):
+def denoise_with_blf(img: np.ndarray, d: int=9, atten: float=0.1, threshold: int=150, sigma_color: float=30, sigma_space: float=1):
     '''
         Improved bilateral filter denoising.
     Args:
@@ -159,7 +159,7 @@ def denoise_with_bf(img: np.ndarray, d: int=9, atten: float=0.1, threshold: int=
     return filtered_img.astype(np.uint8)
 
 
-def denoise_with_bf_new(img: np.ndarray, d: int = 9, atten: float = 0.1, threshold: int = 150, sigma_color: float = 30, sigma_space: float = 1):
+def denoise_with_blf_new(img: np.ndarray, d: int = 9, atten: float = 0.1, threshold: int = 150, sigma_color: float = 30, sigma_space: float = 1):
     '''
         Improved bilateral filter denoising.
     Args:
@@ -271,9 +271,21 @@ def denoise_with_multi_scale_nlm(img: np.ndarray, levels: int=3, h: int=10, K: i
     return denoised_img
 
 
-def denoise_with_nlm_bf(img: np.ndarray):
-    denoised_img = cv2.addWeighted(denoise_with_nlm(img, 10, 7, 49), 0.5, denoise_with_nlm(img, 10, 5, 25), 0.5, 0)
-    return denoise_with_bf(denoised_img, 3)
+def denoise_image(img: np.ndarray, method: str):
+    '''
+        Denoise the image.
+    '''
+
+    if method == 'NLM_BLF':
+        denoised_img = cv2.addWeighted(denoise_with_nlm(img, 10, 7, 49), 0.5, denoise_with_nlm(img, 10, 5, 25), 0.5, 0)
+        denoised_img = denoise_with_blf_new(denoised_img, 3, 0.1, sigma_color=10)
+    elif method == 'NLM':
+        denoised_img = denoise_with_nlm(img, 10, 7, 49)
+    elif method == 'BLF':
+        denoised_img = denoise_with_blf_new(img, 3, 0.1, sigma_color=10)
+    else:
+        denoised_img = filter_image(img, method)
+    return denoised_img
 
 
 def gen_laplacian_pyramid(img: np.ndarray, levels: int=3):
