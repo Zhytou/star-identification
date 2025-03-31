@@ -1,7 +1,8 @@
 import cv2
+import bisect as bis
 import numpy as np
 import skimage.feature as skf
-
+import scipy.ndimage as nd
 
 def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int=5, gray_diff: int=4) -> int:
     """
@@ -111,21 +112,64 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
     return T
 
 
-def get_seed_coords(img: np.ndarray, method: str='doh') -> np.ndarray:
+def get_seed_coords(img: np.ndarray, wind_size: int=5, T1: int=0, T2: int=0, T3: int=0) -> np.ndarray:
     '''
         Get the seed coordinates with the star distribution.
+    Args:
+        img: the image to be processed
+        wind_size: the size of the window used to calculate the threshold
+        T1: the threshold for local maxima
+        T2: the threshold for Hessian determinant
+        T3: the threshold for local maxima values and neighborhood means
+    Returns:
+        coords: the coordinates of the seed points
     '''
-    if method == 'doh':
-        coords = skf.blob_doh(img, min_sigma=2, max_sigma=3, threshold=0.003, num_sigma=1)
-    elif method == 'log':
-        coords = skf.blob_log(img, min_sigma=2, max_sigma=3, threshold=0.05, num_sigma=10)
-    elif method == 'dog':
-        coords = skf.blob_dog(img, min_sigma=2, max_sigma=3, threshold=1, sigma_ratio=1.5)
-    else:
-        return []
-    
-    coords = np.array([[int(coord[0]), int(coord[1])] for coord in coords])
-    return coords
+    h, w = img.shape
+
+    # half window
+    if wind_size % 2 == 0:
+        wind_size += 1
+    half_size = wind_size // 2
+
+    # get the coordinates of the local maxima
+    mask = (img == nd.maximum_filter(img, size=wind_size)) & (img > T1)
+    coords = np.transpose(np.nonzero(mask))
+
+    # pad the image
+    padded_img = np.pad(img, ((half_size, half_size), (half_size, half_size)), mode='constant').astype(np.int16)
+
+    # use a strided view to get the neighborhoods(h, w, d, d)
+    neighborhoods = np.lib.stride_tricks.as_strided(padded_img, shape=(h, w, wind_size, wind_size), strides=padded_img.strides + padded_img.strides[:2])
+
+    def doh_operator(neighborhoods):
+        dx = np.gradient(neighborhoods, axis=-2)
+        dy = np.gradient(neighborhoods, axis=-1)
+        dxx = np.gradient(dx, axis=-2)
+        dxy = np.gradient(dx, axis=-1)
+        dyy = np.gradient(dy, axis=-1)
+
+        center_idx = half_size
+        center_dxx = dxx[..., center_idx, center_idx]
+        center_dxy = dxy[..., center_idx, center_idx]
+        center_dyy = dyy[..., center_idx, center_idx]
+
+        det_hessian = center_dxx * center_dyy - center_dxy ** 2
+        return det_hessian
+
+    # calculate the determinant of the Hessian matrix with offset
+    doh_results = doh_operator(neighborhoods[coords[:, 0], coords[:, 1]])
+
+    # get the local maxima values for bright star
+    local_max_values = img[coords[:, 0], coords[:, 1]]
+    # calculate the mean of the neighborhoods
+    neighborhood_means = np.mean(neighborhoods[coords[:, 0], coords[:, 1]], axis=(-2, -1))
+
+    # filter the coordinates based on the conditions
+    condition1 = doh_results > T2
+    condition2 = (local_max_values > T3) & (neighborhood_means > T3)
+    valid_indices = np.where(condition1 | condition2)[0]
+
+    return coords[valid_indices]
 
 
 def region_grow(img: np.ndarray, seed: tuple[int, int], connectivity: int=4) -> np.ndarray:
@@ -271,15 +315,22 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
             'label': -1
         }
         connected_labels = []
-        for prev_run in prev_runs:
-            # 4-connectivity
-            if connectivity == 4:
-                overlap = (prev_run['start'] <= end) and (prev_run['end'] >= start)
-            else:
-                # 8-connectivity
-                overlap = (prev_run['start'] <= end + 1) and (prev_run['end'] >= start - 1)
-            if overlap:
-                connected_labels.append(prev_run['label'])
+        # use binary search to find the potential connected labels in the previous runs
+        idx = bis.bisect_left(prev_runs, run['start'], key=lambda x: x['end'])
+        if idx < len(prev_runs):
+            for prev_run in prev_runs:
+                # no longer connected
+                if prev_run['start'] > end:
+                    break
+
+                # 4-connectivity
+                if connectivity == 4:
+                    overlap = (prev_run['start'] <= end) and (prev_run['end'] >= start)
+                else:
+                    # 8-connectivity
+                    overlap = (prev_run['start'] <= end + 1) and (prev_run['end'] >= start - 1)
+                if overlap:
+                    connected_labels.append(prev_run['label'])
 
         if len(connected_labels) == 0:
             label_cnt += 1
@@ -326,10 +377,9 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
         prev_runs = curr_runs
         runs.extend(curr_runs)
 
-    # merge the labels
-    for run in runs:
-        run['label'] = label_tab.find(run['label'])
-    
+    runs = [dict(run, label=label_tab.find(run['label'])) for run in runs]
+    runs.sort(key=lambda x: x['label'])
+
     return runs
 
 
@@ -361,7 +411,7 @@ def find_ranges(nums, threshold=0) -> list[tuple[int, int]]:
     return ranges
 
 
-def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-1, pixel_limit: int=5) -> tuple[list[list[tuple[int, int]]], int]:
+def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-1, pixel_limit: int=5) -> list[list[tuple[int, int]]]:
     """
         Group the facula(potential star) in the image.
     Args:
@@ -388,15 +438,15 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
 
     # label connected regions of the same value in the binary image
     if method == 'RG':
-        seeds = get_seed_coords(img, 'doh')
+        seeds = get_seed_coords(img, 3, T1=threshold, T2=0.001, T3=threshold*1.2)
         for seed in seeds:
             rows, cols = region_grow(binary_img, seed, connectivity)
             if len(rows) < pixel_limit and len(cols) < pixel_limit:
                 continue
             group_coords.append((rows, cols))
     elif method == 'CCL':
-        label_num, label_img = connected_components_label(binary_img, connectivity)
-        # label_num, label_img = cv2.connectedComponents(binary_img, connectivity=connectivity)
+        # label_num, label_img = connected_components_label(binary_img, connectivity)
+        label_num, label_img = cv2.connectedComponents(binary_img, connectivity=connectivity)
 
         for label in range(1, label_num + 1):
             # get the coords for each label
@@ -405,13 +455,12 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
             if len(rows) < pixel_limit and len(cols) < pixel_limit:
                 continue
             group_coords.append((rows, cols))
-    elif method == 'RLC_CCL':
+    elif method == 'RLC':
         runs = run_length_code_label(binary_img, connectivity)
-        sorted_runs = sorted(runs, key=lambda x: x['label'])
         
         curr_label = 1
         curr_rows, curr_cols = [], []
-        for run in sorted_runs:
+        for run in runs:
             if run['label'] != curr_label and len(curr_rows) > pixel_limit and len(curr_cols) > pixel_limit:
                 group_coords.append((np.array(curr_rows), np.array(curr_cols)))
                 curr_rows, curr_cols = [], []
