@@ -120,7 +120,7 @@ def draw_star(position: tuple[float, float], magnitude: float, img: np.ndarray, 
     return img
 
 
-def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0, sigma_mag: float=0, num_fs: int=0, num_ms: int=0, background: float=np.inf, limit_mag: float=7.0, cata_path: str='catalogue/sao7.0.csv', fov: float=10, h: int=512, w: int=512, f: float=58e-3, roi: int=2, coords_only: bool=False) -> tuple[np.ndarray, list]:
+def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0, sigma_mag: float=0, num_fs: int=0, num_ms: int=0, background: float=np.inf, limit_mag: float=7.0, cata_path: str='catalogue/sao7.0.csv', fov: float=10, h: int=512, w: int=512, f: float=58e-3, roi: int=2, sigma_psf: float=0.7, coords_only: bool=False) -> tuple[np.ndarray, list]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
@@ -171,7 +171,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
             
         return M
 
-    def add_false_stars(img: np.ndarray, num: int, pos: np.array, min_d: int=4*roi) -> tuple[np.ndarray, list]:
+    def gen_false_stars(num: int, pos: np.array, min_d: int=4*roi) -> np.ndarray:
         '''
             Add false stars to the image.
         Args:
@@ -179,19 +179,24 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
             num: the number of false stars
             pos: the positions of true stars
             min_d: the minimum distance between false stars and true stars
+        Returns:
+            false_stars: the false stars
         '''
         false_stars = []
         while len(false_stars) < num:
-            x = np.random.randint(roi, w-roi)
-            y = np.random.randint(roi, h-roi)
+            # rand pixel
+            row = np.random.randint(roi, h-roi)
+            col = np.random.randint(roi, w-roi)
+            # offset
+            row += np.random.rand()
+            col += np.random.rand()
             if len(pos) > 0:
-                ds = np.linalg.norm(pos-(x, y), axis=1)
+                ds = np.linalg.norm(pos-(row, col), axis=1)
                 if ds.min() < min_d:
                     continue
-            mv = 5.0 + np.random.rand()
-            img = draw_star((x, y), mv, img)
-            false_stars.append([-1, (y, x), mv])
-        return img, false_stars
+            mag = 5.0 + np.random.rand()
+            false_stars.append([-1, row, col, 0, 0, mag])
+        return np.array(false_stars)
 
     # camera total length and width in metres
     mtot = 2*tan(radians(fov/2))*f
@@ -201,22 +206,27 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     ypixel = h/mtot
 
     # read star catalogue
-    catalogue = pd.read_csv(cata_path, usecols=['Star ID', 'RA', 'DE', 'Magnitude', 'X', 'Y', 'Z'])
+    catalogue = pd.read_csv(cata_path, usecols=['Star ID', 'Ra', 'De', 'Magnitude', 'X', 'Y', 'Z'])
 
     # get rotation matrix
     M = get_rotation_matrix(ra, de, roll)
 
+    # search for image-able stars
     if False:
-        # search for image-able stars
         R = sqrt((radians(fov)**2)+(radians(fov)**2))/2
         ra1, ra2 = (ra - (R/cos(de))), (ra + (R/cos(de)))
         de1, de2 = (de - R), (de + R)
         assert ra1 < ra2 and de1 < de2
 
-        stars_within_fov = catalogue[(ra1 <= catalogue['RA']) & (catalogue['RA'] <= ra2) & 
-                                    (de1 <= catalogue['DE']) & (catalogue['DE'] <= de2)].copy()
+        stars_within_fov = catalogue[(ra1 <= catalogue['Ra']) & (catalogue['Ra'] <= ra2) & 
+                                    (de1 <= catalogue['De']) & (catalogue['De'] <= de2)].copy()
     else:
-        stars_within_fov = catalogue.copy()
+        # star sensor coord
+        sensor = np.array([cos(ra)*cos(de), sin(ra)*cos(de), sin(de)]).transpose()
+
+        # fov restriction
+        angle = catalogue[['X', 'Y', 'Z']].dot(sensor)
+        stars_within_fov = catalogue[angle <= cos(radians(fov/2))].copy()
 
     # rename columns
     stars_within_fov = stars_within_fov.rename(columns={'X': 'X1', 'Y': 'Y1', 'Z': 'Z1'})
@@ -253,25 +263,28 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     else:
         img = get_stellar_intensity(background) * np.ones((h,w))
 
-    stars_within_fov.rename(columns={'X4': 'X', 'Y4': 'Y'}, inplace=True)
-    stars_within_fov = stars_within_fov[['Star ID', 'X', 'Y', 'Magnitude']].reset_index(drop=True)
+    stars_within_fov.rename(columns={'X4': 'Col', 'Y4': 'Row'}, inplace=True)
+    stars_within_fov = stars_within_fov[['Star ID', 'Row', 'Col', 'Ra', 'De','Magnitude']].reset_index(drop=True)
 
     # exclude missing stars if needed
     if num_ms > 0:
         stars_within_fov = stars_within_fov.sample(n=len(stars_within_fov)-num_ms, random_state=1).reset_index(drop=True)
     
+    # stars have to be id, row, col, ra, de, mag
+    stars = stars_within_fov.to_numpy()
+
     # add false stars if needed
     if num_fs > 0:
-        img, false_stars = add_false_stars(img, num_fs, stars_within_fov[['X', 'Y']].to_numpy())
-        
+        false_stars = gen_false_stars(num_fs, stars_within_fov[['Row', 'Col']].to_numpy())
+        stars = np.concatenate((stars, false_stars), axis=0)
+    
+    if not coords_only:
+        for i in range(len(stars)):
+            # draw (row, col) mag
+            img = draw_star((stars[i][1], stars[i][2]), stars[i][-1], img, sigma_psf, roi=roi)
 
-    stars = stars_within_fov.to_numpy()
-    for i in range(len(stars)):
-        # draw (row, col) mag
-        img = draw_star((stars[i][2], stars[i][1]), stars[i][3], img, sigma=0.7, roi=roi)
-
-    # add gaussian and pepper noise
-    img = add_gaussian_and_pepper_noise(img, sigma_g, prob_p)
+        # add gaussian and pepper noise
+        img = add_gaussian_and_pepper_noise(img, sigma_g, prob_p)
 
     return img, stars
     
