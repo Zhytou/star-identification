@@ -4,6 +4,7 @@ import numpy as np
 import skimage.feature as skf
 import scipy.ndimage as nd
 
+
 def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int=5, gray_diff: int=4) -> int:
     """
         Calculate the threshold for image segmentation.
@@ -112,7 +113,7 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
     return T
 
 
-def get_seed_coords(img: np.ndarray, wind_size: int=5, T1: int=0, T2: int=0, T3: int=0) -> np.ndarray:
+def get_seed_coords(img: np.ndarray, wind_size: int=5, T1: int=0, T2: int=-np.inf, T3: int=0) -> np.ndarray:
     '''
         Get the seed coordinates with the star distribution.
     Args:
@@ -438,7 +439,7 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
 
     # label connected regions of the same value in the binary image
     if method == 'RG':
-        seeds = get_seed_coords(img, 3, T1=threshold, T2=0.001, T3=threshold*1.2)
+        seeds = get_seed_coords(img, 3, T1=threshold, T2=0.0, T3=threshold*1.2)
         for seed in seeds:
             rows, cols = region_grow(binary_img, seed, connectivity)
             if len(rows) < pixel_limit and len(cols) < pixel_limit:
