@@ -214,8 +214,8 @@ def parse_heasarc_sao(file_path: str, file_storage_path: str):
         dataframe of the parsed data
     '''
 
-    if os.path.exists(file_storage_path):
-        return pd.read_csv(file_storage_path, usecols=["Star ID", "RA", "DE", "Magnitude"])
+    # if os.path.exists(file_storage_path):
+    #     return pd.read_csv(file_storage_path, usecols=["Star ID", "RA", "DE", "Magnitude"])
 
     with open(file_path, 'r') as file:
         data_list = []
@@ -232,14 +232,20 @@ def parse_heasarc_sao(file_path: str, file_storage_path: str):
 
             # print(len(line), cata_id, ra, de, mag)
             data_list.append([cata_id, ra, de, vmag])
-        
+    
+    # convert to dataframe
     df = pd.DataFrame(data_list, columns=["Star ID", "RA", "DE", "Magnitude"])
+
+    # calculate the celestial cartesian coordinates of stars
+    df['X'] = np.cos(df['RA'])*np.cos(df['DE'])
+    df['Y'] = np.sin(df['RA'])*np.cos(df['DE'])
+    df['Z'] = np.sin(df['DE'])
     df.to_csv(file_storage_path)
 
     return df
         
 
-def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.0, agd_limit: float=0.5, num_sector: int=4, fov: int=20, f: float=58e-3, num_vec: int=100, uniform: bool = True) -> pd.DataFrame:
+def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mag_limit: float=6.0, agd_limit: float=0.5, num_sector: int=4, fov: int=20, f: float=58e-3, num_vec: int=100, uniform: bool = True) -> pd.DataFrame:
     '''
         Filter navigation stars.
         Referred [1](http://www.opticsjournal.net/Articles/Abstract?aid=OJbf48ddeef697ba09)
@@ -247,7 +253,7 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.
     Args:
         catalogue: the original catalogue
         num_limit: minimum number of stars in each circular area
-        mv_limit: the magnitude limit
+        mag_limit: the magnitude limit
         agd_limit: the angular distance limit in degrees(if two stars' angular distance is less than this limit, choose the brighter one)
         num_sector: the number of sectors
         fov: the field of view in degrees
@@ -263,8 +269,8 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mv_limit: float=6.
 
     num_dark_star_excl = len(catalogue)
 
-    # eliminate the stars with magnitude > mv_limit
-    catalogue = catalogue[catalogue['Magnitude'] <= mv_limit].reset_index(drop=True)
+    # eliminate the stars with magnitude > mag_limit
+    catalogue = catalogue[catalogue['Magnitude'] <= mag_limit].reset_index(drop=True)
 
     num_dark_star_excl -= len(catalogue)
     print('the number of dark stars excluded: ', num_dark_star_excl)
@@ -368,33 +374,33 @@ if __name__ == '__main__':
     fov = 15
     f = 58e-3
     num_limit = 20
-    mv_limit = 6.0
+    mag_limit = 6.0
     agd_limit = 0.2
 
     raw_file = 'raw_catalogue/sao_j2000.dat'
     parsed_file = 'catalogue/sao.csv'
     limit_parsed_file = 'catalogue/sao7.0.csv'
-    filtered_file = f'catalogue/sao{mv_limit}_d{agd_limit}.csv' # process double star and magnitude threshold
-    uniform_filtered_file = f'catalogue/sao{mv_limit}_d{agd_limit}_{fov}_{num_limit}.csv'
+    filtered_file = f'catalogue/sao{mag_limit}_d{agd_limit}.csv' # process double star and magnitude threshold
+    uniform_filtered_file = f'catalogue/sao{mag_limit}_d{agd_limit}_{fov}_{num_limit}.csv'
 
     df = parse_heasarc_sao(raw_file, parsed_file)
     df = df[df['Magnitude'] <= 7.0].reset_index(drop=True)
     if not os.path.exists(limit_parsed_file):
         df.to_csv(limit_parsed_file)
 
-    if os.path.exists(filtered_file):
-        f_df = pd.read_csv(filtered_file)
-    else:
-        f_df = filter_catalogue(df, num_limit, mv_limit, agd_limit, fov=fov, f=f, uniform=False).reset_index(drop=True)
-        f_df.to_csv(filtered_file)
+    # if os.path.exists(filtered_file):
+    #     f_df = pd.read_csv(filtered_file)
+    # else:
+    #     f_df = filter_catalogue(df, num_limit, mag_limit, agd_limit, fov=fov, f=f, uniform=False).reset_index(drop=True)
+    #     f_df.to_csv(filtered_file)
 
-    draw_star_distribution(f_df)
+    # draw_star_distribution(f_df)
     # draw_probability_versus_star_num_within_fov(f_df, fov=fov, f=f, num_vec=3000)
     
     # if os.path.exists(uniform_filtered_file):
     #     uf_df = pd.read_csv(uniform_filtered_file)
     # else:
-    #     uf_df = filter_catalogue(df, num_limit, mv_limit, agd_limit, fov=fov, f=f).reset_index(drop=True)
+    #     uf_df = filter_catalogue(df, num_limit, mag_limit, agd_limit, fov=fov, f=f).reset_index(drop=True)
     #     uf_df.to_csv(uniform_filtered_file)
     
     # draw_star_distribution(uf_df)
