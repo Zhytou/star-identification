@@ -13,7 +13,7 @@ def draw_star_distribution(catalogue: pd.DataFrame, title: str = '', ax: axes.Ax
         title: the title of the plot
         ax: the axes to draw
     '''
-    ras, des = np.degrees(catalogue['RA']), np.degrees(catalogue['DE'])
+    ras, des = np.degrees(catalogue['Ra']), np.degrees(catalogue['De'])
     if ax == None:
         plt.scatter(ras, des, s=1)
         plt.title(title)
@@ -234,12 +234,12 @@ def parse_heasarc_sao(file_path: str, file_storage_path: str):
             data_list.append([cata_id, ra, de, vmag])
     
     # convert to dataframe
-    df = pd.DataFrame(data_list, columns=["Star ID", "RA", "DE", "Magnitude"])
+    df = pd.DataFrame(data_list, columns=["Star ID", "Ra", "De", "Magnitude"])
 
     # calculate the celestial cartesian coordinates of stars
-    df['X'] = np.cos(df['RA'])*np.cos(df['DE'])
-    df['Y'] = np.sin(df['RA'])*np.cos(df['DE'])
-    df['Z'] = np.sin(df['DE'])
+    df['X'] = np.cos(df['Ra'])*np.cos(df['De'])
+    df['Y'] = np.sin(df['Ra'])*np.cos(df['De'])
+    df['Z'] = np.sin(df['De'])
     df.to_csv(file_storage_path)
 
     return df
@@ -275,14 +275,8 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mag_limit: float=6
     num_dark_star_excl -= len(catalogue)
     print('the number of dark stars excluded: ', num_dark_star_excl)
 
-    # convert to celestial rectangular coordinate system
-    positions = pd.DataFrame()
-    positions['X1'] = np.cos(catalogue['RA'])*np.cos(catalogue['DE'])
-    positions['Y1'] = np.sin(catalogue['RA'])*np.cos(catalogue['DE'])
-    positions['Z1'] = np.sin(catalogue['DE'])
-
     # calculate the angular distance between each pair of stars
-    positions = positions.to_numpy()
+    positions = catalogue[['X', 'Y', 'Z']].to_numpy()
     norms = np.linalg.norm(positions, axis=1)
     inner_products = positions @ positions.T
     # do rounding because some cos_theta are slightly greater than 1 or less than -1 as a result of precision problem
@@ -323,18 +317,25 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mag_limit: float=6
     des = np.arcsin(np.arange(-1, 1, 2/num_vec))
     for ra in ras:
         for de in des:
-            # calculate the range of ra & de
-            ra1, ra2 = (ra - (R/cos(de))), (ra + (R/cos(de)))
-            de1, de2 = de - R, de + R
-            stars_within_fov = catalogue[(ra1 <= catalogue['RA']) & (catalogue['RA'] <= ra2) & (de1 <= catalogue['DE']) & (catalogue['DE'] <= de2)].copy()
-        
+            # fov restriction
+
+            if True:
+                sensor = np.array([cos(ra)*cos(de), sin(ra)*cos(de), sin(de)]).transpose()
+                # fov restriction
+                angle = catalogue[['X', 'Y', 'Z']].dot(sensor)
+                stars_within_fov = catalogue[angle <= cos(radians(fov/2))].copy()
+            else:
+                # get the rough range of ra & de
+                ra1, ra2 = (ra - (R/cos(de))), (ra + (R/cos(de)))
+                de1, de2 = (de - R), (de + R)
+                # get the num of stars within fov
+                stars_within_fov = catalogue[(ra1 <= catalogue['Ra']) & (catalogue['Ra'] <= ra2) & (de1 <= catalogue['De']) & (catalogue['De'] <= de2)].copy()
+            
             if len(stars_within_fov) < num_limit:
                 continue
             
-            # convert to celestial rectangular coordinate system
-            stars_within_fov['X1'] = np.cos(stars_within_fov['RA'])*np.cos(stars_within_fov['DE'])
-            stars_within_fov['Y1'] = np.sin(stars_within_fov['RA'])*np.cos(stars_within_fov['DE'])
-            stars_within_fov['Z1'] = np.sin(stars_within_fov['DE'])
+            # # rename columns
+            stars_within_fov = stars_within_fov.rename(columns={'X': 'X1', 'Y': 'Y1', 'Z': 'Z1'})
             
             # convert to star sensor coordinate system
             M = get_rotation_matrix(ra, de, 0)
@@ -374,7 +375,7 @@ if __name__ == '__main__':
     fov = 15
     f = 58e-3
     num_limit = 20
-    mag_limit = 6.0
+    mag_limit = 5.6
     agd_limit = 0.2
 
     raw_file = 'raw_catalogue/sao_j2000.dat'
@@ -388,22 +389,22 @@ if __name__ == '__main__':
     if not os.path.exists(limit_parsed_file):
         df.to_csv(limit_parsed_file)
 
-    # if os.path.exists(filtered_file):
-    #     f_df = pd.read_csv(filtered_file)
-    # else:
-    #     f_df = filter_catalogue(df, num_limit, mag_limit, agd_limit, fov=fov, f=f, uniform=False).reset_index(drop=True)
-    #     f_df.to_csv(filtered_file)
+    if os.path.exists(filtered_file):
+        f_df = pd.read_csv(filtered_file)
+    else:
+        f_df = filter_catalogue(df, num_limit, mag_limit, agd_limit, fov=fov, f=f, uniform=False).reset_index(drop=True)
+        f_df.to_csv(filtered_file)
 
-    # draw_star_distribution(f_df)
+    draw_star_distribution(f_df)
     # draw_probability_versus_star_num_within_fov(f_df, fov=fov, f=f, num_vec=3000)
     
-    # if os.path.exists(uniform_filtered_file):
-    #     uf_df = pd.read_csv(uniform_filtered_file)
-    # else:
-    #     uf_df = filter_catalogue(df, num_limit, mag_limit, agd_limit, fov=fov, f=f).reset_index(drop=True)
-    #     uf_df.to_csv(uniform_filtered_file)
+    if os.path.exists(uniform_filtered_file):
+        uf_df = pd.read_csv(uniform_filtered_file)
+    else:
+        uf_df = filter_catalogue(df, num_limit, mag_limit, agd_limit, fov=fov, f=f).reset_index(drop=True)
+        uf_df.to_csv(uniform_filtered_file)
     
-    # draw_star_distribution(uf_df)
+    draw_star_distribution(uf_df)
     # draw_probability_versus_star_num_within_fov(uf_df, fov=fov, f=f, num_vec=3000)
 
     # fig1, axs1 = plt.subplots(1, 2)
