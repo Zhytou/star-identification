@@ -120,7 +120,7 @@ def draw_star(position: tuple[float, float], magnitude: float, img: np.ndarray, 
     return img
 
 
-def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0, sigma_mag: float=0, num_fs: int=0, num_ms: int=0, background: float=np.inf, limit_mag: float=7.0, cata_path: str='catalogue/sao7.0.csv', fov: float=10, h: int=512, w: int=512, f: float=58e-3, roi: int=2, sigma_psf: float=0.7, coords_only: bool=False) -> tuple[np.ndarray, list]:
+def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0, sigma_mag: float=0, num_fs: int=0, num_ms: int=0, background: float=np.inf, limit_mag: float=7.0, cata_path: str='catalogue/sao7.0.csv', fov: float=10, h: int=512, w: int=512, f: float=58e-3, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False) -> tuple[np.ndarray, list]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
@@ -158,17 +158,37 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
         Returns:
             M: rotation matrix
         """
-        a1 = sin(ra)*cos(roll) - cos(ra)*sin(de)*sin(roll)
-        a2 = -sin(ra)*sin(roll) - cos(ra)*sin(de)*cos(roll)
-        a3 = -cos(ra)*cos(de)
-        b1 = -cos(ra)*cos(roll) - sin(ra)*sin(de)*sin(roll)
-        b2 = cos(ra)*sin(roll) - sin(ra)*sin(de)*cos(roll)
-        b3 = -sin(ra)*cos(de)
-        c1 = cos(ra)*sin(roll)
-        c2 = cos(de)*cos(roll)
-        c3 = -sin(de)
-        M = np.array([[a1, a2, a3], [b1, b2, b3], [c1, c2, c3]])
-            
+
+        def rotate_x(theta: float) -> np.ndarray:
+            '''
+                Rotate around x-axis.
+            '''
+            return np.array([[1, 0, 0],
+                             [0, cos(theta), sin(theta)],
+                             [0, -sin(theta), cos(theta)]])
+
+        def rotate_z(theta: float) -> np.ndarray:
+            '''
+                Rotate around z-axis.
+            '''
+            return np.array([[cos(theta), sin(theta), 0],
+                             [-sin(theta), cos(theta), 0],
+                             [0, 0, 1]])
+        
+        # a1 = sin(ra)*cos(roll) - cos(ra)*sin(de)*sin(roll)
+        # a2 = -sin(ra)*sin(roll) - cos(ra)*sin(de)*cos(roll)
+        # a3 = -cos(ra)*cos(de)
+        # b1 = -cos(ra)*cos(roll) - sin(ra)*sin(de)*sin(roll)
+        # b2 = cos(ra)*sin(roll) - sin(ra)*sin(de)*cos(roll)
+        # b3 = -sin(ra)*cos(de)
+        # c1 = cos(ra)*sin(roll)
+        # c2 = cos(de)*cos(roll)
+        # c3 = -sin(de)
+        
+        # M = np.array([[a1, a2, a3], [b1, b2, b3], [c1, c2, c3]])
+
+        M = rotate_z(roll) @ rotate_x(np.pi/2-de) @ rotate_z(np.pi/2+ra)
+        
         return M
 
     def gen_false_stars(num: int, pos: np.array, min_d: int=4*roi) -> np.ndarray:
@@ -198,13 +218,6 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
             false_stars.append([-1, row, col, 0, 0, mag])
         return np.array(false_stars)
 
-    # camera total length and width in metres
-    mtot = 2*tan(radians(fov/2))*f
-
-    # pixel num per length
-    xpixel = w/mtot
-    ypixel = h/mtot
-
     # read star catalogue
     catalogue = pd.read_csv(cata_path, usecols=['Star ID', 'Ra', 'De', 'Magnitude', 'X', 'Y', 'Z'])
 
@@ -212,7 +225,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     M = get_rotation_matrix(ra, de, roll)
 
     # search for image-able stars
-    if False:
+    if True:
         R = sqrt((radians(fov)**2)+(radians(fov)**2))/2
         ra1, ra2 = (ra - (R/cos(de))), (ra + (R/cos(de)))
         de1, de2 = (de - R), (de + R)
@@ -225,23 +238,11 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
         sensor = np.array([cos(ra)*cos(de), sin(ra)*cos(de), sin(de)]).transpose()
 
         # fov restriction
-        angle = catalogue[['X', 'Y', 'Z']].dot(sensor)
-        stars_within_fov = catalogue[angle <= cos(radians(fov/2))].copy()
+        catalogue['Angle'] = np.arccos(catalogue[['X', 'Y', 'Z']].dot(sensor))
+        stars_within_fov = catalogue[catalogue['Angle'] >= cos(radians(fov/2))].copy()
 
-    # rename columns
-    stars_within_fov = stars_within_fov.rename(columns={'X': 'X1', 'Y': 'Y1', 'Z': 'Z1'})
+    print(f"Found {len(stars_within_fov)} stars within the field of view.")
 
-    # convert to star sensor coordinate system
-    stars_within_fov[['X2', 'Y2', 'Z2']] = stars_within_fov[['X1', 'Y1', 'Z1']].dot(M)
-    
-    # convert to image coordinate system
-    stars_within_fov['X3'] = f*(stars_within_fov['X2']/stars_within_fov['Z2'])
-    stars_within_fov['Y3'] = f*(stars_within_fov['Y2']/stars_within_fov['Z2'])
-
-    # convert to pixel coordinate system
-    stars_within_fov['X4'] = w/2+stars_within_fov['X3']*xpixel
-    stars_within_fov['Y4'] = h/2+stars_within_fov['Y3']*ypixel
-    
     # add magnitude noise if needed
     if sigma_mag > 0:
         stars_within_fov['Magnitude'] += np.random.normal(0, sigma_mag, size=len(stars_within_fov['Magnitude']))
@@ -249,13 +250,34 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     # exclude stars too dark to identify
     stars_within_fov = stars_within_fov[stars_within_fov['Magnitude'] <= limit_mag]
 
+    print(f"Found {len(stars_within_fov)} stars within the field of view after mag filtering.")
+
+    # rename columns
+    stars_within_fov = stars_within_fov.rename(columns={'X': 'X1', 'Y': 'Y1', 'Z': 'Z1'})
+
+    err = 1e-8
+    assert np.all(np.abs(stars_within_fov['X1']-np.cos(stars_within_fov['Ra'])*np.cos(stars_within_fov['De'])) <= err)
+    assert np.all(np.abs(stars_within_fov['Y1']-np.sin(stars_within_fov['Ra'])*np.cos(stars_within_fov['De'])) <= err)
+    assert np.all(np.abs(stars_within_fov['Z1']-np.sin(stars_within_fov['De'])) <= err)
+
+    # convert to star sensor coordinate system
+    stars_within_fov[['X2', 'Y2', 'Z2']] = stars_within_fov[['X1', 'Y1', 'Z1']].dot(M.T)
+    
+    # convert to image coordinate system
+    stars_within_fov['X3'] = w/2*(1+stars_within_fov['X2']/stars_within_fov['Z2']/tan(radians(fov)/2))
+    stars_within_fov['Y3'] = h/2*(1+stars_within_fov['Y2']/stars_within_fov['Z2']/tan(radians(fov)/2))
+    
     # add positional noise if needed
     if sigma_pos > 0:
-        stars_within_fov['X4'] += np.random.normal(0, sigma_pos, size=len(stars_within_fov['X4']))
-        stars_within_fov['Y4'] += np.random.normal(0, sigma_pos, size=len(stars_within_fov['Y4']))
+        stars_within_fov['X3'] += np.random.normal(0, sigma_pos, size=len(stars_within_fov['X3']))
+        stars_within_fov['Y3'] += np.random.normal(0, sigma_pos, size=len(stars_within_fov['Y3']))
     
+    print(stars_within_fov[['X3', 'Y3']])
+
     # exclude stars beyond range
-    stars_within_fov = stars_within_fov[stars_within_fov['X4'].between(roi, w-roi) & stars_within_fov['Y4'].between(roi, h-roi)]
+    stars_within_fov = stars_within_fov[stars_within_fov['X3'].between(roi, w-roi) & stars_within_fov['Y3'].between(roi, h-roi)]
+
+    print(f"Found {len(stars_within_fov)} stars within the field of view after pos filtering.")
 
     # background intensity
     if background == np.inf:
@@ -263,7 +285,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     else:
         img = get_stellar_intensity(background) * np.ones((h,w))
 
-    stars_within_fov.rename(columns={'X4': 'Col', 'Y4': 'Row'}, inplace=True)
+    stars_within_fov.rename(columns={'X3': 'Col', 'Y3': 'Row'}, inplace=True)
     stars_within_fov = stars_within_fov[['Star ID', 'Row', 'Col', 'Ra', 'De','Magnitude']].reset_index(drop=True)
 
     # exclude missing stars if needed
