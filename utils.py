@@ -8,7 +8,7 @@ from skimage.metrics import structural_similarity
 
 def convert_ra_dec(ra: float, dec: float):
     '''
-        Convert the RA and DEC from degree to radians.
+        Convert the RA and DEC from degree to timezone.
     Args:
         ra: the right ascension in degree
         dec: the declination in degree

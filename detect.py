@@ -420,7 +420,7 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
         method: 
             RG Region Grow
             CCL Connected Components Label
-            RLC_CCL Run Length Code Connected Components Label
+            RLC Run Length Code Connected Components Label
             CPL Cross Project Label(https://www.sciengine.com/CJSS/doi/10.11728/cjss2006.03.209)
         threshold: the threshold used to segment the image
         connectivity: method of connectivity
