@@ -3,23 +3,35 @@ import uuid
 import re
 import numpy as np
 import pandas as pd
+from math import radians, tan
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from scipy.spatial.distance import cdist
 
-from simulate import w, h, FOV, sim_cfg, create_star_image
+from simulate import create_star_image
 from extract import get_star_centroids
 
+# simulation configuration
+h = w = 512
+fov = 15
+limit_mag = 6.5
+f = 5.8e-3
+pixel = 2*tan(radians(fov/2))*f/h
+
+sim_cfg = f'{h}_{w}_{fov}_{limit_mag}'
 
 # guide star catalogue for pattern match database and nn dataset generation
-gcata_path = 'catalogue/sao5.3_d0.2_15_20.csv'
+gcata_path = 'catalogue/sao5.6_d0.2.csv'
 # use for generation config
 gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
 # guide star catalogue
-gcatalogue = pd.read_csv(gcata_path, usecols= ["Star ID", "RA", "DE", "Magnitude"])
+gcatalogue = pd.read_csv(gcata_path, usecols= ["Star ID", "Ra", "De", "Magnitude"])
 
 # number of reference star
 num_class = len(gcatalogue)
+
+# minimum number of stars for smaple and pattern generation
+min_num_star = 7
 
 # define the path to store the database and pattern as well as dataset
 database_path = f'database/{sim_cfg}'
@@ -61,50 +73,45 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
         '''
 
         database = []
-        for ra, de in zip(gcatalogue.loc[idxs, 'RA'], gcatalogue.loc[idxs, 'DE']):
-            # star_info is a list of [star_ids[i], (row, col), star_magnitudes[i]]
-            img, star_info = create_star_image(ra, de, 0, pure_point=not use_preprocess)
-            # generate star_table: (row, col) -> star_id
-            star_table = dict(map(lambda x: (x[1], x[0]), star_info))
+        for star_id, ra, de in zip(gcatalogue.loc[idxs, 'Star ID'], gcatalogue.loc[idxs, 'Ra'], gcatalogue.loc[idxs, 'De']):
+            img, stars = create_star_image(ra, de, 0, h=h, w=w, fov=fov, limit_mag=limit_mag, coords_only=not use_preprocess)
             # get the centroids of the stars in the image
             if use_preprocess:
-                stars = np.array(get_star_centroids(img))
+                coords = np.array(get_star_centroids(img))
             else:
-                stars = np.array(list(star_table.keys()))
+                coords = stars[:, 1:3]
 
-            star_id = star_table.get((h/2, w/2), -1)
-            if star_id == -1:
+            idx = np.where(stars[:, 0] == star_id)[0][0]
+            if (coords[idx][0] - h/2)**2 + (coords[idx][1] - w/2)**2 > 0.1:
                 print('The star is not in the center of the image!')
                 continue
             # calculate the relative coordinates
-            stars = stars-(h/2, w/2)
+            coords = coords - coords[idx]
             # calculate the distance between the star and the center of the image
-            distances = np.linalg.norm(stars, axis=1)
+            distances = np.linalg.norm(coords, axis=1)
             # sort the stars by distance with accending order
-            stars = stars[distances.argsort()]
+            coords = coords[distances.argsort()]
             distances = np.sort(distances)
             # exclude the reference star (h/2, w/2)
-            assert stars[0][0] == 0 and stars[0][1] == 0 and distances[0] == 0
-            stars, distances = stars[1:], distances[1:]
-            if len(stars) < 2:
-                continue
+            coords, distances = coords[1:], distances[1:]
+            
             if method == 'grid':
                 # exclude stars out of region
-                stars = stars[(distances >= Rb) & (distances <= Rp)] 
-                # find the nearest neighbor star
-                if len(stars) == 0:
+                coords = coords[(distances >= Rb) & (distances <= Rp)] 
+                if len(coords) < min_num_star:
                     continue
-                nearest_star = stars[0]
+                # find the nearest neighbor star
+                nearest_coord = coords[0]
                 # calculate rotation angle & matrix
-                angle = np.arctan2(nearest_star[1], nearest_star[0])
+                angle = np.arctan2(nearest_coord[1], nearest_coord[0])
                 M = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
-                rotated_stars = np.dot(stars, M)
-                assert round(rotated_stars[0][1])==0
+                rotated_coords = coords @ M
+                assert round(rotated_coords[0][1])==0
                 # calculate the pattern
                 grid = np.zeros((Lg, Lg), dtype=int)
-                for star in rotated_stars:
-                    row = int((star[0]/Rp+1)/2*Lg)
-                    col = int((star[1]/Rp+1)/2*Lg)
+                for coord in rotated_coords:
+                    row = int((coord[0]/Rp+1)/2*Lg)
+                    col = int((coord[1]/Rp+1)/2*Lg)
                     grid[row][col] = 1
                 # store the 1's position of the grid
                 database.append({
@@ -113,13 +120,13 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
                 })
             elif method == 'lpt':
                 # exclude stars out of region
-                stars = stars[(distances >= Rb) & (distances <= Rp)]
+                coords = coords[(distances >= Rb) & (distances <= Rp)]
                 distances = distances[(distances >= Rb) & (distances <= Rp)]
-                if len(stars) == 0:
+                if len(coords) < min_num_star:
                     continue
                 # do log-polar transform 
                 # distance = ln(sqrt(y^2+x^2)), theta = actan(y/x)
-                thetas = np.arctan2(stars[:, 1], stars[:, 0])
+                thetas = np.arctan2(coords[:, 1], coords[:, 0])
                 # make sure the nearest star's theta is 0
                 thetas = thetas - thetas[0]
                 # make sure the thetas are in the range of [-pi, pi]
@@ -172,19 +179,19 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
             # parse parameters: buffer radius, pattern radius and grid length
             rb, rp, Lg = gen_params[method]
             # radius in pixels
-            Rb, Rp = rb/FOV*w, rp/FOV*w
+            Rb, Rp = tan(radians(rb))*f/pixel, tan(radians(rp))*f/pixel
             path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rp}_{Lg}'
         elif method == 'lpt':
             # parse parameters: buffer radius, pattern radius, number of distance bins and number of theta bins
             rb, rp, Nd, Nt = gen_params[method]
             # radius in pixels
-            Rb, Rp = rb/FOV*w, rp/FOV*w
+            Rb, Rp = tan(radians(rb))*f/pixel, tan(radians(rp))*f/pixel
             path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rp}_{Nd}_{Nt}'
         elif method == 'rac':
             # parse parameters: buffer radius, radial radius, cyclic radius, number of rings
             rb, rr, rc, N = gen_params[method]
             # radius in pixels
-            Rb, Rr, Rc = rb/FOV*w, rr/FOV*w, rc/FOV*w
+            Rb, Rr, Rc = tan(radians(rb))*f/pixel, tan(radians(rr))*f/pixel, tan(radians(rc))*f/pixel
             path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rr}_{rc}_{N}'
         else:
             print('Invalid method!')
@@ -225,7 +232,7 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
         df.to_csv(f'{path}/{method}.csv', index=False)
 
 
-def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, idxs: list, use_preprocess: bool, pos_noise_std: float, mv_noise_std: float, ratio_false_star: float):
+def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, idxs: list, use_preprocess: bool, sigma_pos: float, sigma_mag: float, num_fs: int, num_ms: int):
     '''
         Generate radial and cyclic features dataset for NN model using the given star catalogue.
     Args:
@@ -250,9 +257,10 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
             'supplementary': use catalogue index to generate samples for specific star
         num_vec: the number of vectors to be generated
         idxs: the indexes of star catalogue used to generate dataset
-        pos_noise_std: the standard deviation of the positional noise
-        mv_noise_std: the standard deviation of the magnitude noise
-        ratio_false_star: the number of false stars
+        sigma_pos: the standard deviation of the positional noise
+        sigma_mag: the standard deviation of the magnitude noise
+        num_fs: the number of false stars
+        num_ms: the number of missing stars
     Returns:
         df: the dataset
     '''
@@ -264,37 +272,37 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
         ras = np.random.uniform(0, 2*np.pi, num_vec)
         des = np.arcsin(np.random.uniform(-1, 1, num_vec))
     elif mode == 'supplementary':
-        ras = np.clip(gcatalogue.loc[idxs, 'RA']+np.radians(np.random.normal(0, 5, len(idxs))), 0, 2*np.pi)
-        des = np.clip(gcatalogue.loc[idxs, 'DE']+np.radians(np.random.normal(0, 5, len(idxs))), -np.pi/2, np.pi/2)
+        ras = np.clip(gcatalogue.loc[idxs, 'Ra']+np.radians(np.random.normal(0, 5, len(idxs))), 0, 2*np.pi)
+        des = np.clip(gcatalogue.loc[idxs, 'De']+np.radians(np.random.normal(0, 5, len(idxs))), -np.pi/2, np.pi/2)
     else:
         print('Invalid mode!')
         return
 
     # generate the star image
     for ra, de in zip(ras, des):
-        # star_info is a list of [star_ids[i], (row, col), star_magnitudes[i]]
-        img, star_info = create_star_image(ra, de, 0, pos_noise_std=pos_noise_std, mv_noise_std=mv_noise_std, ratio_false_star=ratio_false_star, pure_point=not use_preprocess)
-        # generate star_table: (row, col) -> star_id
-        star_table = dict(map(lambda x: (x[1], x[0]), star_info))
+        # stars is a np array [[id, row, col, mag]]
+        img, stars = create_star_image(ra, de, 0, h=h, w=w, fov=fov, limit_mag=limit_mag, sigma_pos=sigma_pos, sigma_mag=sigma_mag, num_fs=num_fs, num_ms=num_ms, coords_only=not use_preprocess)
+        # get star ids and coordinates
+        ids = stars[:, 0]
+        coords = stars[:, 1:3]
         
         # get the centroids of the stars in the image
         if use_preprocess:
-            stars = np.array(get_star_centroids(img))
-        else:
-            stars = np.array(list(star_table.keys()))
-        if len(stars) < 4:
+            coords = np.array(get_star_centroids(img))
+        
+        if len(coords) < 4:
             continue
 
         # generate a unique img id for later accuracy calculation
         img_id = uuid.uuid1()
 
         # distances and angles between each star in FOV
-        distances = cdist(stars, stars, 'euclidean')
-        angles = np.arctan2(stars[:, 1] - stars[:, 1][:, None], stars[:, 0] - stars[:, 0][:, None])
+        distances = cdist(coords, coords, 'euclidean')
+        angles = np.arctan2(coords[:, 1] - coords[:, 1][:, None], coords[:, 0] - coords[:, 0][:, None])
+
         # choose a guide star as the reference star
-        for star, ds, ags in zip(stars, distances, angles):
+        for star_id, coord, ds, ags in zip(ids, coords, distances, angles):
             # check if false star or star not in guide catalogue
-            star_id = star_table.get(tuple(star), -1)
             if star_id == -1 or star_id not in gcatalogue['Star ID'].values:
                 continue
             # get catalogue index of the guide star
@@ -318,15 +326,14 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
                 # parse the parameters:
                 r, arr_Nr, Ns, Nn = gen_params
                 # calculate the radius in pixels
-                R = r/FOV*w
-                if star[0] < R/2 or star[0] > h-R/2 or star[1] < R/2 or star[1] > w-R/2:
+                R = tan(radians(r))*f/pixel
+                if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
                     continue
                 # exclude angles outside the region
                 ags = ags[ds <= R]
                 # skip if only the reference star in the region
                 if len(ags) == 0:
                     continue
-
                 tot_Nr = 0
                 for Nr in arr_Nr:
                     # count the number of stars in each ring
@@ -355,8 +362,8 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
                 # parse the parameters:
                 r, arr_N = gen_params
                 # calculate the radius in pixels
-                R = r/FOV*w
-                if star[0] < R/2 or star[0] > h-R/2 or star[1] < R/2 or star[1] > w-R/2:
+                R = tan(radians(r))*f/pixel
+                if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
                     continue
                 # exclude angles and distances outside the region
                 ags = ags[ds <= R]
@@ -389,8 +396,8 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
                 # parse the parameters:
                 r, Nd= gen_params
                 # calculate the radius in pixels
-                R = r/FOV*w
-                if star[0] < R/2 or star[0] > h-R/2 or star[1] < R/2 or star[1] > w-R/2:
+                R = tan(radians(r))*f/pixel
+                if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
                     continue
                 # count the number of stars in each distance bin
                 d_cnts, _ = np.histogram(ds, bins=Nd, range=(0, R))
@@ -405,7 +412,7 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
     return pd.DataFrame(labels)
 
 
-def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool = False, pos_noise_std: float = 0, mv_noise_std: float = 0, ratio_false_star: float = 0):
+def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool, sigma_pos: float=0, sigma_mag: float=0, num_fs: int=0, num_ms: int=0):
     '''
         Generate pattern match test case.
     Args:
@@ -437,10 +444,10 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                 rc: the radius of pattern region for cyclic features in degrees
                 Nr: the number of rings
                 Ns: the number of sectors
-        use_preprocess: whether to avoid the error resulted from get_star_centroids function in preprocess stage
-        pos_noise_std: the standard deviation of the positional noise
-        mv_noise_std: the standard deviation of the magnitude noise
-        ratio_false_star: the number of false stars
+        sigma_pos: the standard deviation of the positional noise
+        sigma_mag: the standard deviation of the magnitude noise
+        num_fs: the number of false stars
+        num_ms: the number of missing stars
     Returns:
         dict: method->dataframe
     '''
@@ -454,63 +461,50 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
 
     # generate the star image
     for ra, de in zip(ras, des):
-        # star_info is a list of [star_ids[i], (row, col), star_magnitudes[i]]
-        img, star_info = create_star_image(ra, de, 0, pos_noise_std=pos_noise_std, mv_noise_std=mv_noise_std, ratio_false_star=ratio_false_star, pure_point=not use_preprocess)
-        # generate star_table: (row, col) -> star_id
-        star_table = dict(map(lambda x: (x[1], x[0]), star_info))
+        img, stars = create_star_image(ra, de, 0, h=h, w=w, fov=fov, limit_mag=limit_mag, sigma_pos=sigma_pos, sigma_mag=sigma_mag, num_fs=num_fs, num_ms=num_ms, coords_only=not use_preprocess)
+        # get star coordinates
+        ids = stars[:, 0]
+        coords = stars[:, 1:3]
 
         # get the centroids of the stars in the image
         if use_preprocess:
             stars = np.array(get_star_centroids(img))
-        else:
-            stars = np.array(list(star_table.keys()))
 
         # too few stars for quest algorithm to identify satellite attitude
-        if len(stars) < 4:
+        if len(stars) < min_num_star:
             continue
         
-        # R = gen_params['nn'][0]/FOV*w
-        # # number of candidate primary stars in the region
-        # in_rect  = np.logical_and(
-        #     np.logical_and(stars[:, 0] >= R/2, stars[:, 0] <= h-R/2),
-        #     np.logical_and(stars[:, 1] >= R/2, stars[:, 1] <= w-R/2)
-        # )
-        # # too few stars to identify satellite attitude
-        # if np.sum(in_rect) < 3:
-        #     continue
-
         # generate a unique img id for later accuracy calculation
         img_id = uuid.uuid1()
 
-        distances = cdist(stars, stars, 'euclidean')
         # distances = np.linalg.norm(stars[:,None,:] - stars[None,:,:], axis=-1)
-        angles = np.arctan2(stars[:, 1] - stars[:, 1][:, None], stars[:, 0] - stars[:, 0][:, None])
+        distances = cdist(coords, coords, 'euclidean')
+        angles = np.arctan2(coords[:, 1] - coords[:, 1][:, None], coords[:, 0] - coords[:, 0][:, None])
         # choose a guide star as the reference star
-        for star, ds, ags in zip(stars, distances, angles):
+        for star_id, coord, ds, ags in zip(ids, coords, distances, angles):
             # check if false star or not in guide star catalogue
-            star_id = star_table.get(tuple(star), -1)
             if star_id == -1 or star_id not in gcatalogue['Star ID'].values:
                 continue
 
-            # angles is sorted by distance with accending order
-            ss, ags = stars[np.argsort(ds)], ags[np.argsort(ds)]
+            # coords and angles are both sorted by distance with accending order
+            cs, ags = coords[np.argsort(ds)], ags[np.argsort(ds)]
             ds = np.sort(ds)
             # remove the first element, which is reference star
-            assert star[0] == ss[0][0] and star[1] == ss[0][1] and ds[0] == 0 and ags[0] == 0
-            ss, ds, ags = ss[1:], ds[1:], ags[1:]
+            assert coord[0] == cs[0][0] and coord[1] == cs[0][1] and ds[0] == 0 and ags[0] == 0
+            cs, ds, ags = cs[1:], ds[1:], ags[1:]
             # calculate the relative coordinates
-            ss = ss-star
-            if len(ss) < 2:
+            cs = cs-coord
+            if len(cs) < min_num_star:
                 continue
-
+            
             methods = list(gen_params.keys())
             for method in methods:
                 if method == 'rac_1dcnn':
                     # parse the parameters
                     r, arr_Nr, Ns, Nn = gen_params[method]
                     # radius in pixels
-                    R = r/FOV*w
-                    if star[0] < R/2 or star[0] > h-R/2 or star[1] < R/2 or star[1] > w-R/2:
+                    R = tan(radians(r))*f/pixel
+                    if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
                         continue
                     # get catalogue index of the guide star
                     cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
@@ -553,8 +547,8 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                     # parse the parameters
                     r, arr_N = gen_params[method]
                     # radius in pixels
-                    R = r/FOV*w
-                    if star[0] < R/2 or star[0] > h-R/2 or star[1] < R/2 or star[1] > w-R/2:
+                    R = tan(radians(r))*f/pixel
+                    if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
                         continue
                     # get catalogue index of the guide star
                     cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
@@ -595,8 +589,8 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                     # parse the parameters
                     r, Nd = gen_params[method]
                     # radius in pixels
-                    R = r/FOV*w
-                    if star[0] < R/2 or star[0] > h-R/2 or star[1] < R/2 or star[1] > w-R/2:
+                    R = tan(radians(r))*f/pixel
+                    if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
                         continue
                     # get catalogue index of the guide star
                     cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
@@ -615,20 +609,22 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                     # parse the parameters: buffer radius, pattern radius and grid length
                     rb, rp, Lg = gen_params[method]
                     # radius in pixels
-                    Rb, Rp = rb/FOV*w, rp/FOV*w
+                    Rb, Rp = tan(radians(rb))*f/pixel, tan(radians(rp))*f/pixel
+                    if coord[0] < Rp/2 or coord[0] > h-Rp/2 or coord[1] < Rp/2 or coord[1] > w-Rp/2:
+                        continue
                     # exclude stars outside the region
-                    excl_ss, excl_ags = ss[(ds >= Rb) & (ds <= Rp)], ags[(ds >= Rb) & (ds <= Rp)]
-                    if len(excl_ss) < 2:
+                    excl_cs, excl_ags = cs[(ds >= Rb) & (ds <= Rp)], ags[(ds >= Rb) & (ds <= Rp)]
+                    if len(excl_cs) < min_num_star:
                         continue
                     M = np.array([[np.cos(excl_ags[0]), -np.sin(excl_ags[0])], [np.sin(excl_ags[0]), np.cos(excl_ags[0])]])
                     # rotate stars
-                    rot_ss = np.dot(excl_ss, M)
-                    assert round(rot_ss[0][1])==0
+                    rot_cs = excl_cs @ M
+                    assert round(rot_cs[0][1])==0
                     # calculate the pattern
                     grid = np.zeros((Lg, Lg), dtype=int)
-                    for s in rot_ss:
-                        row = int((s[0]/Rp+1)/2*Lg)
-                        col = int((s[1]/Rp+1)/2*Lg)
+                    for c in rot_cs:
+                        row = int((c[0]/Rp+1)/2*Lg)
+                        col = int((c[1]/Rp+1)/2*Lg)
                         grid[row][col] = 1
                     # store the 1's position of grid
                     patterns[method].append({
@@ -640,10 +636,10 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                     # parse parameters: buffer radius, pattern radius, number of distance bins and number of theta bins
                     rb, rp, Nd, Nt = gen_params[method]
                     # radius in pixels
-                    Rb, Rp = rb/FOV*w, rp/FOV*w
+                    Rb, Rp = tan(radians(rb))*f/pixel, tan(radians(rp))*f/pixel
                     # exclude stars outside the region
                     excl_ags, excl_ds = ags[(ds >= Rb) & (ds <= Rp)], ds[(ds >= Rb) & (ds <= Rp)]
-                    if len(excl_ags) < 2:
+                    if len(excl_ags) < min_num_star:
                         continue
                     # log-polar transform is already done, where excl_ags is the thetas and excl_ds is the distances
                     # rotate the stars, so that the nearest star's theta is 0
@@ -663,7 +659,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                     # parse the parameters: buffer radius, radial radius, cyclic radius, number of rings
                     rb, rr, rc, N = gen_params[method]
                     # radius in pixels
-                    Rb, Rr, Rc = rb/FOV*w, rr/FOV*w, rc/FOV*w
+                    Rb, Rr, Rc = tan(radians(rb))*f/pixel, tan(radians(rr))*f/pixel, tan(radians(rc))*f/pixel
 
                     # count the number of stars in each ring
                     r_cnts, _ = np.histogram(ds, bins=N, range=(Rb, Rr))
@@ -674,7 +670,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
                     # exclude stars outside the region
                     pm2_ags = ags[(ds >= Rb) & (ds <= Rc)]
                     # rotate the stars until the nearest star lies on the horizontal axis
-                    if len(pm2_ags) < 2:
+                    if len(pm2_ags) < min_num_star:
                         continue
                     ags = ags-ags[0]
                     # make sure angles are in the range of [-pi, pi]
@@ -700,7 +696,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool =
     return patterns
 
 
-def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, default_ratio: float, pos_noise_stds: list = [], mv_noise_stds: list = [], ratio_false_stars: list = [], num_thread: int = 40, fine_grained: bool = False):
+def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, default_ratio: float, sigma_pos: list=[], sigma_mag: list=[], num_fs: list=[], num_ms: list=[], num_thread: int=40, fine_grained: bool=False):
     '''
         Aggregate the dataset. Firstly, the number of samples for each class is counted. Then, roughly generate classes with too few samples using generate_nn_dataset function's 'random' mode. Lastly, the rest are finely generated to ensure that the number of samples in each class in the entire dataset reaches the standard.
     Args:
@@ -719,13 +715,14 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
                 Nd: the number of distance bins
         use_preprocess: whether to avoid the error resulted from get_star_centroids function in preprocess stage
         default_ratio: the ratio of default dataset versus total dataset
-        pos_noise_stds: list of positional noise
-        mv_noise_stds: list of magnitude noise
-        ratio_false_stars: list of false star ratio
+        sigma_pos: the standard deviation of the positional noise
+        sigma_mag: the standard deviation of the magnitude noise
+        num_fs: the number of false stars
+        num_ms: the number of missing stars
         num_thread: the number of threads to generate the dataset
     '''
 
-    def wait_tasks(tasks: dict, root_dirs: dict, file_name: str, col_name: str = None):
+    def wait_tasks(tasks: dict, root_dirs: dict, file_name: str, col_name: str=None):
         '''
             Wait for all tasks to be done. Then, merge the result of async tasks and store it in labels.csv. 
         Args:
@@ -777,21 +774,21 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
         Args:
             s: the string to be parsed
         Returns:
-            pns: the positional noise standard deviation
-            mns: the magnitude noise standard deviation
-            rfs: the ratio of false stars
+            pos, mag, fs, ms
         '''
-        pns, mns, rfs = 0, 0, 0
-        match = re.match('.+\/(pos|mv|fs)([0-9]+\.?[0-9]*)', s)
+        pos, mag, fs, ms = 0, 0, 0, 0
+        match = re.match('.+\/(pos|mag|fs|ms)([0-9]+\.?[0-9]*)', s)
         if match:
             test_type, number = match.groups()
             if test_type == 'pos':
-                pns = float(number)
-            elif test_type == 'mv':
-                mns = float(number)
-            else:  # test_type == 'fs'
-                rfs = float(number)
-        return pns, mns, rfs
+                pos = float(number)
+            elif test_type == 'mag':
+                mag = float(number)
+            elif test_type == 'fs':
+                fs = int(number)
+            else:  # test_type == 'ms'
+                ms = int(number)
+        return pos, mag, fs, ms
 
     def aggregate_root_dir(root_dirs: dict):
         '''
@@ -810,18 +807,27 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thread)
     
-    # generate config for each dataset
-    if len(pos_noise_stds)+len(mv_noise_stds)+len(ratio_false_stars) > 0:
-        noised_ratio = (1-default_ratio)/(len(pos_noise_stds)+len(mv_noise_stds)+len(ratio_false_stars))
+    # generate config for each sub dataset
+    num_noised_dataset = len(sigma_pos)+len(sigma_mag)+len(num_fs)+len(num_ms)
+    if num_noised_dataset > 0:
+        noised_ratio = (1-default_ratio)/num_noised_dataset
+    else:
+        noised_ratio = 0
     names = list(types.keys())
     for name in names:
-        for pns in pos_noise_stds:
-            types[f'{name}/pos{pns}'] = max(int(types[name]*noised_ratio), 1)
-        for mns in mv_noise_stds:
-            types[f'{name}/mv{mns}'] = max(int(types[name]*noised_ratio), 1)
-        for rfs in ratio_false_stars:
-            types[f'{name}/fs{rfs}'] = max(int(types[name]*noised_ratio), 1)
-        types[f'{name}/default'] = max(int(types.pop(name)*default_ratio), 1)
+        num_samples = types.pop(name)
+        num_nosied_samples = max(int(num_samples*noised_ratio), 1)
+        num_default_samples = max(int(num_samples*default_ratio), 1)
+
+        for pos in sigma_pos:
+            types[f'{name}/pos{pos}'] = num_nosied_samples
+        for mag in sigma_mag:
+            types[f'{name}/mag{mag}'] = num_nosied_samples
+        for fs in num_fs:
+            types[f'{name}/fs{fs}'] = num_nosied_samples
+        for ms in num_ms:
+            types[f'{name}/ms{ms}'] = num_nosied_samples
+        types[f'{name}/default'] = num_default_samples
     print(types)
 
     # rough generation
@@ -875,14 +881,14 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
             else:
                 avg_num = types[key]
             # parse parameters
-            pos_noise_std, mv_noise_std, ratio_false_star = parse_params(key)
+            pos, mag, fs, ms = parse_params(key)
 
             # roughly generate the samples for each class        
             num_round = min(num_thread//4, int(avg_num), int((1-pct)*len(gcatalogue)))
             num_vec = 1000
             print('random generate round: ', num_round)
             for _ in range(num_round):
-                task = pool.submit(generate_nn_dataset, method, gen_params[method], 'random', num_vec, [], use_preprocess, pos_noise_std, mv_noise_std, ratio_false_star)
+                task = pool.submit(generate_nn_dataset, method, gen_params[method], 'random', num_vec, [], use_preprocess, pos, mag, fs, ms)
                 tasks[method][key].append(task)
 
     # wait for all tasks to be done and merge the results
@@ -906,9 +912,9 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
             df = df[df < types[key]]
             # repeat each the index of df (which is catalogue idx needed)
             idxs = df.index.repeat(types[key]-df).to_list()
-            print(len(df), len(idxs), idxs[:3], idxs[-3:])
+            print(method, key, len(df), len(idxs), idxs[:3], idxs[-3:])
             # parse parameters
-            pos_noise_std, mv_noise_std, ratio_false_star = parse_params(key)
+            pos, mag, fs, ms = parse_params(key)
 
             # for class whose sample less than num_sample_per_class, generate the dataset til the number of samples reach the standard
             if len(idxs) > 1000:
@@ -924,7 +930,7 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
                 beg, end = i*len_td, min((i+1)*len_td, len(idxs))
                 if beg >= end:
                     continue
-                task = pool.submit(generate_nn_dataset, method, gen_params[method], 'supplementary', 0, idxs[beg: end], use_preprocess, pos_noise_std, mv_noise_std, ratio_false_star)
+                task = pool.submit(generate_nn_dataset, method, gen_params[method], 'supplementary', 0, idxs[beg: end], use_preprocess, pos, mag, fs, ms)
                 tasks[method][key].append(task)
         
     wait_tasks(tasks, root_dirs, 'labels.csv', 'cata_idx')
@@ -933,7 +939,7 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
     aggregate_root_dir(root_dirs)
 
 
-def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool = False, generate_default: bool = True, pos_noise_stds: list = [], mv_noise_stds: list = [], ratio_false_stars: list = [], num_thread: int = 20):
+def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool=False, default: bool=True, sigma_pos: list=[], sigma_mag: list=[], num_fs: list=[], num_ms: list=[], num_thread: int = 20):
     '''
     Aggregate the test samples. 
     Args:
@@ -966,10 +972,7 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
                 Nr: the number of rings
                 Ns: the number of sectors
         use_preprocess: whether to avoid the error resulted from get_star_centroids function in preprocess stage
-        generate_default: whether to generate test samples for default case
-        pos_noise_stds: list of positional noise
-        mv_noise_stds: list of magnitude noise
-        ratio_false_stars: list of false star number
+        default: whether to generate test samples for default case
         num_thread: the number of threads to generate the test samples
     '''
 
@@ -988,17 +991,20 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
     for _ in range(num_thread):
         task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess)
-        if generate_default:
+        if default:
             tasks['default'].append(task)
-        for pns in pos_noise_stds:
-            task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, pos_noise_std=pns)
-            tasks[f'pos{pns}'].append(task)
-        for mns in mv_noise_stds:
-            task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, mv_noise_std=mns)
-            tasks[f'mv{mns}'].append(task)
-        for rfs in ratio_false_stars:
-            task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, ratio_false_star=rfs)
-            tasks[f'fs{rfs}'].append(task)
+        for pos in sigma_pos:
+            task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, sigma_pos=pos)
+            tasks[f'pos{pos}'].append(task)
+        for mag in sigma_mag:
+            task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, sigma_mag=mag)
+            tasks[f'mag{mag}'].append(task)
+        for fs in num_fs:
+            task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, num_fs=fs)
+            tasks[f'fs{fs}'].append(task)
+        for ms in num_ms:
+            task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, num_ms=ms)
+            tasks[f'ms{ms}'].append(task)
 
     # get the async task result and store the returned dataframe
     for key in tasks.keys():
@@ -1030,7 +1036,10 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool 
 
 
 if __name__ == '__main__':
-    # generate_pm_database({'grid': [0, 6, 50], 'lpt': [0, 6, 50, 50]})
-    aggregate_nn_dataset({'train': 60, 'validate': 1, 'test': 1}, {'daa_1dcnn': [6, [30, 50, 80]]}, use_preprocess=False, default_ratio=0.7, fine_grained=True, pos_noise_stds=[0.5], mv_noise_stds=[0.5], ratio_false_stars=[0.3], num_thread=20)
-    # aggregate_test_samples(200, {'daa_1dcnn': [6, [30, 50, 80]]}, use_preprocess=False, generate_default=False, mv_noise_stds=[0.1, 0.2, 0.3, 0.4, 0.5], pos_noise_stds=[0.5, 1, 1.5, 2, 2.5])
-    # aggregate_test_samples(100, {'grid': [0, 6, 50], 'lpt': [0, 6, 50, 50]}, use_preprocess=False, generate_default=False, ratio_false_stars=[0.1, 0.2, 0.3, 0.4, 0.5])
+    generate_pm_database({'grid': [0.3, 6, 50]})
+    # generate_pm_database({'lpt': [0, 6, 50, 50]})
+    # aggregate_nn_dataset({'train': 1, 'validate': 1, 'test': 1}, {'rac_1dcnn': [6, [20, 50, 80], 16, 3]}, use_preprocess=False, default_ratio=0.7, sigma_pos=[3], sigma_mag=[0.2], num_fs=[3], fine_grained=False, num_thread=20)
+    # aggregate_nn_dataset({'train': 1, 'validate': 1, 'test': 1}, {'lpt_nn': [6, 50]}, use_preprocess=False, default_ratio=0.7, sigma_pos=[3], sigma_mag=[0.2], num_fs=[3], fine_grained=True, num_thread=20)
+    aggregate_test_samples(300,  {'grid': [0.3, 6, 50]}, use_preprocess=False, sigma_pos=[0.5, 1, 1.5, 2, 2.5], default=False)
+    # aggregate_test_samples(300,  {'lpt': [0, 6, 50, 50]}, use_preprocess=False, sigma_mag=[0.05, 0.1, 0.15, 0.2, 0.25], sigma_pos=[0.5, 1, 1.5, 2, 2.5], default=False)
+    # aggregate_test_samples(300,  {'rac_1dcnn': [6, [10, 20, 30], 16, 3], 'lpt_nn': [6, 20]}, use_preprocess=False, sigma_mag=[0.05, 0.1, 0.15, 0.2, 0.25], sigma_pos=[0.5, 1, 1.5, 2, 2.5], default=False)
