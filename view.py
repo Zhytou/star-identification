@@ -1,4 +1,6 @@
 import sys
+import pandas as pd
+import numpy as np
 from math import radians
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QLabel, QLineEdit, QPushButton, QFileDialog, QTableView, QGraphicsView, QGraphicsScene, QMenu, QAction
 from PyQt5.QtCore import Qt, QAbstractTableModel
@@ -80,7 +82,9 @@ class StarImageViewer(QMainWindow):
         print(ra, de, roll, sigma_g, prob_p)
 
         # simulate star img
-        img, df = create_star_image(radians(ra), radians(de), radians(roll), sigma_g, prob_p, simulate_test=True)
+        img, stars = create_star_image(radians(ra), radians(de), radians(roll), sigma_g, prob_p)
+        
+        df = pd.DataFrame(stars, columns=['ID', 'Row', 'Col', 'Ra', 'De','Magnitude'])
         h, w = img.shape
 
         # show img
