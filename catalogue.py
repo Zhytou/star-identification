@@ -237,9 +237,9 @@ def parse_heasarc_sao(file_path: str, file_storage_path: str):
     df = pd.DataFrame(data_list, columns=["Star ID", "Ra", "De", "Magnitude"])
 
     # calculate the celestial cartesian coordinates of stars
-    df['X'] = np.cos(df['Ra'])*np.cos(df['De'])
-    df['Y'] = np.sin(df['Ra'])*np.cos(df['De'])
-    df['Z'] = np.sin(df['De'])
+    # df['X'] = np.cos(df['Ra'])*np.cos(df['De'])
+    # df['Y'] = np.sin(df['Ra'])*np.cos(df['De'])
+    # df['Z'] = np.sin(df['De'])
     df.to_csv(file_storage_path)
 
     return df
@@ -276,6 +276,10 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mag_limit: float=6
     print('the number of dark stars excluded: ', num_dark_star_excl)
 
     # calculate the angular distance between each pair of stars
+    catalogue['X'] = np.cos(catalogue['Ra'])*np.cos(catalogue['De'])
+    catalogue['Y'] = np.sin(catalogue['Ra'])*np.cos(catalogue['De'])
+    catalogue['Z'] = np.sin(catalogue['De'])
+
     positions = catalogue[['X', 'Y', 'Z']].to_numpy()
     norms = np.linalg.norm(positions, axis=1)
     inner_products = positions @ positions.T
@@ -310,6 +314,8 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mag_limit: float=6
     print('the number of darker star pairs excluded: ', len(darker_idxs))
 
     if not uniform:
+        # remove X,Y,Z columns
+        catalogue = catalogue[['Star ID', 'Ra', 'De', 'Magnitude']]
         return catalogue
 
     num_uniform_star_excl = len(catalogue)
@@ -366,6 +372,9 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mag_limit: float=6
 
     num_uniform_star_excl -= len(catalogue)
     print('the number of uniform stars excluded: ', num_uniform_star_excl)
+
+    # remove X,Y,Z columns
+    catalogue = catalogue[['Star ID', 'Ra', 'De', 'Magnitude']]
 
     return catalogue
 
