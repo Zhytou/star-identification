@@ -7,19 +7,20 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 
-from generate import database_path, test_path, sim_cfg, num_class
+from generate import database_path, test_path, sim_cfg, num_class, gcatalogue
 from dataset import LPTDataset, RACDataset, DAADataset
 from models import RAC_CNN, DAA_CNN, FNN
 
 
-def check_pm_accuracy(method: str, db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int], sim: float=0.8):
+def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int], T: int, Rp: float, sim: float=0.8):
     '''
         Evaluate the pattern match method's accuracy on the provided patterns. The accuracy is calculated based on the method's ability to correctly identify the closest pattern in the database.
     Args:
-        method: the pattern match method
         db: the database of patterns
         df: the patterns to be tested
         size: the size of 0-1 pattern matrix
+        T: the score threshold for pattern matching
+        Rp: the radius in rad for pattern region
         sim: the similarity coefficient for soft match, if similarity == 0, then use hard match
     Returns:
         the accuracy of the pattern match method
@@ -31,13 +32,10 @@ def check_pm_accuracy(method: str, db: pd.DataFrame, df: pd.DataFrame, size: tup
         Args:
             row: the database row
         Returns:
-            the catalogue star id
+            the guide star id
         '''
         assert row.dropna().nunique() == 1, 'The row should have only one unique value'
         return row.dropna().iloc[0]
-
-    if method != 'grid' and method != 'lpt':
-        return 0.0
 
     def cal_match_score(db: pd.DataFrame, pat: np.ndarray):
         '''
@@ -52,7 +50,7 @@ def check_pm_accuracy(method: str, db: pd.DataFrame, df: pd.DataFrame, size: tup
         scores = db[pat].notna().sum(axis=1)
 
         # close match | soft match
-        if False:
+        if sim > 0:
             sim_pat = []
             for coord in pat:
                 row, col = coord // size[1], coord % size[1]
@@ -60,34 +58,94 @@ def check_pm_accuracy(method: str, db: pd.DataFrame, df: pd.DataFrame, size: tup
                     nrow, ncol = row + d[0], col + d[1]
                     if 0 <= nrow < size[0] and 0 <= ncol < size[1]:
                         sim_pat.append(nrow * size[1] + ncol)
-            scores += db[sim_pat].notna().sum(axis=1)*0.8
+            scores += db[sim_pat].notna().sum(axis=1)*sim
 
         return scores
+    
+    def filter_star_in_fov(cata: pd.DataFrame, ids: list, r: float):
+        '''
+            Filter the stars in the field of view.
+        Args:
+            cata: the catalogue of stars
+            ids: the ids of the star(center of circle fov)
+            r: the radius in rad
+        Returns:
+            the ids of star in the fov
+        '''
+        cata['X'] = np.cos(cata['De']) * np.cos(cata['Ra'])
+        cata['Y'] = np.cos(cata['De']) * np.sin(cata['Ra'])
+        cata['Z'] = np.sin(cata['De'])
+        pos1 = cata[['X', 'Y', 'Z']].to_numpy()
+
+        stars = cata[cata['Star ID'].isin(ids)]
+        pos2 = stars[['X', 'Y', 'Z']].to_numpy()
         
+        angles = np.dot(pos1, pos2.T)
+        filter_mask = np.all(angles > np.cos(np.radians(r)), axis=1)
+
+        return cata.loc[filter_mask, 'Star ID'].to_numpy()
+
+    def identify_img_pats(img_pats: pd.DataFrame):
+        '''
+            Identify the patterns in the image.
+        Args:
+            img_pats: the patterns in the image
+            db: the database of patterns
+        Returns:
+            True if the image patterns are identified, False otherwise
+        '''
+        n = len(img_pats)
+        if n < 4:
+            return False
+        
+        # match results
+        matched_ids, potential_ids = [], []
+        for _, val in img_pats.iterrows():
+            # pattern and id for each star in the image
+            pat, id = np.array(val['pattern'].split(' '), dtype=int), val['id']
+            
+            # calculate the match scores
+            scores = cal_match_score(db, pat)
+            
+            # max score guide star id
+            ids = gstar_ids[scores==scores.max()].values
+            if len(ids) == 1 and ids[0] == id:
+                matched_ids.append(id)
+                continue
+
+            # other possible guide star ids
+            ids = gstar_ids[scores>=T].values
+            if id in ids:
+                potential_ids.append(ids)
+
+        # count of correctly identified patterns in the image
+        cnt = len(matched_ids)
+        if cnt < 3:
+            # use the identified patterns and fov restriction to exclude spurious matches
+            filtered_ids = filter_star_in_fov(gcatalogue, matched_ids, Rp)
+            # print(len(filtered_ids), filtered_ids)
+            for ids in potential_ids:
+                common_ids = np.intersect1d(filtered_ids, ids)
+                # print(len(common_ids), common_ids)
+                if len(common_ids) >= 1:
+                    cnt += 1
+                if cnt >= 3:
+                    break
+   
+        return cnt >= 3
+
     # rename the columns of the database
     db.columns = db.columns.astype(int)
-    # get db star ids
-    db_star_ids = db.apply(compress_db_row, axis=1)
-    # dict to store the number of correctly predicted samples for each star image
-    freqs = {}
+    # get the id of guide stars in database
+    gstar_ids = db.apply(compress_db_row, axis=1)
+    # get identify results
+    res = df.groupby('img_id', as_index=True).apply(identify_img_pats, include_groups=False)
 
-    for i in range(len(df)):
-        img_id, pat, star_id = df.loc[i, ['img_id', 'pattern', 'id']]
-        pat = np.array(pat.split(' '), dtype=int)
-        
-        # find the closest pattern in the database
-        res = cal_match_score(db, pat)
-        idxs = np.where(res == np.max(res))[0]
-        if method == 'grid' and np.max(res) >= 5 and len(idxs) == 1 and star_id == db_star_ids[idxs[0]]:
-            freqs.update({img_id: freqs.get(img_id, 0)+1})
-        elif method == 'lpt' and np.max(res) >= 6 and len(idxs) == 1 and star_id == db.loc[idxs[0], 'id']:
-            freqs.update({img_id: freqs.get(img_id, 0)+1})
-
-    # the number of star images that have at least three correctly predicted samples
-    cnt = sum(v >= 3 for v in freqs.values())
-    test_info = df['img_id'].value_counts()
-    tot = len(test_info)-len(test_info[test_info<3])
-    acc = round(100.0*cnt/tot, 2) if tot > 0 else 0
+    # calculate the accuracy
+    df = df['img_id'].value_counts()
+    tot = df[df >= 4].count()
+    # print('total:', tot, len(df))
+    acc = round(np.sum(res)/tot*100.0, 2)
 
     return acc
 
@@ -149,11 +207,14 @@ if __name__ == '__main__':
     for method in ['grid']:  
         res[method] = {}
         for gen_cfg in os.listdir(os.path.join(test_path, method)):
+            # parse gen_cfg
+
             if method == 'grid':
-                # parse gen_cfg
+                Rp = int(gen_cfg.split('_')[-2])
                 L = int(gen_cfg.split('_')[-1])
                 size = (L, L)
             else:
+                Rp = int(gen_cfg.split('_')[-3])
                 L1, L2 = gen_cfg.split('_')[-2:]
                 size = (int(L1), int(L2))
             db = pd.read_csv(os.path.join(database_path, gen_cfg, f'{method}.csv'))
@@ -169,7 +230,7 @@ if __name__ == '__main__':
                     x = float(x)
                 # calculate accuracy
                 df = pd.read_csv(os.path.join(test_path, method, gen_cfg, s, 'labels.csv'))
-                y = check_pm_accuracy(method, db, df, size, sim=0.8)
+                y = check_pm_accuracy(db, df, size, Rp=Rp, T=15, sim=0.8)
                 if name == 'default':
                     res[method]['default'] = y
                     continue
