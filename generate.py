@@ -14,7 +14,7 @@ from extract import get_star_centroids
 # simulation configuration
 h = w = 512
 fov = 15
-limit_mag = 6.5
+limit_mag = 7
 f = 5.8e-3
 pixel = 2*tan(radians(fov/2))*f/h
 
@@ -62,7 +62,7 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
         use_preprocess: whether to avoid the error resulted from get_star_centroids function in preprocess stage
     '''
     
-    def generate_database(method: str, idxs: pd.Index):
+    def generate_database(method: str, idxs: pd.Index, mat_size: int=0):
         '''
             Generate the pattern database for the given star catalogue.
         Args:
@@ -72,8 +72,8 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
             database: the pattern database
         '''
 
-        database = []
-        for star_id, ra, de in zip(gcatalogue.loc[idxs, 'Star ID'], gcatalogue.loc[idxs, 'Ra'], gcatalogue.loc[idxs, 'De']):
+        database = pd.DataFrame(columns=range(mat_size))
+        for gidx, star_id, ra, de in zip(idxs, gcatalogue.loc[idxs, 'Star ID'], gcatalogue.loc[idxs, 'Ra'], gcatalogue.loc[idxs, 'De']):
             img, stars = create_star_image(ra, de, 0, h=h, w=w, fov=fov, limit_mag=limit_mag, coords_only=not use_preprocess)
             # get the centroids of the stars in the image
             if use_preprocess:
@@ -81,12 +81,13 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
             else:
                 coords = stars[:, 1:3]
 
-            idx = np.where(stars[:, 0] == star_id)[0][0]
-            if (coords[idx][0] - h/2)**2 + (coords[idx][1] - w/2)**2 > 0.1:
+            # find the index of the reference star in the catalogue
+            ridx = np.where(stars[:, 0] == star_id)[0][0]
+            if (coords[ridx][0] - h/2)**2 + (coords[ridx][1] - w/2)**2 > 0.1:
                 print('The star is not in the center of the image!')
                 continue
             # calculate the relative coordinates
-            coords = coords - coords[idx]
+            coords = coords - coords[ridx]
             # calculate the distance between the star and the center of the image
             distances = np.linalg.norm(coords, axis=1)
             # sort the stars by distance with accending order
@@ -113,11 +114,9 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
                     row = int((coord[0]/Rp+1)/2*Lg)
                     col = int((coord[1]/Rp+1)/2*Lg)
                     grid[row][col] = 1
-                # store the 1's position of the grid
-                database.append({
-                    'pattern': ' '.join(map(str, np.flatnonzero(grid))),
-                    'id': star_id
-                })
+                # iterate the 1's position of the grid
+                for pidx in np.flatnonzero(grid):
+                    database.loc[gidx, pidx] = star_id
             elif method == 'lpt':
                 # exclude stars out of region
                 coords = coords[(distances >= Rb) & (distances <= Rp)]
@@ -134,40 +133,14 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
                 thetas[thetas >= np.pi] -= 2*np.pi
                 thetas[thetas < -np.pi] += 2*np.pi
                 # generate the pattern
-                pattern = [int((d-Rb)/(Rp-Rb)*Nd)*Nt+int((t+np.pi)/(2*np.pi)*Nt) for d, t in zip(distances, thetas)]
-                database.append({
-                    'pattern': ' '.join(map(str, pattern)),
-                    'id': star_id
-                })
+                for d, t in zip(distances, thetas):
+                    pidx = int((d-Rb)/(Rp-Rb)*Nd)*Nt+int((t+np.pi)/(2*np.pi)*Nt)
+                    database.loc[gidx, pidx] = star_id
             else:
-                # count the number of stars in each ring
-                r_cnts, _ = np.histogram(distances, bins=N, range=(Rb, Rr))
-                # generate radial pattern 01 sequence
-                r_pattern = np.zeros(N, dtype=int)
-                r_pattern[np.nonzero(r_cnts)] = 1
-
-                # exclude stars out of region
-                stars = stars[(distances >= Rb) & (distances <= Rc)] 
-                # calculate the angles between the star and the center of the image
-                angles = np.arctan2(stars[:, 1], stars[:, 0])
-                # rotate the stars until the nearest star lies on the horizontal axis
-                angles = angles - angles[0]
-                # make sure angles are in the range of [-pi, pi]
-                angles %= 2*np.pi
-                angles[angles >= np.pi] -= 2*np.pi
-                angles[angles < -np.pi] += 2*np.pi
-                # count the number of stars in each sector
-                s_cnts, _ = np.histogram(angles, bins=8, range=(-np.pi, np.pi))
-                # generate cyclic pattern 01 sequence
-                c_pattern = np.zeros(8, dtype=int)
-                c_pattern[np.nonzero(s_cnts)] = 1
-                database.append({
-                    'pattern': ' '.join(map(str, np.concatenate([r_pattern, c_pattern]))),
-                    'id': star_id
-                })
-
+                pass
+    
         # store the rest of the results
-        return pd.DataFrame(database)
+        return database
 
     # use thread pool to generate the database
     pool = ThreadPoolExecutor(max_workers=num_thread)
@@ -180,19 +153,17 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
             rb, rp, Lg = gen_params[method]
             # radius in pixels
             Rb, Rp = tan(radians(rb))*f/pixel, tan(radians(rp))*f/pixel
+            # pattern matrix size
+            mat_size = Lg*Lg
             path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rp}_{Lg}'
         elif method == 'lpt':
             # parse parameters: buffer radius, pattern radius, number of distance bins and number of theta bins
             rb, rp, Nd, Nt = gen_params[method]
             # radius in pixels
             Rb, Rp = tan(radians(rb))*f/pixel, tan(radians(rp))*f/pixel
+            # pattern matrix size
+            mat_size = Nd*Nt
             path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rp}_{Nd}_{Nt}'
-        elif method == 'rac':
-            # parse parameters: buffer radius, radial radius, cyclic radius, number of rings
-            rb, rr, rc, N = gen_params[method]
-            # radius in pixels
-            Rb, Rr, Rc = tan(radians(rb))*f/pixel, tan(radians(rr))*f/pixel, tan(radians(rc))*f/pixel
-            path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rr}_{rc}_{N}'
         else:
             print('Invalid method!')
             return
@@ -205,7 +176,7 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
             beg, end = i*len_td, min((i+1)*len_td, len(gcatalogue))
             if beg >= end:
                 continue
-            task = pool.submit(generate_database, method, gcatalogue.index[beg:end])
+            task = pool.submit(generate_database, method, gcatalogue.index[beg:end], mat_size)
             tasks[method].append(task)
     
     # wait all tasks to be done and merge all the results
@@ -216,7 +187,7 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
         elif method == 'lpt':
             path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rp}_{Nd}_{Nt}'
         else:
-            path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rr}_{rc}_{N}'
+            pass
         if not os.path.exists(path):
             os.makedirs(path)
 
@@ -1032,14 +1003,14 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool=
             print(p, len(dfs))
             if len(dfs) > 0:        
                 df = pd.concat(dfs, ignore_index=True)
-                df.to_csv(os.path.join(p, 'labels.csv'))
+                df.to_csv(os.path.join(p, 'labels.csv'), index=False)
 
 
 if __name__ == '__main__':
-    generate_pm_database({'grid': [0.3, 6, 50]})
+    # generate_pm_database({'grid': [0.3, 6, 50]})
     # generate_pm_database({'lpt': [0, 6, 50, 50]})
     # aggregate_nn_dataset({'train': 1, 'validate': 1, 'test': 1}, {'rac_1dcnn': [6, [20, 50, 80], 16, 3]}, use_preprocess=False, default_ratio=0.7, sigma_pos=[3], sigma_mag=[0.2], num_fs=[3], fine_grained=False, num_thread=20)
     # aggregate_nn_dataset({'train': 1, 'validate': 1, 'test': 1}, {'lpt_nn': [6, 50]}, use_preprocess=False, default_ratio=0.7, sigma_pos=[3], sigma_mag=[0.2], num_fs=[3], fine_grained=True, num_thread=20)
-    aggregate_test_samples(300,  {'grid': [0.3, 6, 50]}, use_preprocess=False, sigma_pos=[0.5, 1, 1.5, 2, 2.5], default=False)
+    aggregate_test_samples(100,  {'grid': [0.3, 6, 50]}, use_preprocess=False, sigma_pos=[2], default=True)
     # aggregate_test_samples(300,  {'lpt': [0, 6, 50, 50]}, use_preprocess=False, sigma_mag=[0.05, 0.1, 0.15, 0.2, 0.25], sigma_pos=[0.5, 1, 1.5, 2, 2.5], default=False)
     # aggregate_test_samples(300,  {'rac_1dcnn': [6, [10, 20, 30], 16, 3], 'lpt_nn': [6, 20]}, use_preprocess=False, sigma_mag=[0.05, 0.1, 0.15, 0.2, 0.25], sigma_pos=[0.5, 1, 1.5, 2, 2.5], default=False)
