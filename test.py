@@ -12,7 +12,50 @@ from dataset import LPTDataset, RACDataset, DAADataset
 from models import RAC_CNN, DAA_CNN, FNN
 
 
-def check_pm_accuracy(method: str, db: pd.DataFrame, df: pd.DataFrame):
+def cal_match_score(pat1: np.ndarray, pat2: np.ndarray, L: int, K: int=0, sim: float=0.0):
+    '''
+        Calculate the match score between two patterns based on the specified similarity metric.
+    Args:
+        pat1/2: pattern vector, each element is the index of 1 value in the 0-1 pattern matrix
+        L: the length of 0-1 pattern matrix
+        K: the search window size for soft matching
+        sim: the similarity coefficient for soft matching, if similarity == 0, then use hard matching
+    Returns:
+        the match score between the two patterns
+    '''
+
+    # convert the pattern index to coordinates
+    rows1, cols1 = pat1//L, pat1%L
+    rows2, cols2 = pat2//L, pat2%L    
+
+    # calculate the difference between the two patterns
+    rows1, cols1 = rows1[:, np.newaxis], cols1[:, np.newaxis]
+    rows_diff, cols_diff = np.abs(rows1-rows2), np.abs(cols1-cols2)
+
+    score = 0
+
+    # exact match | hard match
+    exact_match = (rows_diff == 0) & (cols_diff == 0)
+    # calculate the score
+    score += np.sum(exact_match)
+
+    # close match | soft match
+    if K > 0 and sim > 0:
+        # normalized L2 distance from pat1 to pat2
+        dist = np.sqrt(rows_diff**2 + cols_diff**2)/K
+        close_match = ((dist <= 1) & (dist > 0)).astype(float)
+        if True:
+            # nonlinear attenuation
+            atten = np.exp(-dist**2)
+        else:
+            atten = 1-dist
+        # calculate the score
+        score += np.sum(close_match*atten)*sim
+
+    return score
+
+
+def check_pm_accuracy(method: str, db: pd.DataFrame, df: pd.DataFrame, L: int, K: int=3, sim: float=0.8):
     '''
         Evaluate the pattern match method's accuracy on the provided patterns. The accuracy is calculated based on the method's ability to correctly identify the closest pattern in the database.
     Args:
@@ -22,64 +65,27 @@ def check_pm_accuracy(method: str, db: pd.DataFrame, df: pd.DataFrame):
     Returns:
         the accuracy of the pattern match method
     '''
-    
-    # convert str patterns to list
-    db_patterns = db['pattern'].values
-    db_patterns = [list(map(int, pattern.split(' '))) for pattern in db_patterns]
-    
-    # preprocess the db patterns based on method
-    if method == 'grid' or method == 'lpt':
-        # fill -1 to make sure each db_pattern has the same length so that they can be stored in np.array
-        max_len = max(map(len, db_patterns))
-        db_patterns = np.array([pattern+[-1]*(max_len-len(pattern)) for pattern in db_patterns])
-    elif method == 'rac':
-        db_patterns = np.array(db_patterns)
-    else:
-        print(f'Invalid method {method}')
-        return
 
+    if method != 'grid' and method != 'lpt':
+        return 0.0
+    
     # dict to store the number of correctly predicted samples for each star image
     freqs = {}
 
+    db_pats = db['pattern'].to_numpy()
+    db_pats = [np.array(pat.split(' '), dtype=int) for pat in db_pats]
+    
     for i in range(len(df)):
-        img_id, pattern, star_id = df.loc[i, ['img_id', 'pattern', 'id']]
-        pattern = np.array(list(map(int, pattern.split(' '))))
-
-        if method == 'grid' or method == 'lpt':
-            # find the closest pattern in the database
-            res = np.sum(np.isin(db_patterns, pattern), axis=1)
-            idxs = np.where(res == np.max(res))[0]
-            if method == 'grid' and np.max(res) >= 7 and len(idxs) == 1 and star_id == db.loc[idxs[0], 'id']:
-                freqs.update({img_id: freqs.get(img_id, 0)+1})
-            elif method == 'lpt' and np.max(res) >= 6 and len(idxs) == 1 and star_id == db.loc[idxs[0], 'id']:
-                freqs.update({img_id: freqs.get(img_id, 0)+1})
-        else:
-            # initial match based on radial features
-            res1 = np.sum(pattern[:-8] & db_patterns[:, :-8], axis=1)
-            idxs1 = np.where(res1 == np.max(res1))[0]
-            # do follow-up matches only if initial match success
-            if star_id not in db.loc[idxs1, 'id'].values:
-                continue
-            if len(idxs1) == 1:
-                freqs.update({img_id: freqs.get(img_id, 0)+1})
-                continue
-            # cyclic match
-            res2 = np.sum(pattern[-8:] & db_patterns[:, -8:], axis=1)
-            idxs2 = np.where(res2 == np.max(res2))[0]
-            idxs = np.intersect1d(idxs1, idxs2)        
-            if len(idxs) == 1 and star_id == db.loc[idxs[0], 'id']:
-                freqs.update({img_id: freqs.get(img_id, 0)+1})
-                continue
-            # FOV constraint
-            ids = db.loc[idxs, 'id'].values
-            if star_id not in ids:
-                continue
-            # remove the candidates that do not have enough neighbor stars
-            # nums = [get_neighbor_num(id) for id in ids]
-            # id = ids[np.argmax(nums)]
-            # if star_id == id:
-            #     freqs.update({img_id: freqs.get(img_id, 0)+1})
-
+        img_id, pat, star_id = df.loc[i, ['img_id', 'pattern', 'id']]
+        pat = np.array(pat.split(' '), dtype=int)
+        
+        # find the closest pattern in the database
+        res = [cal_match_score(pat, db_pat, L, 2, 0.7) for db_pat in db_pats]
+        idxs = np.where(res == np.max(res))[0]
+        if method == 'grid' and np.max(res) >= 5 and len(idxs) == 1 and star_id == db.loc[idxs[0], 'id']:
+            freqs.update({img_id: freqs.get(img_id, 0)+1})
+        elif method == 'lpt' and np.max(res) >= 6 and len(idxs) == 1 and star_id == db.loc[idxs[0], 'id']:
+            freqs.update({img_id: freqs.get(img_id, 0)+1})
 
     # the number of star images that have at least three correctly predicted samples
     cnt = sum(v >= 3 for v in freqs.values())
@@ -144,13 +150,16 @@ if __name__ == '__main__':
     res = {}
 
     # conventional pattern match method accuracy
-    for method in []:
+    for method in ['grid']:  
         res[method] = {}
         for gen_cfg in os.listdir(os.path.join(test_path, method)):
+            # parse gen_cfg
+            L = int(gen_cfg.split('_')[-1])
+
             db = pd.read_csv(os.path.join(database_path, gen_cfg, f'{method}.csv'))
             for s in os.listdir(os.path.join(test_path, method, gen_cfg)):
                 # use regex to parse test parameters
-                match = re.match('(pos|mv|fs)([0-9]+\.?[0-9]*)', s)
+                match = re.match('(pos|mag|fs)([0-9]+\.?[0-9]*)', s)
                 if match is None:
                     name, x = 'default', 0
                 else:
@@ -158,7 +167,7 @@ if __name__ == '__main__':
                     x = float(x)
                 # calculate accuracy
                 df = pd.read_csv(os.path.join(test_path, method, gen_cfg, s, 'labels.csv'))
-                y = check_pm_accuracy(method, db, df)
+                y = check_pm_accuracy(method, db, df, L)
                 if name == 'default':
                     res[method]['default'] = y
                     continue
@@ -168,7 +177,7 @@ if __name__ == '__main__':
                     res[method][name].append((x, y))
             
     # nn model accuracy
-    for method in ['daa_1dcnn']:
+    for method in []:
         res[method] = {}
         batch_size = 100
         # use gpu if available
@@ -198,7 +207,7 @@ if __name__ == '__main__':
             path = os.path.join(test_path, method, gen_cfg)
             for s in os.listdir(path):
                 # use regex to parse test parameters
-                match = re.match('(pos|mv|fs)([0-9]+\.?[0-9]*)', s)
+                match = re.match('(pos|mag|fs)([0-9]+\.?[0-9]*)', s)
                 if match is None:
                     name, x = 'default', 0
                 else:
