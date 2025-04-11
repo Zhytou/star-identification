@@ -14,14 +14,14 @@ from extract import get_star_centroids
 # simulation configuration
 h = w = 512
 fov = 15
-limit_mag = 6.5
+limit_mag = 6
 f = 5.8e-3
 pixel = 2*tan(radians(fov/2))*f/h
 
 sim_cfg = f'{h}_{w}_{fov}_{limit_mag}'
 
 # guide star catalogue for pattern match database and nn dataset generation
-gcata_path = 'catalogue/sao5.5_d0.2.csv'
+gcata_path = 'catalogue/sao5.0_d0.2.csv'
 # use for generation config
 gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
 # guide star catalogue
@@ -670,12 +670,14 @@ def generate_test_samples(num_vec: int, meth_params: dict, use_preprocess: bool,
     return patterns
 
 
-def aggregate_nn_dataset(types: dict, meth_params: dict, use_preprocess: bool, default_ratio: float, sigma_pos: list=[], sigma_mag: list=[], num_fs: list=[], num_ms: list=[], num_thd: int=40, fine_grained: bool=False):
+def aggregate_nn_dataset(ds_sizes: dict, meth_params: dict, noise_params: dict, use_preprocess: bool, default_ratio: float=0.5, fine_grained: bool=False, num_thd: int=20):
     '''
         Aggregate the dataset. Firstly, the number of samples for each class is counted. Then, roughly generate classes with too few samples using generate_nn_dataset function's 'random' mode. Lastly, the rest are finely generated to ensure that the number of samples in each class in the entire dataset reaches the standard.
     Args:
-        types: key->the types of the dataset, values->the minumin number of samples for each class
-        meth_params: the parameters for the nn method
+        ds_sizes: the size of each dataset
+            key->the types of the dataset
+            value->the minumin number of samples for each class
+        meth_params: the parameters of the nn method
             'rac_1dcnn': 
                 rp: the radius of the pattern region in degrees
                 arr_Nr: the array of ring number
@@ -687,60 +689,65 @@ def aggregate_nn_dataset(types: dict, meth_params: dict, use_preprocess: bool, d
             'lpt_nn':
                 rp: the radius of the pattern region in degrees
                 Nd: the number of distance bins
+        noise_params: the parameters for the test sample generation
+            'pos': the standard deviation of the positional noise
+            'mag': the standard deviation of the magnitude noise
+            'fs': the number of false stars
+            'ms': the number of missing stars
         use_preprocess: whether to avoid the error resulted from get_star_centroids function in preprocess stage
-        default_ratio: the ratio of default dataset versus total dataset
-        sigma_pos: the standard deviation of the positional noise
-        sigma_mag: the standard deviation of the magnitude noise
-        num_fs: the number of false stars
-        num_ms: the number of missing stars
-        num_thd: the number of threads to generate the dataset
+        num_thd: the number of threads to generate the test samples
     '''
 
-    def wait_tasks(tasks: dict, root_dirs: dict, file_name: str, col_name: str=None):
+    def wait_tasks(tasks: dict, root_dirs: dict, file_name: str='labels.csv', col_name: str=None):
         '''
             Wait for all tasks to be done. Then, merge the result of async tasks and store it in labels.csv. 
         Args:
             tasks: the tasks to be done
             root_dirs: the root directory for each method to store the dataset
+            file_name: the name of the aggregated file to be stored
             col_name: the column name of the label
         Returns:
             tasks: the tasks done(reserved keys and empty list for values)
         '''
         for method in tasks:
-            for key in tasks[method]:
-                if len(tasks[method][key]) == 0:
+            for sds_name in tasks[method]:
+                if len(tasks[method][sds_name]) == 0:
                     continue
 
-                # make directory for every type of dataset
-                path = os.path.join(root_dirs[method], key)
-                if not os.path.exists(path):
-                    os.makedirs(path)
+                # make directory for every type of sub dataset
+                sds_path = os.path.join(root_dirs[method], sds_name)
+                if not os.path.exists(sds_path):
+                    os.makedirs(sds_path)
 
                 # store the samples
                 dfs = []
-                for task in tasks[method][key]:
+                for task in tasks[method][sds_name]:
                     df = task.result()
                     if len(df) > 0:
-                        df.to_csv(f"{path}/{uuid.uuid1()}", index=False)
+                        df.to_csv(f"{sds_path}/{uuid.uuid1()}", index=False)
                         dfs.append(df)
                 
-                # remain the old samples
-                if os.path.exists(os.path.join(path, file_name)):
-                    dfs.append(pd.read_csv(os.path.join(path, file_name)))
+                # sub dataset label file, which is actual dataset and can be used for later training
+                sds_label_file = os.path.join(sds_path, file_name)
+                if os.path.exists(sds_label_file):
+                    # remain the old samples
+                    dfs.append(pd.read_csv(sds_label_file))
 
                 # aggregate the dataset
                 df = pd.concat(dfs, ignore_index=True)
                 dfs.clear()
                 
                 # truncate and store the dataset
-                df = df.groupby(col_name, group_keys=False).apply(lambda x: x.sample(n=min(len(x), types[key])))
-                df.to_csv(f'{path}/{file_name}', index=False)
+                # !select all columns to avoid DataFrameGroupBy.apply warning
+                df = df.groupby(col_name, as_index=False)[df.columns].apply(lambda x: x.sample(n=min(len(x), sds_sizes[sds_name])))
+                # print
+                df.to_csv(sds_label_file, index=False)
                                 
                 # print dataset distribution per class
                 if col_name:
                     df_info = df[col_name].value_counts()
-                    print(method, key, len(df_info))
-                    print(df_info.tail(5))
+                    print(method, sds_name, 'num_gen_class', len(df_info))
+                    print(df_info.tail(3))
 
     def parse_params(s: str):
         '''
@@ -764,139 +771,116 @@ def aggregate_nn_dataset(types: dict, meth_params: dict, use_preprocess: bool, d
                 ms = int(number)
         return pos, mag, fs, ms
 
-    def aggregate_root_dir(root_dirs: dict):
+    def aggr_dataset(root_dirs: dict, file_name: str='labels.csv'):
         '''
-            Aggregate the train, validate and test dataset labels.csv in the root directory.
+            Aggregate all the sub dataset and generate labels.csv for each dataset
         Args:
             root_dirs: the root directory for each method to store the dataset
+            file_name: the name of the aggregated file to be stored, and the name of sub dataset label file
         '''
         for method in root_dirs:
-            # name in ['train', 'validate', 'test']
-            for name in names:
-                dfs = [pd.read_csv(os.path.join(root_dirs[method], key, 'labels.csv')) for key in types.keys() if name in key]
+            # iterate dataset by name(train/validate/test)
+            for ds_name in ds_sizes:
+                # concat the dataframe only if the sds_name is include ds_name, e.g. train/pos1 includes train
+                dfs = [pd.read_csv(os.path.join(root_dirs[method], sds_name, file_name)) for sds_name in sds_sizes if ds_name in sds_name]
                 if len(dfs) > 0:
                     df = pd.concat(dfs, ignore_index=True)
-                    df.to_csv(os.path.join(root_dirs[method], name, 'labels.csv'), index=False)
+                    df.to_csv(os.path.join(root_dirs[method], name, file_name), index=False)
 
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thd)
     
-    # generate config for each sub dataset
-    num_noised_dataset = len(sigma_pos)+len(sigma_mag)+len(num_fs)+len(num_ms)
-    if num_noised_dataset > 0:
-        noised_ratio = (1-default_ratio)/num_noised_dataset
-    else:
-        noised_ratio = 0
-    names = list(types.keys())
-    for name in names:
-        num_samples = types.pop(name)
-        num_nosied_samples = max(int(num_samples*noised_ratio), 1)
-        num_default_samples = max(int(num_samples*default_ratio), 1)
+    # calculate the noised ratio
+    n = sum(len(value) for value in noise_params.values())
+    noised_ratio = (1 - default_ratio) / n
 
-        for pos in sigma_pos:
-            types[f'{name}/pos{pos}'] = num_nosied_samples
-        for mag in sigma_mag:
-            types[f'{name}/mag{mag}'] = num_nosied_samples
-        for fs in num_fs:
-            types[f'{name}/fs{fs}'] = num_nosied_samples
-        for ms in num_ms:
-            types[f'{name}/ms{ms}'] = num_nosied_samples
-        types[f'{name}/default'] = num_default_samples
-    print(types)
+    # calculate the size of each sub dataset
+    sds_sizes = {}
+    for name in ds_sizes:
+        # get the total number of samples for each dataset
+        num_samp = ds_sizes[name]
+        # noise type and noise intensity
+        for ntype, nvals in noise_params.items():
+            for nval in nvals:
+                sds_sizes[f'{name}/{ntype}{nval}'] = max(1, int(num_samp*noised_ratio))
+    print(sds_sizes)
 
     # rough generation
     tasks = {}
     # the root directory for each method to store the dataset
     root_dirs = {}
     for method in meth_params:
-        if method == 'rac_1dcnn':
-            # parse parameters: radius, number of rings, number of sectors, number of neighbors
-            r, arr_Nr, Ns, Nn = meth_params[method]
-            # generate config
-            gen_cfg = f'{gcata_name}_{int(use_preprocess)}_{r}_{arr_Nr}_{Ns}_{Nn}'
-        elif method == 'daa_1dcnn':
-            r, arr_N = meth_params[method]
-            # generate config
-            gen_cfg = f'{gcata_name}_{int(use_preprocess)}_{r}_{arr_N}'
-        elif method == 'lpt_nn':
-            r, Nd = meth_params[method]
-            # generate config
-            gen_cfg = f'{gcata_name}_{int(use_preprocess)}_{r}_{Nd}'
-        else:
-            pass
+        gen_cfg = f'{gcata_name}_{int(use_preprocess)}_'+'_'.join(map(str, meth_params[method]))
         
         tasks[method] = defaultdict(list)
         root_dirs[method] = os.path.join(dataset_path, method, gen_cfg)
-        for key in types.keys():
-            # reuse old samples
-            files = []
-            # the storage path for each method's old samples, e.g /dataset_path/rac_1dcnn/xxx/train/mv1 
-            path = os.path.join(dataset_path, method, gen_cfg, key)
-            if os.path.exists(path):
-                files = os.listdir(path)
-            pct = 0
-            if len(files) > 0:
-                df = pd.concat([pd.read_csv(os.path.join(path, file)) for file in files if file != 'labels.csv'])
-                df.to_csv(os.path.join(path, 'labels.csv'), index=False)
+        # iterate through each sub dataset(e.g. train/pos1)
+        for sds_name, sds_size in sds_sizes.items():
+            # the storage path for each sub dataset's old samples, e.g /dataset_path/rac_1dcnn/xxx/train/mv1 
+            sds_path = os.path.join(dataset_path, method, gen_cfg, sds_name)
+
+            if os.path.exists(sds_path) and len(os.listdir(sds_path)) > 0:
+                # reuse old samples
+                df = pd.concat([pd.read_csv(os.path.join(sds_path, file)) for file in os.listdir(sds_path) if file != 'labels.csv'])
+                df.to_csv(os.path.join(sds_path, 'labels.csv'), index=False)
+                
                 # count the number of samples for each class
                 df = df['cata_idx'].value_counts()
-                pct = len(df[df >= types[key]])/len(gcatalogue)
-                if len(df[df < types[key]]) == 0:
-                    avg_num = 0
-                else:
-                    avg_num = np.sum(types[key]-df[df < types[key]])/len(df[df < types[key]])
-                print(method, key, ' pct: ', pct, ' len(df[df < types[key]]): ', len(df[df < types[key]]), ' avg_num:',
-                       avg_num)
-                if pct > 0.95 or avg_num <= 1:
-                    print(f'{key} skip rough generation!')
-                    continue
-                if avg_num < 1:
-                    avg_num = 1
+
+                # calculate the percentage of class whose samples are greater than the request(sds_size)
+                pct = len(df[df >= sds_size])/len(gcatalogue)
+                # calculate the average number of missing samples
+                avg_num_mss = np.sum(sds_size-df[df < sds_size])/len(df[df < sds_size]) if len(df[df < sds_size]) > 0 else 0
             else:
-                avg_num = types[key]
-            # parse parameters
-            pos, mag, fs, ms = parse_params(key)
+                pct = 0
+                avg_num_mss = sds_size
 
             # roughly generate the samples for each class        
-            num_round = min(num_thd//4, int(avg_num), int((1-pct)*len(gcatalogue)))
+            num_round = min(num_thd//5, int(avg_num_mss))
+            print(method, sds_name, 'pct', pct, 'num_round', num_round)
+
+            # skip the rough generation
+            if pct > 0.95 or avg_num_mss < 1:
+                continue
+            
+            # parse parameters
+            pos, mag, fs, ms = parse_params(sds_name)
             num_vec = 1000
-            print('random generate round: ', num_round)
             for _ in range(num_round):
                 task = pool.submit(generate_nn_dataset, method, meth_params[method], 'random', num_vec, [], use_preprocess, pos, mag, fs, ms)
-                tasks[method][key].append(task)
+                tasks[method][sds_name].append(task)
 
     # wait for all tasks to be done and merge the results
     wait_tasks(tasks, root_dirs, 'labels.csv', 'cata_idx')
 
     if not fine_grained:
-        aggregate_root_dir(root_dirs)
+        aggr_dataset(root_dirs)
         return
 
     tasks = {}
     # fine generation
     for method in meth_params:
         tasks[method] = defaultdict(list)
-        for key in types.keys():
-            df = pd.read_csv(os.path.join(root_dirs[method], key, 'labels.csv'))
+        for sds_name, sds_size in sds_sizes.items():
+            df = pd.read_csv(os.path.join(root_dirs[method], sds_name, 'labels.csv'))
             # count the number of samples for each class
             df = df['cata_idx'].value_counts()
             # add those even unexisting class(catalogue idx)
             df = df.reindex(gcatalogue.index, fill_value=0)
             # count class whose samples less than limit
-            df = df[df < types[key]]
+            df = df[df < sds_size]
             # repeat each the index of df (which is catalogue idx needed)
-            idxs = df.index.repeat(types[key]-df).to_list()
-            print(method, key, len(df), len(idxs), idxs[:3], idxs[-3:])
+            idxs = df.index.repeat(sds_size-df).to_list()
+
+            print(method, sds_name, 'num_miss_class', len(df), 'num_miss_sample', len(idxs), idxs[:3], idxs[-3:])
+            
             # parse parameters
-            pos, mag, fs, ms = parse_params(key)
+            pos, mag, fs, ms = parse_params(sds_name)
 
             # for class whose sample less than num_sample_per_class, generate the dataset til the number of samples reach the standard
             if len(idxs) > 1000:
                 len_td = 1000
                 num_round = len(idxs)//len_td
-                if num_round > num_thd//2:
-                    num_round = num_thd//2
-                    len_td = len(idxs)//num_round
             else:
                 len_td = len(idxs)
                 num_round = 1
@@ -905,12 +889,13 @@ def aggregate_nn_dataset(types: dict, meth_params: dict, use_preprocess: bool, d
                 if beg >= end:
                     continue
                 task = pool.submit(generate_nn_dataset, method, meth_params[method], 'supplementary', 0, idxs[beg: end], use_preprocess, pos, mag, fs, ms)
-                tasks[method][key].append(task)
-        
+                tasks[method][sds_name].append(task)
+    
+    # wait for all tasks to be done and merge the results
     wait_tasks(tasks, root_dirs, 'labels.csv', 'cata_idx')
     
     # aggregate the labels.csv in root directory
-    aggregate_root_dir(root_dirs)
+    aggr_dataset(root_dirs)
 
 
 def aggregate_test_samples(num_vec: int, meth_params: dict, test_params: dict, use_preprocess: bool=False, num_thd: int = 20):
@@ -918,7 +903,7 @@ def aggregate_test_samples(num_vec: int, meth_params: dict, test_params: dict, u
     Aggregate the test samples. 
     Args:
         num_vec: number of vectors used to generate test samples
-        meth_params: the parameters methods, possible methods include:
+        meth_params: the parameters of methods, possible methods include:
             'rac_1dcnn':
                 r: the radius of the region in degrees
                 arr_Nr: the array of ring number
@@ -947,10 +932,10 @@ def aggregate_test_samples(num_vec: int, meth_params: dict, test_params: dict, u
                 Ns: the number of sectors
         test_params: the parameters for the test sample generation
             'default': whether to generate test samples for default case
-            'sigma_pos': the standard deviation of the positional noise
-            'sigma_mag': the standard deviation of the magnitude noise
-            'num_fs': the number of false stars
-            'num_ms': the number of missing stars
+            'pos': the standard deviation of the positional noise
+            'mag': the standard deviation of the magnitude noise
+            'fs': the number of false stars
+            'ms': the number of missing stars
         use_preprocess: whether to avoid the error resulted from get_star_centroids function in preprocess stage
         num_thd: the number of threads to generate the test samples
     '''
@@ -1007,10 +992,42 @@ def aggregate_test_samples(num_vec: int, meth_params: dict, test_params: dict, u
 
 
 if __name__ == '__main__':
-    # generate_pm_database({'grid': [0.3, 6, 50], 'lpt': [0.3, 6, 50, 50]})
-    # aggregate_nn_dataset({'train': 40, 'validate': 1, 'test': 1}, {'rac_1dcnn': [6, [20, 50, 80], 16, 3]}, use_preprocess=False, default_ratio=0.7, sigma_pos=[3], sigma_mag=[0.5], num_fs=[3], fine_grained=True, num_thd=20)
-    # aggregate_nn_dataset({'train': 40, 'validate': 1, 'test': 1}, {'lpt_nn': [6, 50]}, use_preprocess=False, default_ratio=0.7, sigma_pos=[3], sigma_mag=[0.5], num_fs=[3], fine_grained=True, num_thd=20)
-    # aggregate_test_samples(300,  {'grid': [0.3, 6, 50]}, use_preprocess=False, sigma_pos=[1, 2], sigma_mag=[0.2, 0.4], num_fs=[3, 5], default=True)
-    aggregate_test_samples(300,  {'lpt_nn': [6, 50], 'rac_1dcnn': [6, [20, 50, 80], 16, 3]}, {'default': True, 'pos': [1, 2], 'mag': [0.2, 0.4], 'fs': [3, 5]}, use_preprocess=False)
+    # generate_pm_database({
+    #     'grid': [0.3, 6, 50], 
+    #     'lpt': [0.3, 6, 50, 50]
+    # })
+    aggregate_nn_dataset(
+        {
+            'train': 10, 
+            # 'validate': 1,
+            # 'test': 1
+        },
+        {
+            # 'lpt_nn': [6, 50],
+            'rac_1dcnn': [6, [20, 50, 80], 16, 3]
+        }, 
+        {
+            'pos': [1],
+            'mag': [0.2],
+        },
+        use_preprocess=False, 
+        default_ratio=0.7, 
+        fine_grained=True, 
+        num_thd=20
+    )
+    # aggregate_test_samples(
+    #     300, 
+    #     {
+    #         'grid': [0.3, 6, 50],
+    #         # 'lpt': [0.3, 6, 50, 50],
+    #         # 'lpt_nn': [6, 50],
+    #         # 'rac_1dcnn': [6, [20, 50, 80], 16, 3]
+    #     }, 
+    #     {
+    #         'pos': [1, 2], 
+    #         'mag': [0.2, 0.4], 
+    #         'fs': [3, 5]
+    #     },
+    #     use_preprocess=False
+    # )
     
-    # aggregate_test_samples(300,  {'rac_1dcnn': [6, [10, 20, 30], 16, 3], 'lpt_nn': [6, 20]}, use_preprocess=False, sigma_mag=[0.05, 0.1, 0.15, 0.2, 0.25], sigma_pos=[0.5, 1, 1.5, 2, 2.5], default=False)
