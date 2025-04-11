@@ -132,9 +132,13 @@ class DAADataset(Dataset):
         return idx, torch.from_numpy(features).float(), cata_idx
 
 
-def create_dataset(method, root_dir, gen_cfg):
+def create_dataset(method: str, root_dir: str, gen_cfg: str):
     '''
-        
+        Create dataset based on the method
+    Args:
+        method: the method name
+        root_dir: the directory of the dataset
+        gen_cfg: the generator configuration
     '''
     method_mapping = {
         'rac_1dcnn': RACDataset,

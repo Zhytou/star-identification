@@ -6,9 +6,9 @@ from astropy.coordinates import SkyCoord
 from skimage.metrics import structural_similarity
 
 
-def convert_ra_dec(ra: float, dec: float):
+def convert_rade2deg(ra: float, dec: float):
     '''
-        Convert the RA and DEC from degree to timezone.
+        Convert the RA and DE from degree to timezone.
     Args:
         ra: the right ascension in degree
         dec: the declination in degree
