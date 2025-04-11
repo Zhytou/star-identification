@@ -130,3 +130,18 @@ class DAADataset(Dataset):
         cata_idx = self.label_df.loc[idx, 'cata_idx'].astype(int)
 
         return idx, torch.from_numpy(features).float(), cata_idx
+
+
+def create_dataset(method, root_dir, gen_cfg):
+    '''
+        
+    '''
+    method_mapping = {
+        'rac_1dcnn': RACDataset,
+        'daa_1dcnn': DAADataset,
+        'lpt_nn': LPTDataset
+    }
+    dataset_class = method_mapping.get(method)
+    if dataset_class is None:
+        raise ValueError(f"Invalid method: {method}")
+    return dataset_class(root_dir, gen_cfg)

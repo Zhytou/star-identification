@@ -8,9 +8,10 @@ import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
+from concurrent.futures import ThreadPoolExecutor
 
-from generate import database_path, test_path, sim_cfg, num_class, gcatalogue
-from dataset import LPTDataset, RACDataset, DAADataset
+from generate import sim_cfg, num_class, gcatalogue, gcata_name
+from dataset import create_dataset
 from models import RAC_CNN, DAA_CNN, FNN
 
 
@@ -286,106 +287,112 @@ def draw_results(res: dict, save: bool=False):
     plt.show()
 
 
-if __name__ == '__main__':
-    res = {}
+def do_test(meth_params: dict, test_params: dict, use_preprocess: bool=False, num_thd: int=20):
+    '''
+        Do test.
+    Args:
+        meth_params: the parameters for the test sample generation, possible methods include:
+        test_params: the parameters for the test sample generation
+    '''
+    # use thread pool
+    pool = ThreadPoolExecutor(max_workers=num_thd)
+    # tasks for later aggregation
+    tasks = {}
 
-    # conventional pattern match method accuracy
-    for method in ['grid']:  
-        res[method] = {}
-        for gen_cfg in os.listdir(os.path.join(test_path, method)):
+    # aggregate test params
+    test_names = []
+    for test_type in test_params:
+        if test_type == 'default':
+            test_names.append(test_type)
+        else:
+            test_names.extend(f'{test_type}{val}' for val in test_params[test_type])
+
+    # add each test task to the threadpool
+    for method in meth_params:
+        # generation config for each method
+        gen_cfg = f'{gcata_name}_{int(use_preprocess)}_'+'_'.join(map(str, meth_params[method]))
+
+        if method in ['grid', 'lpt']:
             # load the database
-            db = pd.read_csv(os.path.join(database_path, gen_cfg, f'{method}.csv'))
+            db = pd.read_csv(os.path.join('database', sim_cfg, gen_cfg, f'{method}.csv'))
             # average count of 1 in guide star pattern
             avg_cnt = np.sum(db.notna().values)/len(db)
             print(method, 'avg db pat cnt', avg_cnt)
-
-            # parse gen_cfg
+            # parse method parameters
             if method == 'grid':
-                Rp = int(gen_cfg.split('_')[-2])
-                L = int(gen_cfg.split('_')[-1])
+                _, Rp, L = meth_params[method]
                 size = (L, L)
                 T = avg_cnt/3
             else:
-                Rp = int(gen_cfg.split('_')[-3])
-                L1, L2 = gen_cfg.split('_')[-2:]
+                _, Rp, L1, L2 = meth_params[method]
                 size = (int(L1), int(L2))
                 T = avg_cnt/3.5
-
-            for s in os.listdir(os.path.join(test_path, method, gen_cfg)):
-                # use regex to parse test parameters
-                match = re.match('(pos|mag|fs)([0-9]+\.?[0-9]*)', s)
-                if match is None:
-                    name, x = 'default', 0
-                else:
-                    name, x = match.groups()
-                    x = float(x)
-                # if name != 'default':
-                #     continue
-                # calculate accuracy
-                df = pd.read_csv(os.path.join(test_path, method, gen_cfg, s, 'labels.csv'))
-                y = check_pm_accuracy(db, df, size, Rp=Rp, T=T, sim=0.8)
-                if name == 'default':
-                    res[method]['default'] = y
-                    continue
-                if name not in res[method].keys():
-                    res[method][name] = [(x, y)]
-                else:
-                    res[method][name].append((x, y))
-            
-    # nn model accuracy
-    for method in ['rac_1dcnn']:
-        res[method] = {}
-        batch_size = 100
-        # use gpu if available
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        for gen_cfg in os.listdir(os.path.join(test_path, method)):
-            # parse gen_cfg
+        elif method in ['rac_1dcnn', 'daa_1dcnn', 'lpt_nn']:
+            batch_size = 100
+            # use gpu if available
+            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        
             if method == 'rac_1dcnn':
-                arr_nr, num_sector, num_neighbor = gen_cfg.split('_')[-3:]
-                num_sector, num_neighbor = int(num_sector), int(num_neighbor)
-                arr_nr = list(map(int, arr_nr.strip('[]').split(', ')))
-                num_ring = sum(arr_nr)
-                best_model = RAC_CNN(num_ring, (num_neighbor, num_sector), num_class)
+                _, arr_nr, num_sector, num_neighbor = meth_params[method]
+                best_model = RAC_CNN(sum(arr_nr), (num_neighbor, num_sector), num_class)
             elif method == 'daa_1dcnn':
-                arr_n = list(map(int, gen_cfg.split('_')[-1].strip('[]').split(', ')))
-                num_feat = sum(arr_n) + 4
-                best_model = DAA_CNN((2, num_feat), num_class)
+                _, arr_n = meth_params[method]
+                best_model = DAA_CNN((2, sum(arr_n) + 4), num_class)
             elif method == 'lpt_nn':
-                num_dist = int(gen_cfg.split('_')[-1])
+                _, num_dist = meth_params[method]
                 best_model = FNN(num_dist, num_class)
-            else:
-                print('Invalid method')
-                continue
             # load best model
             best_model.load_state_dict(torch.load(os.path.join('model', sim_cfg, method, gen_cfg, 'best_model.pth')))
             best_model.to(device)
+        else:
+            print('Wrong Method!')
+            continue
 
-            path = os.path.join(test_path, method, gen_cfg)
-            for s in os.listdir(path):
-                # use regex to parse test parameters
-                match = re.match('(pos|mag|fs)([0-9]+\.?[0-9]*)', s)
-                if match is None:
-                    name, x = 'default', 0
-                else:
-                    name, x = match.groups()
-                    x = float(x)
-                # calculate accuracy
-                df = pd.read_csv(os.path.join(path, s, 'labels.csv'))
-                if method == 'rac_1dcnn':
-                    dataset = RACDataset(os.path.join(path, s), gen_cfg)
-                elif method == 'daa_1dcnn':
-                    dataset = DAADataset(os.path.join(path, s), gen_cfg)
-                elif method == 'lpt_nn':
-                    dataset = LPTDataset(os.path.join(path, s), gen_cfg)
+        tasks[method] = {}
+        for test_name in test_names:
+            # directory path storing the labels.csv for each test
+            test_dir = os.path.join('test', sim_cfg, method, gen_cfg, test_name)
+            df = pd.read_csv(os.path.join(test_dir, 'labels.csv'))
+
+            if method in ['grid', 'lpt']:
+                tasks[method][test_name] = pool.submit(check_pm_accuracy, db, df, size, Rp, T, 0.8)
+            else:
+                dataset = create_dataset(method, test_dir, gen_cfg)
                 loader = DataLoader(dataset, batch_size)
-                y = check_nn_accuracy(method, best_model, loader, df['img_id'], device=device)
-                # store the results
-                if name == 'default':
-                    res[method]['default'] = y
-                    continue
-                if name not in res[method].keys():
-                    res[method][name] = [(x, y)]
-                else:
-                    res[method][name].append((x, y))
+                tasks[method][test_name] = pool.submit(check_nn_accuracy, method, best_model, loader, df['img_id'], device=device)
     
+
+    # aggregate the results
+    res = {}
+    for method in tasks:
+        res[method] = {}
+        for test_name in tasks[method]:
+            # get the accuracy
+            y = tasks[method][test_name].result()
+
+            # use regex to parse test parameters
+            match = re.match('(pos|mag|fs)([0-9]+\.?[0-9]*)', test_name)
+            if match is None:
+                name, x = 'default', 0
+            else:
+                name, x = match.groups()
+                x = float(x)
+            
+            # store the results
+            if name == 'default':
+                res[method]['default'] = y
+                continue
+            if name not in res[method].keys():
+                res[method][name] = [(x, y)]
+            else:
+                res[method][name].append((x, y))
+
+    return res
+
+
+if __name__ == '__main__':
+    res = do_test(
+        {'rac_1dcnn': [6, [20, 50, 80], 16, 3]}, {'default': True, 'pos': [1, 2], 'mag': [0.2, 0.4], 'fs': [3, 5]}
+    )
+
     print(res)
