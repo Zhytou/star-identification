@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from generate import sim_cfg, num_class, gcatalogue, gcata_name
 from dataset import create_dataset
-from models import RAC_CNN, DAA_CNN, FNN
+from models import create_model
 
 
 def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int], T: float, Rp: float, sim: float=0.8):
@@ -287,7 +287,7 @@ def draw_results(res: dict, save: bool=False):
     plt.show()
 
 
-def do_test(meth_params: dict, test_params: dict, use_preprocess: bool=False, num_thd: int=20):
+def do_test(meth_params: dict, test_params: dict, num_thd: int=20):
     '''
         Do test.
     Args:
@@ -310,8 +310,8 @@ def do_test(meth_params: dict, test_params: dict, use_preprocess: bool=False, nu
     # add each test task to the threadpool
     for method in meth_params:
         # generation config for each method
-        gen_cfg = f'{gcata_name}_{int(use_preprocess)}_'+'_'.join(map(str, meth_params[method]))
-
+        gen_cfg = f'{gcata_name}_0_'+'_'.join(map(str, meth_params[method]))
+        print(gen_cfg)
         if method in ['grid', 'lpt']:
             # load the database
             db = pd.read_csv(os.path.join('database', sim_cfg, gen_cfg, f'{method}.csv'))
@@ -332,15 +332,8 @@ def do_test(meth_params: dict, test_params: dict, use_preprocess: bool=False, nu
             # use gpu if available
             device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         
-            if method == 'rac_1dcnn':
-                _, arr_nr, num_sector, num_neighbor = meth_params[method]
-                best_model = RAC_CNN(sum(arr_nr), (num_neighbor, num_sector), num_class)
-            elif method == 'daa_1dcnn':
-                _, arr_n = meth_params[method]
-                best_model = DAA_CNN((2, sum(arr_n) + 4), num_class)
-            elif method == 'lpt_nn':
-                _, num_dist = meth_params[method]
-                best_model = FNN(num_dist, num_class)
+            # initialize a default model
+            best_model = create_model(method, meth_params[method], num_class)
             # load best model
             best_model.load_state_dict(torch.load(os.path.join('model', sim_cfg, method, gen_cfg, 'best_model.pth')))
             best_model.to(device)
@@ -392,7 +385,10 @@ def do_test(meth_params: dict, test_params: dict, use_preprocess: bool=False, nu
 
 if __name__ == '__main__':
     res = do_test(
-        {'rac_1dcnn': [6, [20, 50, 80], 16, 3]}, {'default': True, 'pos': [1, 2], 'mag': [0.2, 0.4], 'fs': [3, 5]}
+        # {'lpt_nn': [6, 50]},
+        {'rac_1dcnn': [6, [20, 50, 80], 16, 3]},
+        # {'grid': [0.3, 6, 50]},
+        {'default': True, 'pos': [1, 2], 'mag': [0.2, 0.4], 'fs': [3, 5]}
     )
 
     print(res)
