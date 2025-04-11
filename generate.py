@@ -14,14 +14,14 @@ from extract import get_star_centroids
 # simulation configuration
 h = w = 512
 fov = 15
-limit_mag = 7
+limit_mag = 6.5
 f = 5.8e-3
 pixel = 2*tan(radians(fov/2))*f/h
 
 sim_cfg = f'{h}_{w}_{fov}_{limit_mag}'
 
 # guide star catalogue for pattern match database and nn dataset generation
-gcata_path = 'catalogue/sao5.6_d0.2.csv'
+gcata_path = 'catalogue/sao5.5_d0.2.csv'
 # use for generation config
 gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
 # guide star catalogue
@@ -30,7 +30,7 @@ gcatalogue = pd.read_csv(gcata_path, usecols= ["Star ID", "Ra", "De", "Magnitude
 # number of reference star
 num_class = len(gcatalogue)
 
-# minimum number of stars for smaple and pattern generation
+# minimum number of stars in the region for pattern generation
 min_num_star = 7
 
 # define the path to store the database and pattern as well as dataset
@@ -39,11 +39,11 @@ test_path = f'test/{sim_cfg}'
 dataset_path = f'dataset/{sim_cfg}'
 
 
-def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thread: int = 10):
+def generate_pm_database(meth_params: dict, use_preprocess: bool = False, num_thd: int = 10):
     '''
         Generate the pattern database for the given star catalogue.
     Args:
-        gen_params: the parameters for the test sample generation
+        meth_params: the parameters for the test sample generation
             'grid': grid algorithm
                 rb: the radius of buffer region in degrees
                 rp: the radius of pattern region in degrees
@@ -143,14 +143,14 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
         return database
 
     # use thread pool to generate the database
-    pool = ThreadPoolExecutor(max_workers=num_thread)
+    pool = ThreadPoolExecutor(max_workers=num_thd)
     tasks = defaultdict(list)
 
     # iterate the methods
-    for method in gen_params.keys():
+    for method in meth_params.keys():
         if method == 'grid':
             # parse parameters: buffer radius, pattern radius and grid length
-            rb, rp, Lg = gen_params[method]
+            rb, rp, Lg = meth_params[method]
             # radius in pixels
             Rb, Rp = tan(radians(rb))*f/pixel, tan(radians(rp))*f/pixel
             # pattern matrix size
@@ -158,7 +158,7 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
             path = f'{database_path}/{gcata_name}_{int(use_preprocess)}_{rb}_{rp}_{Lg}'
         elif method == 'lpt':
             # parse parameters: buffer radius, pattern radius, number of distance bins and number of theta bins
-            rb, rp, Nd, Nt = gen_params[method]
+            rb, rp, Nd, Nt = meth_params[method]
             # radius in pixels
             Rb, Rp = tan(radians(rb))*f/pixel, tan(radians(rp))*f/pixel
             # pattern matrix size
@@ -169,7 +169,7 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
             return
         
         # number of round used for this method
-        num_round = num_thread//len(gen_params)
+        num_round = num_thd//len(meth_params)
         len_td = len(gcatalogue)//num_round
         # add task
         for i in range(num_round):
@@ -203,7 +203,7 @@ def generate_pm_database(gen_params: dict, use_preprocess: bool = False, num_thr
         df.to_csv(f'{path}/{method}.csv', index=False)
 
 
-def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, idxs: list, use_preprocess: bool, sigma_pos: float, sigma_mag: float, num_fs: int, num_ms: int):
+def generate_nn_dataset(method: str, meth_params: list, mode: str, num_vec: int, idxs: list, use_preprocess: bool, sigma_pos: float, sigma_mag: float, num_fs: int, num_ms: int):
     '''
         Generate radial and cyclic features dataset for NN model using the given star catalogue.
     Args:
@@ -211,7 +211,7 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
             'rac_1dcnn': the 1st proposed algorithm
             'daa_1dcnn': the 2nd proposed algorithm
             'lpt_nn': log-polar transform based NN algorithm
-        gen_params:
+        meth_params:
             'rac_1dcnn':
                 r: the radius of the region in degrees
                 arr_Nr: the array of ring number
@@ -261,7 +261,7 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
         if use_preprocess:
             coords = np.array(get_star_centroids(img))
         
-        if len(coords) < 4:
+        if len(coords) < min_num_star:
             continue
 
         # generate a unique img id for later accuracy calculation
@@ -295,7 +295,7 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
             }
             if method == 'rac_1dcnn':
                 # parse the parameters:
-                r, arr_Nr, Ns, Nn = gen_params
+                r, arr_Nr, Ns, Nn = meth_params
                 # calculate the radius in pixels
                 R = tan(radians(r))*f/pixel
                 if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
@@ -331,7 +331,7 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
                 labels.append(label)
             elif method == 'daa_1dcnn':
                 # parse the parameters:
-                r, arr_N = gen_params
+                r, arr_N = meth_params
                 # calculate the radius in pixels
                 R = tan(radians(r))*f/pixel
                 if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
@@ -365,7 +365,7 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
                 labels.append(label)
             elif method == 'lpt_nn':
                 # parse the parameters:
-                r, Nd= gen_params
+                r, Nd= meth_params
                 # calculate the radius in pixels
                 R = tan(radians(r))*f/pixel
                 if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
@@ -383,12 +383,12 @@ def generate_nn_dataset(method: str, gen_params: list, mode: str, num_vec: int, 
     return pd.DataFrame(labels)
 
 
-def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool, sigma_pos: float=0, sigma_mag: float=0, num_fs: int=0, num_ms: int=0):
+def generate_test_samples(num_vec: int, meth_params: dict, use_preprocess: bool, sigma_pos: float=0, sigma_mag: float=0, num_fs: int=0, num_ms: int=0, max_num_samp: int=20):
     '''
         Generate pattern match test case.
     Args:
         num_vec: the number of vectors to be generated
-        gen_params: the parameters for the test sample generation
+        meth_params: the parameters for the test sample generation
             'rac_1dcnn':
                 r: the radius of the region in degrees
                 arr_Nr: the array of ring number
@@ -419,6 +419,8 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool, 
         sigma_mag: the standard deviation of the magnitude noise
         num_fs: the number of false stars
         num_ms: the number of missing stars
+        max_num_samp: the maximum number of samples for each test image
+            In other words, we can use the top num_samp brightest to construct pattern at most.
     Returns:
         dict: method->dataframe
     '''
@@ -433,30 +435,27 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool, 
     # generate the star image
     for ra, de in zip(ras, des):
         img, stars = create_star_image(ra, de, 0, h=h, w=w, fov=fov, limit_mag=limit_mag, sigma_pos=sigma_pos, sigma_mag=sigma_mag, num_fs=num_fs, num_ms=num_ms, coords_only=not use_preprocess)
-        # get star coordinates
+        # get star ids
         ids = stars[:, 0]
-        coords = stars[:, 1:3]
 
+        # two few guide stars to identify
+        if len(np.intersect1d(ids, gcatalogue['Star ID'].to_numpy())) <= min_num_star:
+            continue
+    
         # get the centroids of the stars in the image
         if use_preprocess:
-            stars = np.array(get_star_centroids(img))
+            coords = np.array(get_star_centroids(img))
+        else:
+            coords = stars[:, 1:3]
 
-        # too few stars for quest algorithm to identify satellite attitude
-        if len(stars) < min_num_star:
-            continue
-        
         # generate a unique img id for later accuracy calculation
         img_id = uuid.uuid1()
-
         # distances = np.linalg.norm(stars[:,None,:] - stars[None,:,:], axis=-1)
         distances = cdist(coords, coords, 'euclidean')
         angles = np.arctan2(coords[:, 1] - coords[:, 1][:, None], coords[:, 0] - coords[:, 0][:, None])
-        # choose a guide star as the reference star
-        for star_id, coord, ds, ags in zip(ids, coords, distances, angles):
-            # check if false star or not in guide star catalogue
-            if star_id == -1 or star_id not in gcatalogue['Star ID'].values:
-                continue
-
+        # choose top max_num_samp brightest star as the reference star
+        n = min(len(ids), max_num_samp+1)
+        for star_id, coord, ds, ags in zip(ids[:n], coords[:n, :], distances[:n, :], angles[:n, :]):
             # coords and angles are both sorted by distance with accending order
             cs, ags = coords[np.argsort(ds)], ags[np.argsort(ds)]
             ds = np.sort(ds)
@@ -468,17 +467,20 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool, 
             if len(cs) < min_num_star:
                 continue
             
-            methods = list(gen_params.keys())
+            methods = list(meth_params.keys())
             for method in methods:
                 if method == 'rac_1dcnn':
                     # parse the parameters
-                    r, arr_Nr, Ns, Nn = gen_params[method]
+                    r, arr_Nr, Ns, Nn = meth_params[method]
                     # radius in pixels
                     R = tan(radians(r))*f/pixel
-                    if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
-                        continue
+                    # if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
+                    #     continue
                     # get catalogue index of the guide star
-                    cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
+                    if star_id not in gcatalogue['Star ID'].to_numpy():
+                        cata_idx = -1
+                    else:
+                        cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
                     pattern = {
                         'star_id': star_id,
                         'cata_idx': cata_idx,
@@ -516,7 +518,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool, 
                     patterns[method].append(pattern)
                 elif method == 'daa_1dcnn':
                     # parse the parameters
-                    r, arr_N = gen_params[method]
+                    r, arr_N = meth_params[method]
                     # radius in pixels
                     R = tan(radians(r))*f/pixel
                     if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
@@ -558,13 +560,16 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool, 
                     patterns[method].append(pattern)
                 elif method == 'lpt_nn':
                     # parse the parameters
-                    r, Nd = gen_params[method]
+                    r, Nd = meth_params[method]
                     # radius in pixels
                     R = tan(radians(r))*f/pixel
-                    if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
-                        continue
-                    # get catalogue index of the guide star
-                    cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
+                    # if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
+                    #     continue
+                    
+                    if star_id not in gcatalogue['Star ID'].to_numpy():
+                        cata_idx = -1
+                    else:
+                        cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
                     pattern = {
                         'star_id': star_id,
                         'cata_idx': cata_idx,
@@ -578,11 +583,9 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool, 
                     patterns[method].append(pattern)
                 elif method == 'grid':
                     # parse the parameters: buffer radius, pattern radius and grid length
-                    rb, rp, Lg = gen_params[method]
+                    rb, rp, Lg = meth_params[method]
                     # radius in pixels
                     Rb, Rp = tan(radians(rb))*f/pixel, tan(radians(rp))*f/pixel
-                    if coord[0] < Rp/2 or coord[0] > h-Rp/2 or coord[1] < Rp/2 or coord[1] > w-Rp/2:
-                        continue
                     # exclude stars outside the region
                     excl_cs, excl_ags = cs[(ds >= Rb) & (ds <= Rp)], ags[(ds >= Rb) & (ds <= Rp)]
                     if len(excl_cs) < min_num_star:
@@ -605,7 +608,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool, 
                     })
                 elif method == 'lpt':
                     # parse parameters: buffer radius, pattern radius, number of distance bins and number of theta bins
-                    rb, rp, Nd, Nt = gen_params[method]
+                    rb, rp, Nd, Nt = meth_params[method]
                     # radius in pixels
                     Rb, Rp = tan(radians(rb))*f/pixel, tan(radians(rp))*f/pixel
                     # exclude stars outside the region
@@ -628,7 +631,7 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool, 
                     })
                 elif method == 'rac':
                     # parse the parameters: buffer radius, radial radius, cyclic radius, number of rings
-                    rb, rr, rc, N = gen_params[method]
+                    rb, rr, rc, N = meth_params[method]
                     # radius in pixels
                     Rb, Rr, Rc = tan(radians(rb))*f/pixel, tan(radians(rr))*f/pixel, tan(radians(rc))*f/pixel
 
@@ -667,12 +670,12 @@ def generate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool, 
     return patterns
 
 
-def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, default_ratio: float, sigma_pos: list=[], sigma_mag: list=[], num_fs: list=[], num_ms: list=[], num_thread: int=40, fine_grained: bool=False):
+def aggregate_nn_dataset(types: dict, meth_params: dict, use_preprocess: bool, default_ratio: float, sigma_pos: list=[], sigma_mag: list=[], num_fs: list=[], num_ms: list=[], num_thd: int=40, fine_grained: bool=False):
     '''
         Aggregate the dataset. Firstly, the number of samples for each class is counted. Then, roughly generate classes with too few samples using generate_nn_dataset function's 'random' mode. Lastly, the rest are finely generated to ensure that the number of samples in each class in the entire dataset reaches the standard.
     Args:
         types: key->the types of the dataset, values->the minumin number of samples for each class
-        gen_params: the parameters for the test sample generation
+        meth_params: the parameters for the nn method
             'rac_1dcnn': 
                 rp: the radius of the pattern region in degrees
                 arr_Nr: the array of ring number
@@ -690,7 +693,7 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
         sigma_mag: the standard deviation of the magnitude noise
         num_fs: the number of false stars
         num_ms: the number of missing stars
-        num_thread: the number of threads to generate the dataset
+        num_thd: the number of threads to generate the dataset
     '''
 
     def wait_tasks(tasks: dict, root_dirs: dict, file_name: str, col_name: str=None):
@@ -776,7 +779,7 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
                     df.to_csv(os.path.join(root_dirs[method], name, 'labels.csv'), index=False)
 
     # use thread pool
-    pool = ThreadPoolExecutor(max_workers=num_thread)
+    pool = ThreadPoolExecutor(max_workers=num_thd)
     
     # generate config for each sub dataset
     num_noised_dataset = len(sigma_pos)+len(sigma_mag)+len(num_fs)+len(num_ms)
@@ -805,18 +808,18 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
     tasks = {}
     # the root directory for each method to store the dataset
     root_dirs = {}
-    for method in gen_params:
+    for method in meth_params:
         if method == 'rac_1dcnn':
             # parse parameters: radius, number of rings, number of sectors, number of neighbors
-            r, arr_Nr, Ns, Nn = gen_params[method]
+            r, arr_Nr, Ns, Nn = meth_params[method]
             # generate config
             gen_cfg = f'{gcata_name}_{int(use_preprocess)}_{r}_{arr_Nr}_{Ns}_{Nn}'
         elif method == 'daa_1dcnn':
-            r, arr_N = gen_params[method]
+            r, arr_N = meth_params[method]
             # generate config
             gen_cfg = f'{gcata_name}_{int(use_preprocess)}_{r}_{arr_N}'
         elif method == 'lpt_nn':
-            r, Nd = gen_params[method]
+            r, Nd = meth_params[method]
             # generate config
             gen_cfg = f'{gcata_name}_{int(use_preprocess)}_{r}_{Nd}'
         else:
@@ -855,11 +858,11 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
             pos, mag, fs, ms = parse_params(key)
 
             # roughly generate the samples for each class        
-            num_round = min(num_thread//4, int(avg_num), int((1-pct)*len(gcatalogue)))
+            num_round = min(num_thd//4, int(avg_num), int((1-pct)*len(gcatalogue)))
             num_vec = 1000
             print('random generate round: ', num_round)
             for _ in range(num_round):
-                task = pool.submit(generate_nn_dataset, method, gen_params[method], 'random', num_vec, [], use_preprocess, pos, mag, fs, ms)
+                task = pool.submit(generate_nn_dataset, method, meth_params[method], 'random', num_vec, [], use_preprocess, pos, mag, fs, ms)
                 tasks[method][key].append(task)
 
     # wait for all tasks to be done and merge the results
@@ -871,7 +874,7 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
 
     tasks = {}
     # fine generation
-    for method in gen_params:
+    for method in meth_params:
         tasks[method] = defaultdict(list)
         for key in types.keys():
             df = pd.read_csv(os.path.join(root_dirs[method], key, 'labels.csv'))
@@ -891,8 +894,8 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
             if len(idxs) > 1000:
                 len_td = 1000
                 num_round = len(idxs)//len_td
-                if num_round > num_thread//2:
-                    num_round = num_thread//2
+                if num_round > num_thd//2:
+                    num_round = num_thd//2
                     len_td = len(idxs)//num_round
             else:
                 len_td = len(idxs)
@@ -901,7 +904,7 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
                 beg, end = i*len_td, min((i+1)*len_td, len(idxs))
                 if beg >= end:
                     continue
-                task = pool.submit(generate_nn_dataset, method, gen_params[method], 'supplementary', 0, idxs[beg: end], use_preprocess, pos, mag, fs, ms)
+                task = pool.submit(generate_nn_dataset, method, meth_params[method], 'supplementary', 0, idxs[beg: end], use_preprocess, pos, mag, fs, ms)
                 tasks[method][key].append(task)
         
     wait_tasks(tasks, root_dirs, 'labels.csv', 'cata_idx')
@@ -910,18 +913,18 @@ def aggregate_nn_dataset(types: dict, gen_params: dict, use_preprocess: bool, de
     aggregate_root_dir(root_dirs)
 
 
-def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool=False, default: bool=True, sigma_pos: list=[], sigma_mag: list=[], num_fs: list=[], num_ms: list=[], num_thread: int = 20):
+def aggregate_test_samples(num_vec: int, meth_params: dict, test_params: dict, use_preprocess: bool=False, num_thd: int = 20):
     '''
     Aggregate the test samples. 
     Args:
         num_vec: number of vectors used to generate test samples
-        gen_params: the parameters for the test sample generation, possible methods include:
+        meth_params: the parameters methods, possible methods include:
             'rac_1dcnn':
                 r: the radius of the region in degrees
                 arr_Nr: the array of ring number
                 Ns: the number of sectors
                 Nn: the minimum number of neighbor stars in the region
-            'rac_1dcnn':
+            'daa_1dcnn':
                 r: the radius of the region in degrees
                 arr_N: the array of histgram bins number for discretizing the feature sequences
             'lpt_nn': 
@@ -942,47 +945,44 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool=
                 rc: the radius of pattern region for cyclic features in degrees
                 Nr: the number of rings
                 Ns: the number of sectors
+        test_params: the parameters for the test sample generation
+            'default': whether to generate test samples for default case
+            'sigma_pos': the standard deviation of the positional noise
+            'sigma_mag': the standard deviation of the magnitude noise
+            'num_fs': the number of false stars
+            'num_ms': the number of missing stars
         use_preprocess: whether to avoid the error resulted from get_star_centroids function in preprocess stage
-        default: whether to generate test samples for default case
-        num_thread: the number of threads to generate the test samples
+        num_thd: the number of threads to generate the test samples
     '''
 
     # use thread pool
-    pool = ThreadPoolExecutor(max_workers=num_thread)
+    pool = ThreadPoolExecutor(max_workers=num_thd)
     # tasks for later aggregation
     tasks = defaultdict(list)
 
-    if num_vec*len(gen_params) < 500:
-        num_thread = 1
-    elif num_vec*len(gen_params)//num_thread > 500:
-        num_vec = num_vec//num_thread
-    else:
-        num_thread = num_vec*len(gen_params)//500
-        num_vec = 500//len(gen_params)
-
-    for _ in range(num_thread):
-        task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess)
-        if default:
-            tasks['default'].append(task)
-        for pos in sigma_pos:
-            task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, sigma_pos=pos)
-            tasks[f'pos{pos}'].append(task)
-        for mag in sigma_mag:
-            task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, sigma_mag=mag)
-            tasks[f'mag{mag}'].append(task)
-        for fs in num_fs:
-            task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, num_fs=fs)
-            tasks[f'fs{fs}'].append(task)
-        for ms in num_ms:
-            task = pool.submit(generate_test_samples, num_vec, gen_params, use_preprocess, num_ms=ms)
-            tasks[f'ms{ms}'].append(task)
+    # add tasks to the thread pool
+    if test_params.get('default', False):
+        task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess)
+        tasks['default'].append(task)
+    for pos in test_params.get('pos', []):
+        task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, sigma_pos=pos)
+        tasks[f'pos{pos}'].append(task)
+    for mag in test_params.get('mag', []):
+        task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, sigma_mag=mag)
+        tasks[f'mag{mag}'].append(task)
+    for fs in test_params.get('fs', []):
+        task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, num_fs=fs)
+        tasks[f'fs{fs}'].append(task)
+    for ms in test_params.get('ms', []):
+        task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, num_ms=ms)
+        tasks[f'ms{ms}'].append(task)
 
     # get the async task result and store the returned dataframe
     for key in tasks.keys():
         for task in tasks[key]:
             df_dict = task.result()
             for method in df_dict.keys():
-                gen_cfg = f'{gcata_name}_{int(use_preprocess)}_'+'_'.join(map(str, gen_params[method]))
+                gen_cfg = f'{gcata_name}_{int(use_preprocess)}_'+'_'.join(map(str, meth_params[method]))
                 path = os.path.join(test_path, method, gen_cfg, key)
                 if not os.path.exists(path):
                     os.makedirs(path)
@@ -990,8 +990,8 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool=
                 df.to_csv(os.path.join(path, str(uuid.uuid1())), index=False)
 
     # aggregate all the test patterns
-    for method in gen_params:
-        gen_cfg = f'{gcata_name}_{int(use_preprocess)}_'+'_'.join(map(str, gen_params[method]))
+    for method in meth_params:
+        gen_cfg = f'{gcata_name}_{int(use_preprocess)}_'+'_'.join(map(str, meth_params[method]))
         path = os.path.join(test_path, method, gen_cfg)
         if not os.path.exists(path):
             continue
@@ -1007,10 +1007,10 @@ def aggregate_test_samples(num_vec: int, gen_params: dict, use_preprocess: bool=
 
 
 if __name__ == '__main__':
-    # generate_pm_database({'grid': [0.3, 6, 50]})
-    # generate_pm_database({'lpt': [0, 6, 50, 50]})
-    # aggregate_nn_dataset({'train': 1, 'validate': 1, 'test': 1}, {'rac_1dcnn': [6, [20, 50, 80], 16, 3]}, use_preprocess=False, default_ratio=0.7, sigma_pos=[3], sigma_mag=[0.2], num_fs=[3], fine_grained=False, num_thread=20)
-    # aggregate_nn_dataset({'train': 1, 'validate': 1, 'test': 1}, {'lpt_nn': [6, 50]}, use_preprocess=False, default_ratio=0.7, sigma_pos=[3], sigma_mag=[0.2], num_fs=[3], fine_grained=True, num_thread=20)
-    aggregate_test_samples(100,  {'grid': [0.3, 6, 50]}, use_preprocess=False, sigma_pos=[2], default=True)
-    # aggregate_test_samples(300,  {'lpt': [0, 6, 50, 50]}, use_preprocess=False, sigma_mag=[0.05, 0.1, 0.15, 0.2, 0.25], sigma_pos=[0.5, 1, 1.5, 2, 2.5], default=False)
+    # generate_pm_database({'grid': [0.3, 6, 50], 'lpt': [0.3, 6, 50, 50]})
+    # aggregate_nn_dataset({'train': 40, 'validate': 1, 'test': 1}, {'rac_1dcnn': [6, [20, 50, 80], 16, 3]}, use_preprocess=False, default_ratio=0.7, sigma_pos=[3], sigma_mag=[0.5], num_fs=[3], fine_grained=True, num_thd=20)
+    # aggregate_nn_dataset({'train': 40, 'validate': 1, 'test': 1}, {'lpt_nn': [6, 50]}, use_preprocess=False, default_ratio=0.7, sigma_pos=[3], sigma_mag=[0.5], num_fs=[3], fine_grained=True, num_thd=20)
+    # aggregate_test_samples(300,  {'grid': [0.3, 6, 50]}, use_preprocess=False, sigma_pos=[1, 2], sigma_mag=[0.2, 0.4], num_fs=[3, 5], default=True)
+    aggregate_test_samples(300,  {'lpt_nn': [6, 50], 'rac_1dcnn': [6, [20, 50, 80], 16, 3]}, {'default': True, 'pos': [1, 2], 'mag': [0.2, 0.4], 'fs': [3, 5]}, use_preprocess=False)
+    
     # aggregate_test_samples(300,  {'rac_1dcnn': [6, [10, 20, 30], 16, 3], 'lpt_nn': [6, 20]}, use_preprocess=False, sigma_mag=[0.05, 0.1, 0.15, 0.2, 0.25], sigma_pos=[0.5, 1, 1.5, 2, 2.5], default=False)
