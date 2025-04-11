@@ -1,5 +1,7 @@
 import os
 import re
+import time
+import json
 import numpy as np
 import pandas as pd
 import torch
@@ -12,7 +14,7 @@ from dataset import LPTDataset, RACDataset, DAADataset
 from models import RAC_CNN, DAA_CNN, FNN
 
 
-def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int], T: int, Rp: float, sim: float=0.8):
+def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int], T: float, Rp: float, sim: float=0.8):
     '''
         Evaluate the pattern match method's accuracy on the provided patterns. The accuracy is calculated based on the method's ability to correctly identify the closest pattern in the database.
     Args:
@@ -108,7 +110,7 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
             scores = cal_match_score(db, pat)
             
             # max score guide star id
-            ids = gstar_ids[scores==scores.max()].values
+            ids = gstar_ids[np.logical_and(scores==scores.max(), scores>=T)].values
             if len(ids) == 1 and ids[0] == id:
                 matched_ids.append(id)
                 continue
@@ -120,14 +122,14 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
 
         # count of correctly identified patterns in the image
         cnt = len(matched_ids)
-        if cnt < 3:
+        if cnt < 3 and cnt > 0:
             # use the identified patterns and fov restriction to exclude spurious matches
             filtered_ids = filter_star_in_fov(gcatalogue, matched_ids, Rp)
-            # print(len(filtered_ids), filtered_ids)
+            # print('filtered ids:', len(filtered_ids), 'potential ids:', len(potential_ids))
             for ids in potential_ids:
                 common_ids = np.intersect1d(filtered_ids, ids)
-                # print(len(common_ids), common_ids)
-                if len(common_ids) >= 1:
+                print('before', len(ids), 'after', len(common_ids))
+                if len(common_ids) == 1:
                     cnt += 1
                 if cnt >= 3:
                     break
@@ -144,7 +146,7 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
     # calculate the accuracy
     df = df['img_id'].value_counts()
     tot = df[df >= 4].count()
-    # print('total:', tot, len(df))
+    print('total:', tot, len(df))
     acc = round(np.sum(res)/tot*100.0, 2)
 
     return acc
@@ -200,6 +202,90 @@ def check_nn_accuracy(method: str, model: nn.Module, loader: DataLoader, img_ids
     return acc
 
 
+def draw_results(res: dict, save: bool=False):
+    '''
+        Draw the results of the accuracy.
+    Args:
+        res: the results to be drawn
+            {
+                'method1': {
+                    'test_type1': [(x, y), ...],
+                    'test_type2': [(x, y), ...],
+                },
+                'method2': {
+                    'test_type1': [(x, y), ...],
+                    'test_type2': [(x, y), ...],
+                },
+            }
+    '''
+
+    # method abbreviation to full name
+    abbr_2_name = {
+        'rac_1dcnn': 'Proposed algorithm',
+        'lpt_nn': 'Polestar NN algorithm',
+        'grid': 'Grid algorithm',
+        'lpt': 'Log-polar transform algorithm'
+    }
+    # test type abbreviation to full name
+    type_2_name = {
+        'pos': 'Position noise',
+        'mag': 'Magnitude noise',
+        'fs': 'Number of false stars',
+        'ms': 'Number of missing stars'
+    }
+
+    # set timestamp as sub directory
+    subdir = time.time()
+    if not os.path.exists(f'res/chapter4/{subdir}'):
+        os.makedirs(f'res/chapter4/{subdir}')
+    # save the results
+    if save:
+        with open(f'res/chapter4/{subdir}/res.txt', 'w') as f:
+            json.dump(res, f, indent=4)
+
+    # change abbreviation to full name
+    for mabbr, mname in abbr_2_name.items():
+        if mabbr not in res:
+            continue
+        res[mname] = res.pop(mabbr)
+        for tabbr, tname in type_2_name.items():
+                if tabbr not in res[mname]:
+                    continue
+                res[mname][tname] = res[mname].pop(tabbr)
+
+    # draw the results
+    for name in type_2_name.values():
+        fig, ax = plt.subplots()
+        ax.set_xlabel(name)
+        ax.set_ylabel('Accuracy (%)')
+
+        ymin = 90
+        for method in abbr_2_name.values():
+            if method not in res or name not in res[method]:
+                continue
+
+            y = res[method]['default']
+            res[method][name].sort(key=lambda x: x[0])
+            xs, ys = zip(*res[method][name])
+            xs, ys = [0]+list(xs), [y]+list(ys)
+            
+            # avoid 100% accuracy
+            # ys = [y-0.1 for y in ys]
+            
+            # calculate the minimum y value
+            if ymin > ys[-1]:
+                ymin = np.floor(ys[-1]/10)*10
+
+            # plot the results
+            ax.plot(xs, ys, label=method, marker='o')
+            ax.set_xlim(min(xs), max(xs))
+            ax.set_ylim(ymin, 100)
+            ax.legend()
+
+        fig.savefig(f'res/chapter4/{subdir}/{name}.png')
+    plt.show()
+
+
 if __name__ == '__main__':
     res = {}
 
@@ -207,18 +293,23 @@ if __name__ == '__main__':
     for method in ['grid']:  
         res[method] = {}
         for gen_cfg in os.listdir(os.path.join(test_path, method)):
-            # parse gen_cfg
+            # load the database
+            db = pd.read_csv(os.path.join(database_path, gen_cfg, f'{method}.csv'))
+            # average count of 1 in guide star pattern
+            avg_cnt = np.sum(db.notna().values)/len(db)
+            print(method, 'avg db pat cnt', avg_cnt)
 
+            # parse gen_cfg
             if method == 'grid':
                 Rp = int(gen_cfg.split('_')[-2])
                 L = int(gen_cfg.split('_')[-1])
                 size = (L, L)
+                T = avg_cnt/3
             else:
                 Rp = int(gen_cfg.split('_')[-3])
                 L1, L2 = gen_cfg.split('_')[-2:]
                 size = (int(L1), int(L2))
-            db = pd.read_csv(os.path.join(database_path, gen_cfg, f'{method}.csv'))
-            print(method, 'avg db pat cnt', np.sum(db.notna().values)/len(db))
+                T = avg_cnt/3.5
 
             for s in os.listdir(os.path.join(test_path, method, gen_cfg)):
                 # use regex to parse test parameters
@@ -228,9 +319,11 @@ if __name__ == '__main__':
                 else:
                     name, x = match.groups()
                     x = float(x)
+                # if name != 'default':
+                #     continue
                 # calculate accuracy
                 df = pd.read_csv(os.path.join(test_path, method, gen_cfg, s, 'labels.csv'))
-                y = check_pm_accuracy(db, df, size, Rp=Rp, T=15, sim=0.8)
+                y = check_pm_accuracy(db, df, size, Rp=Rp, T=T, sim=0.8)
                 if name == 'default':
                     res[method]['default'] = y
                     continue
@@ -240,7 +333,7 @@ if __name__ == '__main__':
                     res[method][name].append((x, y))
             
     # nn model accuracy
-    for method in []:
+    for method in ['rac_1dcnn']:
         res[method] = {}
         batch_size = 100
         # use gpu if available
