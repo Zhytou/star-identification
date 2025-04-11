@@ -4,7 +4,7 @@ import pandas as pd
 
 
 # read star catalogue
-cata_path = 'catalogue/sao7.0.csv'
+cata_path = 'catalogue/sao.csv'
 catalogue = pd.read_csv(cata_path, usecols=['Star ID', 'Ra', 'De', 'Magnitude'])
 
 
@@ -125,7 +125,7 @@ def draw_star(position: tuple[float, float], magnitude: float, img: np.ndarray, 
     return img
 
 
-def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0, sigma_mag: float=0, num_fs: int=0, num_ms: int=0, background: float=np.inf, limit_mag: float=7.0,  fov: float=10, h: int=512, w: int=512, f: float=58e-3, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False) -> tuple[np.ndarray, list]:
+def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0, background: float=np.inf, limit_mag: float=7.0,  fov: float=10, h: int=512, w: int=512, f: float=58e-3, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False) -> tuple[np.ndarray, list]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
@@ -218,7 +218,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
                 ds = np.linalg.norm(pos-(row, col), axis=1)
                 if ds.min() < min_d:
                     continue
-            mag = 5.0 + np.random.rand()
+            mag = 3.0 + np.random.normal(0, 2)
             false_stars.append([-1, row, col, 0, 0, mag])
         return np.array(false_stars)
 
@@ -296,6 +296,9 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
         false_stars = gen_false_stars(num_fs, stars_within_fov[['Row', 'Col']].to_numpy())
         stars = np.concatenate((stars, false_stars), axis=0)
     
+    # sort stars by magnitude
+    stars = stars[np.argsort(stars[:, -1])]
+
     if not coords_only:
         for i in range(len(stars)):
             # draw (row, col) mag
@@ -306,3 +309,14 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
 
     return img, stars
     
+
+if __name__ == '__main__':
+    h=w=512
+    ids, ras, des = catalogue['Star ID'], catalogue['Ra'], catalogue['De']
+
+    for id, ra, de in zip(ids, ras, des):
+        print(f"Star ID: {id}, RA: {ra}, DE: {de}")
+        _, stars = create_star_image(ra, de, 0, w=w, h=h, coords_only=True)
+
+        idx = np.where(stars[:, 0] == id)[0][0]
+        print(f"Star ID: {stars[idx][0]}, Row: {stars[idx][1]}, Col: {stars[idx][2]}, RA: {stars[idx][3]}, DE: {stars[idx][4]}, Mag: {stars[idx][5]}")

@@ -281,11 +281,7 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mag_limit: float=6
     catalogue['Z'] = np.sin(catalogue['De'])
 
     positions = catalogue[['X', 'Y', 'Z']].to_numpy()
-    norms = np.linalg.norm(positions, axis=1)
-    inner_products = positions @ positions.T
-    # do rounding because some cos_theta are slightly greater than 1 or less than -1 as a result of precision problem
-    cos_theta = np.round(inner_products/(norms*norms[:, None]), 6)
-    angular_distance = np.arccos(cos_theta)
+    angular_distance = np.arccos(np.dot(positions, positions.T))
 
     # get small angular distance star pairs
     idx1, idx2 = np.nonzero(angular_distance < radians(agd_limit))
@@ -384,7 +380,7 @@ if __name__ == '__main__':
     fov = 15
     f = 58e-3
     num_limit = 20
-    mag_limit = 5.6
+    mag_limit = 5.5
     agd_limit = 0.2
 
     raw_file = 'raw_catalogue/sao_j2000.dat'
@@ -407,13 +403,13 @@ if __name__ == '__main__':
     draw_star_distribution(f_df)
     # draw_probability_versus_star_num_within_fov(f_df, fov=fov, f=f, num_vec=3000)
     
-    if os.path.exists(uniform_filtered_file):
-        uf_df = pd.read_csv(uniform_filtered_file)
-    else:
-        uf_df = filter_catalogue(df, num_limit, mag_limit, agd_limit, fov=fov, f=f).reset_index(drop=True)
-        uf_df.to_csv(uniform_filtered_file)
+    # if os.path.exists(uniform_filtered_file):
+    #     uf_df = pd.read_csv(uniform_filtered_file)
+    # else:
+    #     uf_df = filter_catalogue(df, num_limit, mag_limit, agd_limit, fov=fov, f=f).reset_index(drop=True)
+    #     uf_df.to_csv(uniform_filtered_file)
     
-    draw_star_distribution(uf_df)
+    # draw_star_distribution(uf_df)
     # draw_probability_versus_star_num_within_fov(uf_df, fov=fov, f=f, num_vec=3000)
 
     # fig1, axs1 = plt.subplots(1, 2)
