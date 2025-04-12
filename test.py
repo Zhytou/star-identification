@@ -9,6 +9,7 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from concurrent.futures import ThreadPoolExecutor
+from sklearn.cluster import DBSCAN
 
 from generate import sim_cfg, num_class, gcatalogue, gcata_name
 from dataset import create_dataset
@@ -19,11 +20,11 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
     '''
         Evaluate the pattern match method's accuracy on the provided patterns. The accuracy is calculated based on the method's ability to correctly identify the closest pattern in the database.
     Args:
-        db: the database of patterns
-        df: the patterns to be tested
+        db: the database of guide star patterns
+        df: the patterns of each test star image
         size: the size of 0-1 pattern matrix
         T: the score threshold for pattern matching
-        Rp: the radius in rad for pattern region
+        Rp: the radius in degree for pattern region
         sim: the similarity coefficient for soft match, if similarity == 0, then use hard match
     Returns:
         the accuracy of the pattern match method
@@ -65,76 +66,94 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
 
         return scores
     
-    def filter_star_in_fov(cata: pd.DataFrame, ids: list, r: float):
+    def cluster_by_angle(cata: pd.DataFrame, ids: np.ndarray, r: float):
         '''
-            Filter the stars in the field of view.
+            Cluster the stars by angle distance.
         Args:
             cata: the catalogue of stars
             ids: the ids of the star(center of circle fov)
             r: the radius in rad
         Returns:
-            the ids of star in the fov
+            the ids of stars in the biggest cluster
         '''
-        cata['X'] = np.cos(cata['De']) * np.cos(cata['Ra'])
-        cata['Y'] = np.cos(cata['De']) * np.sin(cata['Ra'])
-        cata['Z'] = np.sin(cata['De'])
-        pos1 = cata[['X', 'Y', 'Z']].to_numpy()
 
-        stars = cata[cata['Star ID'].isin(ids)]
-        pos2 = stars[['X', 'Y', 'Z']].to_numpy()
-        
-        angles = np.dot(pos1, pos2.T)
-        filter_mask = np.all(angles > np.cos(np.radians(r)), axis=1)
+        stars = cata[cata['Star ID'].isin(ids)].copy()        
+        # get the coordinates of stars
+        stars['X'] = np.cos(stars['De']) * np.cos(stars['Ra'])
+        stars['Y'] = np.cos(stars['De']) * np.sin(stars['Ra'])
+        stars['Z'] = np.sin(stars['De'])
 
-        return cata.loc[filter_mask, 'Star ID'].to_numpy()
+        # calculate angle distance between stars
+        coords = stars[['X', 'Y', 'Z']].to_numpy()
+        norms = np.linalg.norm(coords, axis=1, keepdims=True)
+        angles = np.arccos(np.clip(np.dot(coords, coords.T)/np.dot(norms, norms.T), -1.0, 1.0))
 
-    def identify_img_pats(img_pats: pd.DataFrame):
+        # angle distance threshold
+        eps = np.radians(r)
+
+        # cluster labels
+        labels = DBSCAN(
+            eps=eps, 
+            min_samples=1,
+            metric='precomputed',
+        ).fit_predict(angles)
+
+        # get the label of biggest cluster
+        ulabels, cnts = np.unique(labels, return_counts=True)
+        # verify failure, if cannot determine the biggest cluster
+        if np.sum(np.max(cnts) == cnts) > 1:
+            return np.full_like(ids, -1)
+
+        # get the ids of stars not in the biggest cluster
+        max_label = ulabels[np.argmax(cnts)]
+        suprious_ids = stars['Star ID'][labels != max_label]
+
+        # set all the suprious ids to -1
+        mask = np.isin(ids, suprious_ids)
+        ids[mask] = -1
+
+        return ids
+
+    def identify_image(img_df: pd.DataFrame):
         '''
-            Identify the patterns in the image.
+            Identify the image by its patterns.
         Args:
-            img_pats: the patterns in the image
-            db: the database of patterns
+            img_df: the patterns and corresponding star ids of each test image
         Returns:
             True if the image patterns are identified, False otherwise
         '''
-        n = len(img_pats)
+        n = len(img_df)
         if n < 4:
             return False
         
-        # match results
-        matched_ids, potential_ids = [], []
-        for _, val in img_pats.iterrows():
-            # pattern and id for each star in the image
-            pat, id = np.array(val['pattern'].split(' '), dtype=int), val['id']
+        # real star ids
+        real_ids = img_df['id'].to_numpy()
+
+        #! the identification step
+        # estimated star ids
+        esti_ids = []
+        for pat in img_df['pattern']:
+            # convert str pat into numpy array
+            pat = np.array(pat.split(' '), dtype=int)
             
             # calculate the match scores
             scores = cal_match_score(db, pat)
             
             # max score guide star id
-            ids = gstar_ids[np.logical_and(scores==scores.max(), scores>=T)].values
-            if len(ids) == 1 and ids[0] == id:
-                matched_ids.append(id)
-                continue
+            ids = gstar_ids[np.logical_and(scores==scores.max(), scores>=T)].to_numpy()
+            if len(ids) == 1:
+                esti_ids.append(ids[0])
+            else:
+                esti_ids.append(-1)
 
-            # other possible guide star ids
-            ids = gstar_ids[scores>=T].values
-            if id in ids:
-                potential_ids.append(ids)
+        #! the verification step
+        # do fov restriction by clustering and take the biggest cluster as final result
+        esti_ids = cluster_by_angle(gcatalogue, np.array(esti_ids), Rp)
 
-        # count of correctly identified patterns in the image
-        cnt = len(matched_ids)
-        if cnt < 3 and cnt > 0:
-            # use the identified patterns and fov restriction to exclude spurious matches
-            filtered_ids = filter_star_in_fov(gcatalogue, matched_ids, Rp)
-            # print('filtered ids:', len(filtered_ids), 'potential ids:', len(potential_ids))
-            for ids in potential_ids:
-                common_ids = np.intersect1d(filtered_ids, ids)
-                print('before', len(ids), 'after', len(common_ids))
-                if len(common_ids) == 1:
-                    cnt += 1
-                if cnt >= 3:
-                    break
-   
+        #! the check step
+        # count the successfully identified stars
+        cnt = np.sum(esti_ids == real_ids)
+
         return cnt >= 3
 
     # rename the columns of the database
@@ -142,12 +161,11 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
     # get the id of guide stars in database
     gstar_ids = db.apply(compress_db_row, axis=1)
     # get identify results
-    res = df.groupby('img_id', as_index=True).apply(identify_img_pats, include_groups=False)
+    res = df.groupby('img_id', as_index=True).apply(identify_image, include_groups=False)
 
     # calculate the accuracy
     df = df['img_id'].value_counts()
     tot = df[df >= 4].count()
-    print('total:', tot, len(df))
     acc = round(np.sum(res)/tot*100.0, 2)
 
     return acc
@@ -232,7 +250,7 @@ def draw_results(res: dict, save: bool=False):
         'pos': 'Position noise',
         'mag': 'Magnitude noise',
         'fs': 'Number of false stars',
-        'ms': 'Number of missing stars'
+        # 'ms': 'Number of missing stars'
     }
 
     # set timestamp as sub directory
@@ -385,10 +403,17 @@ def do_test(meth_params: dict, test_params: dict, num_thd: int=20):
 
 if __name__ == '__main__':
     res = do_test(
-        # {'lpt_nn': [6, 50]},
-        {'rac_1dcnn': [6, [20, 50, 80], 16, 3]},
-        # {'grid': [0.3, 6, 50]},
-        {'default': True, 'pos': [1, 2], 'mag': [0.2, 0.4], 'fs': [3, 5]}
+        {
+            # 'lpt_nn': [6, 50],
+            # 'rac_1dcnn': [6, [20, 50, 80], 16, 3],
+            'grid': [0.3, 6, 50],
+        },
+        {
+            'pos': [1, 2],
+            'mag': [0.2, 0.4],
+            'fs': [3, 5]
+        }
     )
 
     print(res)
+    # draw_results(res)
