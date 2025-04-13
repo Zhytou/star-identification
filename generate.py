@@ -21,7 +21,7 @@ pixel = 2*tan(radians(fov/2))*f/h
 sim_cfg = f'{h}_{w}_{fov}_{limit_mag}'
 
 # guide star catalogue for pattern match database and nn dataset generation
-gcata_path = 'catalogue/sao5.0_d0.2.csv'
+gcata_path = 'catalogue/sao5.5_d0.2.csv'
 # use for generation config
 gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
 # guide star catalogue
@@ -587,8 +587,18 @@ def generate_test_samples(num_vec: int, meth_params: dict, use_preprocess: bool,
                     # radius in pixels
                     Rb, Rp = tan(radians(rb))*f/pixel, tan(radians(rp))*f/pixel
                     # exclude stars outside the region
-                    excl_cs, excl_ags = cs[(ds >= Rb) & (ds <= Rp)], ags[(ds >= Rb) & (ds <= Rp)]
+                    excl_cs, excl_ds, excl_ags = cs[(ds >= Rb) & (ds <= Rp)], ds[(ds >= Rb) & (ds <= Rp)], ags[(ds >= Rb) & (ds <= Rp)]
                     if len(excl_cs) < min_num_star:
+                        continue
+                    # the distance to border of the nearest star
+                    # !careful, the excl_cs is the relative coordinates
+                    border_d = min(
+                        excl_cs[0][0]+coord[0], excl_cs[0][1]+coord[1],
+                        h-excl_cs[0][0]-coord[0], w-excl_cs[0][1]-coord[1],
+                    )
+                    # skip if the nearest star is close to border
+                    if excl_ds[0] > border_d:
+                        # print(excl_ds[0], border_d)
                         continue
                     M = np.array([[np.cos(excl_ags[0]), -np.sin(excl_ags[0])], [np.sin(excl_ags[0]), np.cos(excl_ags[0])]])
                     # rotate stars
@@ -789,7 +799,10 @@ def aggregate_nn_dataset(ds_sizes: dict, meth_params: dict, noise_params: dict, 
 
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thd)
-    
+
+    if ds_sizes == {}:
+        return
+
     # calculate the noised ratio
     n = sum(len(value) for value in noise_params.values())
     noised_ratio = (1 - default_ratio) / n
@@ -940,15 +953,15 @@ def aggregate_test_samples(num_vec: int, meth_params: dict, test_params: dict, u
         num_thd: the number of threads to generate the test samples
     '''
 
+    if num_vec == 0:
+        return
+
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thd)
     # tasks for later aggregation
     tasks = defaultdict(list)
 
     # add tasks to the thread pool
-    if test_params.get('default', False):
-        task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess)
-        tasks['default'].append(task)
     for pos in test_params.get('pos', []):
         task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, sigma_pos=pos)
         tasks[f'pos{pos}'].append(task)
@@ -956,23 +969,24 @@ def aggregate_test_samples(num_vec: int, meth_params: dict, test_params: dict, u
         task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, sigma_mag=mag)
         tasks[f'mag{mag}'].append(task)
     for fs in test_params.get('fs', []):
-        task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, num_fs=fs)
+        task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, sigma_pos=0.3, sigma_mag=0.1, num_fs=fs)
         tasks[f'fs{fs}'].append(task)
     for ms in test_params.get('ms', []):
         task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, num_ms=ms)
         tasks[f'ms{ms}'].append(task)
 
-    # get the async task result and store the returned dataframe
-    for key in tasks.keys():
-        for task in tasks[key]:
+    # sub test name
+    for st_name in tasks:
+        for task in tasks[st_name]:
+            # get the async task result and store the returned dataframe
             df_dict = task.result()
-            for method in df_dict.keys():
+            for method in df_dict:
                 gen_cfg = f'{gcata_name}_{int(use_preprocess)}_'+'_'.join(map(str, meth_params[method]))
-                path = os.path.join(test_path, method, gen_cfg, key)
-                if not os.path.exists(path):
-                    os.makedirs(path)
+                st_path = os.path.join(test_path, method, gen_cfg, st_name)
+                if not os.path.exists(st_path):
+                    os.makedirs(st_path)
                 df = df_dict[method]
-                df.to_csv(os.path.join(path, str(uuid.uuid1())), index=False)
+                df.to_csv(os.path.join(st_path, str(uuid.uuid1())), index=False)
 
     # aggregate all the test patterns
     for method in meth_params:
@@ -992,42 +1006,42 @@ def aggregate_test_samples(num_vec: int, meth_params: dict, test_params: dict, u
 
 
 if __name__ == '__main__':
-    # generate_pm_database({
-    #     'grid': [0.3, 6, 50], 
-    #     'lpt': [0.3, 6, 50, 50]
-    # })
+    generate_pm_database({
+        'grid': [0.3, 6, 50], 
+        'lpt': [0.3, 6, 50, 50]
+    })
     aggregate_nn_dataset(
         {
-            'train': 10, 
+            # 'train': 10, 
             # 'validate': 1,
             # 'test': 1
         },
         {
             # 'lpt_nn': [6, 50],
-            'rac_1dcnn': [6, [20, 50, 80], 16, 3]
+            # 'rac_1dcnn': [6, [20, 50, 80], 16, 3]
         }, 
         {
-            'pos': [1],
-            'mag': [0.2],
+            # 'pos': [1],
+            # 'mag': [0.2],
         },
         use_preprocess=False, 
         default_ratio=0.7, 
         fine_grained=True, 
         num_thd=20
     )
-    # aggregate_test_samples(
-    #     300, 
-    #     {
-    #         'grid': [0.3, 6, 50],
-    #         # 'lpt': [0.3, 6, 50, 50],
-    #         # 'lpt_nn': [6, 50],
-    #         # 'rac_1dcnn': [6, [20, 50, 80], 16, 3]
-    #     }, 
-    #     {
-    #         'pos': [1, 2], 
-    #         'mag': [0.2, 0.4], 
-    #         'fs': [3, 5]
-    #     },
-    #     use_preprocess=False
-    # )
+    aggregate_test_samples(
+        0, 
+        {
+            'grid': [0.3, 6, 50],
+            'lpt': [0.3, 6, 50, 50],
+            # 'lpt_nn': [6, 50],
+            # 'rac_1dcnn': [6, [20, 50, 80], 16, 3]
+        }, 
+        {
+            'pos': [1, 2], 
+            'mag': [0.2, 0.4], 
+            'fs': [0, 5, 10]
+        },
+        use_preprocess=False
+    )
     
