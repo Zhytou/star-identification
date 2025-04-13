@@ -261,38 +261,33 @@ def connected_components_label(img: np.ndarray, connectivity: int=4) -> tuple[in
         return 0, np.array([])
 
     # first pass
-    for i in range(h):
-        for j in range(w):
-            if img[i, j] == 0:
+    xs, ys = np.nonzero(img)
+    for x, y in zip(xs, ys):
+        connected_labels = []
+        for dx, dy in ds:
+            if x + dx < 0 or x + dx >= h or y + dy < 0 or y + dy >= w:
                 continue
-            connected_labels = []
-            for dx, dy in ds:
-                if i + dx < 0 or i + dx >= h or j + dy < 0 or j + dy >= w:
-                    continue
-                if label_img[i + dx, j + dy] > 0:
-                    connected_labels.append(label_img[i + dx, j + dy])
-            
-            if len(connected_labels) == 0:
-                label_cnt += 1
-                label_img[i, j] = label_cnt
-                label_tab.add(label_cnt)
-            else:
-                min_label = min(connected_labels)
-                for label in connected_labels:
-                    label_tab.union(min_label, label)
-                label_img[i, j] = min_label
+            if label_img[x + dx, y + dy] > 0:
+                connected_labels.append(label_img[x + dx, y + dy])
+        
+        if len(connected_labels) == 0:
+            label_cnt += 1
+            label_img[x, y] = label_cnt
+            label_tab.add(label_cnt)
+        else:
+            min_label = min(connected_labels)
+            for label in connected_labels:
+                label_tab.union(min_label, label)
+            label_img[x, y] = min_label
     
-    label_num = 0
-
     # second pass
-    for i in range(h):
-        for j in range(w):
-            if label_img[i, j] == 0:
-                continue
-            label_img[i, j] = label_tab.find(label_img[i, j])
-            label_num = max(label_num, label_img[i, j])
-
-    return label_num, label_img
+    xs, ys = np.nonzero(label_img)
+    labels = label_img[xs, ys]
+    for xi, yi, labeli in zip(xs, ys, labels):
+        # find the root label
+        label_img[xi, yi,] = label_tab.find(labeli)
+    
+    return label_img
 
 
 def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
@@ -304,13 +299,19 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
     label_cnt = 0
     label_tab = UnionSet()
 
-    def gen_curr_run(start: int, end: int):
+    def gen_curr_run(row: int, start: int, end: int):
         '''
             Generate the current run.
+        Args:
+            row: the number of the row
+            start: the start column of the run
+            end: the end column of the run
+        Returns:
+            run: the run
         '''
         nonlocal label_cnt, label_tab
         run = {
-            'row': i,
+            'row': row,
             'start': start,
             'end': end,
             'label': -1
@@ -360,8 +361,7 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
         curr_runs = []
 
         # generate current row runs
-        start = -1
-        end = -1
+        start, end = -1, -1
         for j, val in enumerate(row):
             if val == 1:
                 if start == -1:
@@ -369,12 +369,12 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
                 end = j
             else:
                 if start != -1:
-                    curr_runs.append(gen_curr_run(start, end))    
+                    curr_runs.append(gen_curr_run(i, start, end))    
                     start = -1
                 end = -1
         
         if start != -1:
-            curr_runs.append(gen_curr_run(start, end))
+            curr_runs.append(gen_curr_run(i, start, end))
         prev_runs = curr_runs
         runs.extend(curr_runs)
 
@@ -446,16 +446,30 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
                 continue
             group_coords.append((rows, cols))
     elif method == 'CCL':
-        # label_num, label_img = connected_components_label(binary_img, connectivity)
-        label_num, label_img = cv2.connectedComponents(binary_img, connectivity=connectivity)
+        label_img = connected_components_label(binary_img, connectivity)
+        # _, label_img = cv2.connectedComponents(binary_img, connectivity=connectivity)
+        rows, cols = np.nonzero(label_img)
+        labels = label_img[rows, cols]
 
-        for label in range(1, label_num + 1):
+        # group the coordinates by label
+        label = 1
+        coords = []
+
+        for rowi, coli, labeli in zip(rows, cols, labels):
             # get the coords for each label
-            rows, cols = np.nonzero(label_img == label)
-            # two small to be a star
-            if len(rows) < pixel_limit and len(cols) < pixel_limit:
+            if labeli == label:
+                coords.append((rowi, coli))
                 continue
-            group_coords.append((rows, cols))
+            
+            # two small to be a star
+            if len(coords) >= pixel_limit:
+                group_coords.append(np.transpose(coords))
+                label = labeli
+                coords = []
+        
+        # last group
+        if len(coords) >= pixel_limit:
+            group_coords.append(np.transpose(coords))
     elif method == 'RLC':
         runs = run_length_code_label(binary_img, connectivity)
         
