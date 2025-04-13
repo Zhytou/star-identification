@@ -1,6 +1,7 @@
 import os
 import uuid
 import re
+import cv2
 import numpy as np
 import pandas as pd
 from math import radians, tan
@@ -21,7 +22,7 @@ pixel = 2*tan(radians(fov/2))*f/h
 sim_cfg = f'{h}_{w}_{fov}_{limit_mag}'
 
 # guide star catalogue for pattern match database and nn dataset generation
-gcata_path = 'catalogue/sao5.5_d0.2.csv'
+gcata_path = 'catalogue/sao5.0_d0.2.csv'
 # use for generation config
 gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
 # guide star catalogue
@@ -383,7 +384,182 @@ def generate_nn_dataset(method: str, meth_params: list, mode: str, num_vec: int,
     return pd.DataFrame(labels)
 
 
-def generate_test_samples(num_vec: int, meth_params: dict, use_preprocess: bool, sigma_pos: float=0, sigma_mag: float=0, num_fs: int=0, num_ms: int=0, max_num_samp: int=20):
+def generate_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: str=None, max_num_samp: int=20):
+    '''
+        Generate the pattern with the given star coordinates for one star image.
+    Args:
+        method: the method used to generate the pattern
+        meth_params: the parameters for the method
+        coords: the coordinates of the stars
+        ids: the ids of the stars
+        max_num_samp: the maximum number of stars to be used as reference star
+    Return:
+        patterns: the pattern generated
+    '''
+    # parse the parameters
+    patterns = defaultdict(list)
+
+    if len(coords) < min_num_star:
+        return patterns
+
+    # generate a unique img id for later accuracy calculation
+    img_id = str(uuid.uuid1()) if img_id is None else img_id
+    # distances = np.linalg.norm(stars[:,None,:] - stars[None,:,:], axis=-1)
+    distances = cdist(coords, coords, 'euclidean')
+    angles = np.arctan2(coords[:, 1] - coords[:, 1][:, None], coords[:, 0] - coords[:, 0][:, None])
+    
+    # choose top max_num_samp brightest star as the reference star
+    n = min(len(ids), max_num_samp+1)
+    for star_id, coord, ds, ags in zip(ids[:n], coords[:n, :], distances[:n, :], angles[:n, :]):
+        # coords and angles are both sorted by distance with accending order
+        cs, ags = coords[np.argsort(ds)], ags[np.argsort(ds)]
+        ds = np.sort(ds)
+        # remove the first element, which is reference star
+        assert coord[0] == cs[0][0] and coord[1] == cs[0][1] and ds[0] == 0 and ags[0] == 0
+        cs, ds, ags = cs[1:], ds[1:], ags[1:]
+        # calculate the relative coordinates
+        cs = cs-coord
+        if len(cs) < min_num_star:
+            # skip if not enough stars in the region
+            print('Not enough stars in the region!')
+            continue
+        
+        for method in meth_params:
+            if method == 'rac_1dcnn':
+                # parse the parameters
+                r, arr_Nr, Ns, Nn = meth_params[method]
+                # radius in pixels
+                R = tan(radians(r))*f/pixel
+                # if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
+                #     continue
+                # get catalogue index of the guide star
+                if star_id not in gcatalogue['Star ID'].to_numpy():
+                    cata_idx = -1
+                else:
+                    cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
+                pattern = {
+                    'star_id': star_id,
+                    'cata_idx': cata_idx,
+                    'img_id': img_id
+                }
+                
+                tot_Nr = 0
+                for Nr in arr_Nr:
+                    r_cnts, _ = np.histogram(ds, bins=Nr, range=(0, R))
+                    for i, rc in enumerate(r_cnts):
+                        i += tot_Nr
+                        pattern[f'ring{i}'] = rc
+                    tot_Nr += Nr
+                
+                # exlcude stars' angle out of region
+                excl_ags = ags[ds <= R]
+                # uses several neighbor stars as the starting angle to obtain the cyclic features
+                for i, ag in enumerate(excl_ags[:Nn]):
+                    # rotate stars
+                    rot_ags = excl_ags - ag
+                    # make sure all angles stay in [-pi, pi]
+                    rot_ags %= 2*np.pi
+                    rot_ags[rot_ags > np.pi] -= 2*np.pi
+                    rot_ags[rot_ags < -np.pi] += 2*np.pi
+                    # calculate sectore counts using histogram
+                    s_cnts, _ = np.histogram(rot_ags, bins=Ns, range=(-np.pi, np.pi))
+                    for j, sc in enumerate(s_cnts):
+                        pattern[f'n{i}_sector{j}'] = sc
+                # add trailing zero if there is not enough neighbors
+                if len(excl_ags) < Nn:
+                    for i in range(len(excl_ags), Nn):
+                        for j in range(Ns):
+                            pattern[f'n{i}_sector{j}'] = 0
+
+                patterns[method].append(pattern)
+            elif method == 'lpt_nn':
+                # parse the parameters
+                r, Nd = meth_params[method]
+                # radius in pixels
+                R = tan(radians(r))*f/pixel
+                # if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
+                #     continue
+                
+                if star_id not in gcatalogue['Star ID'].to_numpy():
+                    cata_idx = -1
+                else:
+                    cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
+                pattern = {
+                    'star_id': star_id,
+                    'cata_idx': cata_idx,
+                    'img_id': img_id
+                }
+                # count the number of stars in each distance bin
+                d_cnts, _ = np.histogram(ds, bins=Nd, range=(0, R))
+                # normalize d_cnts
+                for i, dc in enumerate(d_cnts):
+                    pattern[f'dist{i}'] = dc
+                patterns[method].append(pattern)
+            elif method == 'grid':
+                # parse the parameters: buffer radius, pattern radius and grid length
+                rb, rp, Lg = meth_params[method]
+                # radius in pixels
+                Rb, Rp = tan(radians(rb))*f/pixel, tan(radians(rp))*f/pixel
+                # exclude stars outside the region
+                excl_cs, excl_ds, excl_ags = cs[(ds >= Rb) & (ds <= Rp)], ds[(ds >= Rb) & (ds <= Rp)], ags[(ds >= Rb) & (ds <= Rp)]
+                if len(excl_cs) < min_num_star:
+                    continue
+                # the distance to border of the nearest star
+                # !careful, the excl_cs is the relative coordinates
+                border_d = min(
+                    excl_cs[0][0]+coord[0], excl_cs[0][1]+coord[1],
+                    h-excl_cs[0][0]-coord[0], w-excl_cs[0][1]-coord[1],
+                )
+                # skip if the nearest star is close to border
+                if excl_ds[0] > border_d:
+                    # print(excl_ds[0], border_d)
+                    continue
+                M = np.array([[np.cos(excl_ags[0]), -np.sin(excl_ags[0])], [np.sin(excl_ags[0]), np.cos(excl_ags[0])]])
+                # rotate stars
+                rot_cs = excl_cs @ M
+                assert round(rot_cs[0][1])==0
+                # calculate the pattern
+                grid = np.zeros((Lg, Lg), dtype=int)
+                for c in rot_cs:
+                    row = int((c[0]/Rp+1)/2*Lg)
+                    col = int((c[1]/Rp+1)/2*Lg)
+                    grid[row][col] = 1
+                # store the 1's position of grid
+                patterns[method].append({
+                    'img_id': img_id,
+                    'pattern': ' '.join(map(str, np.flatnonzero(grid))), 
+                    'id': star_id
+                })
+            elif method == 'lpt':
+                # parse parameters: buffer radius, pattern radius, number of distance bins and number of theta bins
+                rb, rp, Nd, Nt = meth_params[method]
+                # radius in pixels
+                Rb, Rp = tan(radians(rb))*f/pixel, tan(radians(rp))*f/pixel
+                # exclude stars outside the region
+                excl_ags, excl_ds = ags[(ds >= Rb) & (ds <= Rp)], ds[(ds >= Rb) & (ds <= Rp)]
+                if len(excl_ags) < min_num_star:
+                    continue
+                # log-polar transform is already done, where excl_ags is the thetas and excl_ds is the distances
+                # rotate the stars, so that the nearest star's theta is 0
+                rot_ags = excl_ags - excl_ags[0]
+                # make sure the thetas are in the range of [-pi, pi]
+                rot_ags %= 2*np.pi
+                rot_ags[rot_ags >= np.pi] -= 2*np.pi
+                rot_ags[rot_ags < -np.pi] += 2*np.pi
+                # generate the pattern
+                pattern = [int((d-Rb)/(Rp-Rb)*Nd)*Nt+int((t+np.pi)/(2*np.pi)*Nt) for d, t in zip(excl_ds, rot_ags)]
+                patterns[method].append({
+                    'img_id': img_id,
+                    'pattern': ' '.join(map(str, pattern)),
+                    'id': star_id
+                })
+            else:
+                print('Invalid method')
+    
+    return patterns
+
+
+def generate_test_samples(num_vec: int, meth_params: dict, use_preprocess: bool, sigma_pos: float=0, sigma_mag: float=0, num_fs: int=0, num_ms: int=0):
     '''
         Generate pattern match test case.
     Args:
@@ -448,235 +624,40 @@ def generate_test_samples(num_vec: int, meth_params: dict, use_preprocess: bool,
         else:
             coords = stars[:, 1:3]
 
-        # generate a unique img id for later accuracy calculation
-        img_id = uuid.uuid1()
-        # distances = np.linalg.norm(stars[:,None,:] - stars[None,:,:], axis=-1)
-        distances = cdist(coords, coords, 'euclidean')
-        angles = np.arctan2(coords[:, 1] - coords[:, 1][:, None], coords[:, 0] - coords[:, 0][:, None])
-        # choose top max_num_samp brightest star as the reference star
-        n = min(len(ids), max_num_samp+1)
-        for star_id, coord, ds, ags in zip(ids[:n], coords[:n, :], distances[:n, :], angles[:n, :]):
-            # coords and angles are both sorted by distance with accending order
-            cs, ags = coords[np.argsort(ds)], ags[np.argsort(ds)]
-            ds = np.sort(ds)
-            # remove the first element, which is reference star
-            assert coord[0] == cs[0][0] and coord[1] == cs[0][1] and ds[0] == 0 and ags[0] == 0
-            cs, ds, ags = cs[1:], ds[1:], ags[1:]
-            # calculate the relative coordinates
-            cs = cs-coord
-            if len(cs) < min_num_star:
-                continue
-            
-            methods = list(meth_params.keys())
-            for method in methods:
-                if method == 'rac_1dcnn':
-                    # parse the parameters
-                    r, arr_Nr, Ns, Nn = meth_params[method]
-                    # radius in pixels
-                    R = tan(radians(r))*f/pixel
-                    # if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
-                    #     continue
-                    # get catalogue index of the guide star
-                    if star_id not in gcatalogue['Star ID'].to_numpy():
-                        cata_idx = -1
-                    else:
-                        cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
-                    pattern = {
-                        'star_id': star_id,
-                        'cata_idx': cata_idx,
-                        'img_id': img_id
-                    }
-                    
-                    tot_Nr = 0
-                    for Nr in arr_Nr:
-                        r_cnts, _ = np.histogram(ds, bins=Nr, range=(0, R))
-                        for i, rc in enumerate(r_cnts):
-                            i += tot_Nr
-                            pattern[f'ring{i}'] = rc
-                        tot_Nr += Nr
-                    
-                    # exlcude stars' angle out of region
-                    excl_ags = ags[ds <= R]
-                    # uses several neighbor stars as the starting angle to obtain the cyclic features
-                    for i, ag in enumerate(excl_ags[:Nn]):
-                        # rotate stars
-                        rot_ags = excl_ags - ag
-                        # make sure all angles stay in [-pi, pi]
-                        rot_ags %= 2*np.pi
-                        rot_ags[rot_ags > np.pi] -= 2*np.pi
-                        rot_ags[rot_ags < -np.pi] += 2*np.pi
-                        # calculate sectore counts using histogram
-                        s_cnts, _ = np.histogram(rot_ags, bins=Ns, range=(-np.pi, np.pi))
-                        for j, sc in enumerate(s_cnts):
-                            pattern[f'n{i}_sector{j}'] = sc
-                    # add trailing zero if there is not enough neighbors
-                    if len(excl_ags) < Nn:
-                        for i in range(len(excl_ags), Nn):
-                            for j in range(Ns):
-                                pattern[f'n{i}_sector{j}'] = 0
-
-                    patterns[method].append(pattern)
-                elif method == 'daa_1dcnn':
-                    # parse the parameters
-                    r, arr_N = meth_params[method]
-                    # radius in pixels
-                    R = tan(radians(r))*f/pixel
-                    if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
-                        continue
-                    # get catalogue index of the guide star
-                    cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
-                    pattern = {
-                        'star_id': star_id,
-                        'cata_idx': cata_idx,
-                        'img_id': img_id
-                    }
-
-                    # exclude angles and distances outside the region
-                    excl_ds, excl_ags = ds[ds <= R], ags[ds <= R]
-                    # skip if only the reference star in the region
-                    if len(excl_ags) == 0:
-                        continue
-
-                    for i, seq in enumerate([excl_ds, excl_ags]):
-                        # discretize the feature sequence(distances and angles) with different levels
-                        tot_N = 0
-                        for N in arr_N:
-                            # density is set True
-                            if i == 0:
-                                pdf, _ = np.histogram(seq, bins=N, range=(0, R), density=True)
-                            elif i == 1:
-                                pdf, _ = np.histogram(seq, bins=N, range=(-np.pi, np.pi), density=True)
-                            else:
-                                print("wrong index")
-                            for j, p in enumerate(pdf):
-                                j += tot_N
-                                pattern[f's{i}_feat{j}'] = p
-                            tot_N += N
-                        # statistics of distances and angles
-                        stats = [np.min(seq), np.max(seq), np.median(seq), np.mean(seq)]
-                        for j, stat in enumerate(stats):
-                            j += tot_N
-                            pattern[f's{i}_feat{j}'] = stat
-                    patterns[method].append(pattern)
-                elif method == 'lpt_nn':
-                    # parse the parameters
-                    r, Nd = meth_params[method]
-                    # radius in pixels
-                    R = tan(radians(r))*f/pixel
-                    # if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
-                    #     continue
-                    
-                    if star_id not in gcatalogue['Star ID'].to_numpy():
-                        cata_idx = -1
-                    else:
-                        cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
-                    pattern = {
-                        'star_id': star_id,
-                        'cata_idx': cata_idx,
-                        'img_id': img_id
-                    }
-                    # count the number of stars in each distance bin
-                    d_cnts, _ = np.histogram(ds, bins=Nd, range=(0, R))
-                    # normalize d_cnts
-                    for i, dc in enumerate(d_cnts):
-                        pattern[f'dist{i}'] = dc
-                    patterns[method].append(pattern)
-                elif method == 'grid':
-                    # parse the parameters: buffer radius, pattern radius and grid length
-                    rb, rp, Lg = meth_params[method]
-                    # radius in pixels
-                    Rb, Rp = tan(radians(rb))*f/pixel, tan(radians(rp))*f/pixel
-                    # exclude stars outside the region
-                    excl_cs, excl_ds, excl_ags = cs[(ds >= Rb) & (ds <= Rp)], ds[(ds >= Rb) & (ds <= Rp)], ags[(ds >= Rb) & (ds <= Rp)]
-                    if len(excl_cs) < min_num_star:
-                        continue
-                    # the distance to border of the nearest star
-                    # !careful, the excl_cs is the relative coordinates
-                    border_d = min(
-                        excl_cs[0][0]+coord[0], excl_cs[0][1]+coord[1],
-                        h-excl_cs[0][0]-coord[0], w-excl_cs[0][1]-coord[1],
-                    )
-                    # skip if the nearest star is close to border
-                    if excl_ds[0] > border_d:
-                        # print(excl_ds[0], border_d)
-                        continue
-                    M = np.array([[np.cos(excl_ags[0]), -np.sin(excl_ags[0])], [np.sin(excl_ags[0]), np.cos(excl_ags[0])]])
-                    # rotate stars
-                    rot_cs = excl_cs @ M
-                    assert round(rot_cs[0][1])==0
-                    # calculate the pattern
-                    grid = np.zeros((Lg, Lg), dtype=int)
-                    for c in rot_cs:
-                        row = int((c[0]/Rp+1)/2*Lg)
-                        col = int((c[1]/Rp+1)/2*Lg)
-                        grid[row][col] = 1
-                    # store the 1's position of grid
-                    patterns[method].append({
-                        'img_id': img_id,
-                        'pattern': ' '.join(map(str, np.flatnonzero(grid))), 
-                        'id': star_id
-                    })
-                elif method == 'lpt':
-                    # parse parameters: buffer radius, pattern radius, number of distance bins and number of theta bins
-                    rb, rp, Nd, Nt = meth_params[method]
-                    # radius in pixels
-                    Rb, Rp = tan(radians(rb))*f/pixel, tan(radians(rp))*f/pixel
-                    # exclude stars outside the region
-                    excl_ags, excl_ds = ags[(ds >= Rb) & (ds <= Rp)], ds[(ds >= Rb) & (ds <= Rp)]
-                    if len(excl_ags) < min_num_star:
-                        continue
-                    # log-polar transform is already done, where excl_ags is the thetas and excl_ds is the distances
-                    # rotate the stars, so that the nearest star's theta is 0
-                    rot_ags = excl_ags - excl_ags[0]
-                    # make sure the thetas are in the range of [-pi, pi]
-                    rot_ags %= 2*np.pi
-                    rot_ags[rot_ags >= np.pi] -= 2*np.pi
-                    rot_ags[rot_ags < -np.pi] += 2*np.pi
-                    # generate the pattern
-                    pattern = [int((d-Rb)/(Rp-Rb)*Nd)*Nt+int((t+np.pi)/(2*np.pi)*Nt) for d, t in zip(excl_ds, rot_ags)]
-                    patterns[method].append({
-                        'img_id': img_id,
-                        'pattern': ' '.join(map(str, pattern)),
-                        'id': star_id
-                    })
-                elif method == 'rac':
-                    # parse the parameters: buffer radius, radial radius, cyclic radius, number of rings
-                    rb, rr, rc, N = meth_params[method]
-                    # radius in pixels
-                    Rb, Rr, Rc = tan(radians(rb))*f/pixel, tan(radians(rr))*f/pixel, tan(radians(rc))*f/pixel
-
-                    # count the number of stars in each ring
-                    r_cnts, _ = np.histogram(ds, bins=N, range=(Rb, Rr))
-                    # generate radial pattern 01 sequence
-                    r_pattern = np.zeros(N, dtype=int)
-                    r_pattern[np.nonzero(r_cnts)] = 1
-
-                    # exclude stars outside the region
-                    pm2_ags = ags[(ds >= Rb) & (ds <= Rc)]
-                    # rotate the stars until the nearest star lies on the horizontal axis
-                    if len(pm2_ags) < min_num_star:
-                        continue
-                    ags = ags-ags[0]
-                    # make sure angles are in the range of [-pi, pi]
-                    pm2_ags %= 2*np.pi
-                    pm2_ags[pm2_ags > np.pi] -= 2*np.pi
-                    pm2_ags[pm2_ags < -np.pi] += 2*np.pi
-                    s_cnts, _ = np.histogram(pm2_ags, bins=8, range=(-np.pi, np.pi))
-                    # generate cyclic pattern 01 sequence
-                    c_pattern = np.zeros(8, dtype=int)
-                    c_pattern[np.nonzero(s_cnts)] = 1
-
-                    patterns[method].append({
-                        'img_id': img_id,
-                        'pattern': ' '.join(map(str, np.concatenate([r_pattern, c_pattern]))),
-                        'id': star_id
-                    })                    
-                else:
-                    print('Invalid method')
+        # patterns for this image
+        img_patterns = generate_pattern(meth_params, coords, ids, img_id=None, max_num_samp=20)
+        for method in img_patterns:
+            patterns[method].extend(img_patterns[method])
 
     # convert the results into dataframe
-    for key in patterns:
-        patterns[key] = pd.DataFrame(patterns[key])
+    for method in patterns:
+        patterns[method] = pd.DataFrame(patterns[method])
+    return patterns
+
+
+def generate_realshot_test_samples(img_paths: list[str], meth_params: dict):
+    '''
+        Generate pattern match test case using real star image.
+    '''
+
+    patterns = defaultdict(list)
+    for img_path in img_paths:
+        # read the image
+        img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+        # get the centroids of the stars in the image
+        coords = np.array(get_star_centroids(img, 'MEDIAN', 'Liebe', 'CCL', 'CoG'))
+
+        # get star ids
+        ids = np.full(len(coords), -1)
+        # generate pattern
+        img_patterns = generate_pattern(meth_params, coords, ids, img_id=os.path.basename(img_path), max_num_samp=20)
+        for method in img_patterns:
+            patterns[method].extend(img_patterns[method])
+    
+    # convert the results into dataframe
+    for method in patterns:
+        patterns[method] = pd.DataFrame(patterns[method])
+
     return patterns
 
 
@@ -812,6 +793,8 @@ def aggregate_nn_dataset(ds_sizes: dict, meth_params: dict, noise_params: dict, 
     for name in ds_sizes:
         # get the total number of samples for each dataset
         num_samp = ds_sizes[name]
+        # set the size of each sub dataset
+        sds_sizes[f'{name}/default'] = max(1, int(num_samp*default_ratio))
         # noise type and noise intensity
         for ntype, nvals in noise_params.items():
             for nval in nvals:
@@ -848,13 +831,9 @@ def aggregate_nn_dataset(ds_sizes: dict, meth_params: dict, noise_params: dict, 
                 pct = 0
                 avg_num_mss = sds_size
 
-            # roughly generate the samples for each class        
-            num_round = min(num_thd//5, int(avg_num_mss))
-            print(method, sds_name, 'pct', pct, 'num_round', num_round)
-
-            # skip the rough generation
-            if pct > 0.95 or avg_num_mss < 1:
-                continue
+            # roughly generate the samples for each class, only if pct <= 0.95 and avg_num_mss > 1
+            num_round = min(num_thd//5, int(avg_num_mss)+1) if pct <= 0.95 or avg_num_mss > 1 else 0
+            print(method, sds_name, 'pct', pct, 'num_round', num_round)            
             
             # parse parameters
             pos, mag, fs, ms = parse_params(sds_name)
@@ -865,9 +844,9 @@ def aggregate_nn_dataset(ds_sizes: dict, meth_params: dict, noise_params: dict, 
 
     # wait for all tasks to be done and merge the results
     wait_tasks(tasks, root_dirs, 'labels.csv', 'cata_idx')
+    aggr_dataset(root_dirs)
 
     if not fine_grained:
-        aggr_dataset(root_dirs)
         return
 
     tasks = {}
@@ -969,7 +948,7 @@ def aggregate_test_samples(num_vec: int, meth_params: dict, test_params: dict, u
         task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, sigma_mag=mag)
         tasks[f'mag{mag}'].append(task)
     for fs in test_params.get('fs', []):
-        task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, sigma_pos=0.3, sigma_mag=0.1, num_fs=fs)
+        task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, num_fs=fs)
         tasks[f'fs{fs}'].append(task)
     for ms in test_params.get('ms', []):
         task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, num_ms=ms)
@@ -1012,35 +991,36 @@ if __name__ == '__main__':
     })
     aggregate_nn_dataset(
         {
-            # 'train': 10, 
+            'train': 10, 
             # 'validate': 1,
             # 'test': 1
         },
         {
             # 'lpt_nn': [6, 50],
-            # 'rac_1dcnn': [6, [20, 50, 80], 16, 3]
+            'rac_1dcnn': [6, [20, 50, 80], 16, 3]
         }, 
         {
-            # 'pos': [1],
-            # 'mag': [0.2],
+            'pos': [2],
+            'mag': [0.4],
+            'fs': [5]
         },
         use_preprocess=False, 
-        default_ratio=0.7, 
+        default_ratio=0.25, 
         fine_grained=True, 
         num_thd=20
     )
     aggregate_test_samples(
         0, 
         {
-            'grid': [0.3, 6, 50],
-            'lpt': [0.3, 6, 50, 50],
+            # 'grid': [0.3, 6, 50],
+            # 'lpt': [0.3, 6, 50, 50],
             # 'lpt_nn': [6, 50],
-            # 'rac_1dcnn': [6, [20, 50, 80], 16, 3]
+            'rac_1dcnn': [6, [20, 50, 80], 16, 3]
         }, 
         {
             'pos': [1, 2], 
             'mag': [0.2, 0.4], 
-            'fs': [0, 5, 10]
+            'fs': [1, 2, 3, 4]
         },
         use_preprocess=False
     )
