@@ -3,7 +3,7 @@ import bisect as bis
 import numpy as np
 import skimage.feature as skf
 import scipy.ndimage as nd
-
+from collections import defaultdict
 
 def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int=5, gray_diff: int=4) -> int:
     """
@@ -320,7 +320,7 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
         # use binary search to find the potential connected labels in the previous runs
         idx = bis.bisect_left(prev_runs, run['beg'], key=lambda x: x['end'])
         if idx < len(prev_runs):
-            for prev_run in prev_runs:
+            for prev_run in prev_runs[idx:]:
                 # no longer connected
                 if prev_run['beg'] > end:
                     break
@@ -346,6 +346,12 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
         
         return run
 
+    # get the coordinates of the non-zero elements
+    coords = np.transpose(np.nonzero(img))
+    rc_dict = defaultdict(list)
+    for row, col in coords:
+        rc_dict[row].append(col)
+    
     # row, beg, end, label
     runs = []
 
@@ -353,28 +359,22 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
     prev_runs = []
 
     # generate runs
-    for i, row in enumerate(img):
-        if len(prev_runs) > 0 and prev_runs[0]['row'] != i-1:
+    for row in rc_dict:
+        if len(prev_runs) > 0 and prev_runs[0]['row'] != row-1:
             prev_runs = []
         
         # current row runs
         curr_runs = []
 
         # generate current row runs
-        beg, end = -1, -1
-        for j, val in enumerate(row):
-            if val == 1:
-                if beg == -1:
-                    beg = j
-                end = j
-            else:
-                if beg != -1:
-                    curr_runs.append(gen_curr_run(i, beg, end))    
-                    beg = -1
-                end = -1
-        
-        if beg != -1:
-            curr_runs.append(gen_curr_run(i, beg, end))
+        beg_col = end_col = rc_dict[row][0]
+        for col in rc_dict[row]:
+            if col - end_col > 1:            
+                curr_runs.append(gen_curr_run(row, beg_col, end_col))    
+                beg_col = col
+            end_col = col
+                
+        curr_runs.append(gen_curr_run(row, beg_col, end_col))
         prev_runs = curr_runs
         runs.extend(curr_runs)
 
