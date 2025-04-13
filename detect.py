@@ -299,12 +299,12 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
     label_cnt = 0
     label_tab = UnionSet()
 
-    def gen_curr_run(row: int, start: int, end: int):
+    def gen_curr_run(row: int, beg: int, end: int):
         '''
             Generate the current run.
         Args:
             row: the number of the row
-            start: the start column of the run
+            beg: the begin column of the run
             end: the end column of the run
         Returns:
             run: the run
@@ -312,25 +312,25 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
         nonlocal label_cnt, label_tab
         run = {
             'row': row,
-            'start': start,
+            'beg': beg,
             'end': end,
             'label': -1
         }
         connected_labels = []
         # use binary search to find the potential connected labels in the previous runs
-        idx = bis.bisect_left(prev_runs, run['start'], key=lambda x: x['end'])
+        idx = bis.bisect_left(prev_runs, run['beg'], key=lambda x: x['end'])
         if idx < len(prev_runs):
             for prev_run in prev_runs:
                 # no longer connected
-                if prev_run['start'] > end:
+                if prev_run['beg'] > end:
                     break
 
                 # 4-connectivity
                 if connectivity == 4:
-                    overlap = (prev_run['start'] <= end) and (prev_run['end'] >= start)
+                    overlap = (prev_run['beg'] <= end) and (prev_run['end'] >= beg)
                 else:
                     # 8-connectivity
-                    overlap = (prev_run['start'] <= end + 1) and (prev_run['end'] >= start - 1)
+                    overlap = (prev_run['beg'] <= end + 1) and (prev_run['end'] >= beg - 1)
                 if overlap:
                     connected_labels.append(prev_run['label'])
 
@@ -346,7 +346,7 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
         
         return run
 
-    # row, start, end, label
+    # row, beg, end, label
     runs = []
 
     # preverse row runs
@@ -361,20 +361,20 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
         curr_runs = []
 
         # generate current row runs
-        start, end = -1, -1
+        beg, end = -1, -1
         for j, val in enumerate(row):
             if val == 1:
-                if start == -1:
-                    start = j
+                if beg == -1:
+                    beg = j
                 end = j
             else:
-                if start != -1:
-                    curr_runs.append(gen_curr_run(i, start, end))    
-                    start = -1
+                if beg != -1:
+                    curr_runs.append(gen_curr_run(i, beg, end))    
+                    beg = -1
                 end = -1
         
-        if start != -1:
-            curr_runs.append(gen_curr_run(i, start, end))
+        if beg != -1:
+            curr_runs.append(gen_curr_run(i, beg, end))
         prev_runs = curr_runs
         runs.extend(curr_runs)
 
@@ -395,20 +395,20 @@ def find_ranges(nums, threshold=0) -> list[tuple[int, int]]:
     '''
 
     ranges = []
-    start = -1
+    beg = -1
     end = -1
     for i, value in enumerate(nums):
         if value > threshold:
-            if start == -1:
-                start = i
+            if beg == -1:
+                beg = i
             end = i
         else:
-            if start != -1:
-                ranges.append((start, end))
-                start = -1
+            if beg != -1:
+                ranges.append((beg, end))
+                beg = -1
                 end = -1
-    if start != -1:
-        ranges.append((start, end))
+    if beg != -1:
+        ranges.append((beg, end))
     return ranges
 
 
@@ -481,10 +481,10 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
                 curr_rows, curr_cols = [], []
 
             curr_label = run['label']
-            row, start, end = run['row'], run['start'], run['end']
+            row, beg, end = run['row'], run['beg'], run['end']
 
-            curr_rows.extend([row] * (end - start + 1))
-            curr_cols.extend(list(range(start, end+1)))
+            curr_rows.extend([row] * (end - beg + 1))
+            curr_cols.extend(list(range(beg, end+1)))
         
         if len(curr_rows) > pixel_limit and len(curr_cols) > pixel_limit:
             group_coords.append((np.array(curr_rows), np.array(curr_cols)))
