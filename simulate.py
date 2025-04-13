@@ -195,7 +195,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
         
         return M
 
-    def gen_false_stars(num: int, pos: np.array, min_d: int=4*roi) -> np.ndarray:
+    def gen_false_stars(num: int, pos: np.array, min_d: int=3*roi, mag_range: tuple=(3, 6)) -> np.ndarray:
         '''
             Add false stars to the image.
         Args:
@@ -203,6 +203,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
             num: the number of false stars
             pos: the positions of true stars
             min_d: the minimum distance between false stars and true stars
+            mag_range: the range of magnitude of false stars
         Returns:
             false_stars: the false stars
         '''
@@ -218,7 +219,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
                 ds = np.linalg.norm(pos-(row, col), axis=1)
                 if ds.min() < min_d:
                     continue
-            mag = 3.0 + np.random.normal(0, 2)
+            mag = np.random.uniform(mag_range[0], mag_range[1])
             false_stars.append([-1, row, col, 0, 0, mag])
         return np.array(false_stars)
 

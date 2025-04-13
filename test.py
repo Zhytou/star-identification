@@ -16,7 +16,7 @@ from dataset import create_dataset
 from models import create_model
 
 
-def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int], T: float, Rp: float, sim: float=0.8):
+def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int], T: float, Rp: float, soft_match: bool=False):
     '''
         Evaluate the pattern match method's accuracy on the provided patterns. The accuracy is calculated based on the method's ability to correctly identify the closest pattern in the database.
     Args:
@@ -25,7 +25,7 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
         size: the size of 0-1 pattern matrix
         T: the score threshold for pattern matching
         Rp: the radius in degree for pattern region
-        sim: the similarity coefficient for soft match, if similarity == 0, then use hard match
+        soft_match: whether to use soft match
     Returns:
         the accuracy of the pattern match method
     '''
@@ -52,13 +52,23 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
         ''' 
         # exact match | hard match
         scores = db[pat].notna().sum(axis=1)
+        if not soft_match:
+            return scores
 
         # close match | soft match
-        if sim > 0:
+        dds = {
+            0.8: [(-1, 0), (1, 0), (0, -1), (0, 1)],
+            0.4: [(-1, -1), (-1, 1), (1, -1), (1, 1)],
+            # 0.2: [(-2, 0), (2, 0), (0, -2), (0, 2)],
+            # 0.1: [(-1, -2), (-1, 2), (1, -2), (1, 2), (-2, -1), (-2, 1), (2, -1), (2, 1)],
+            # 0.05: [(-2, -2), (-2, 2), (2, -2), (2, 2)],
+        }
+
+        for sim, dd in dds.items():
             sim_pat = []
             for coord in pat:
                 row, col = coord // size[1], coord % size[1]
-                for d in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                for d in dd:
                     nrow, ncol = row + d[0], col + d[1]
                     if 0 <= nrow < size[0] and 0 <= ncol < size[1]:
                         sim_pat.append(nrow * size[1] + ncol)
@@ -77,7 +87,9 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
             the ids of stars in the biggest cluster
         '''
 
-        stars = cata[cata['Star ID'].isin(ids)].copy()        
+        stars = cata[cata['Star ID'].isin(ids)].copy()
+        if len(stars) == 0:
+            return ids        
         # get the coordinates of stars
         stars['X'] = np.cos(stars['De']) * np.cos(stars['Ra'])
         stars['Y'] = np.cos(stars['De']) * np.sin(stars['Ra'])
@@ -146,13 +158,15 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
             else:
                 esti_ids.append(-1)
 
+        esti_ids = np.array(esti_ids)
+
         #! the verification step
         # do fov restriction by clustering and take the biggest cluster as final result
-        esti_ids = cluster_by_angle(gcatalogue, np.array(esti_ids), Rp)
+        # esti_ids = cluster_by_angle(gcatalogue, esti_ids, Rp)
 
         #! the check step
         # count the successfully identified stars
-        cnt = np.sum(esti_ids == real_ids)
+        cnt = np.sum(np.logical_and(esti_ids == real_ids, real_ids != -1))
 
         return cnt >= 3
 
@@ -340,11 +354,11 @@ def do_test(meth_params: dict, test_params: dict, num_thd: int=20):
             if method == 'grid':
                 _, Rp, L = meth_params[method]
                 size = (L, L)
-                T = avg_cnt/3
+                T = avg_cnt/4
             else:
                 _, Rp, L1, L2 = meth_params[method]
                 size = (int(L1), int(L2))
-                T = avg_cnt/3.5
+                T = avg_cnt/5
         elif method in ['rac_1dcnn', 'daa_1dcnn', 'lpt_nn']:
             batch_size = 100
             # use gpu if available
@@ -366,7 +380,7 @@ def do_test(meth_params: dict, test_params: dict, num_thd: int=20):
             df = pd.read_csv(os.path.join(test_dir, 'labels.csv'))
 
             if method in ['grid', 'lpt']:
-                tasks[method][test_name] = pool.submit(check_pm_accuracy, db, df, size, Rp, T, 0.8)
+                tasks[method][test_name] = pool.submit(check_pm_accuracy, db, df, size, T=T, Rp=Rp, soft_match=True)
             else:
                 dataset = create_dataset(method, test_dir, gen_cfg)
                 loader = DataLoader(dataset, batch_size)
@@ -407,11 +421,12 @@ if __name__ == '__main__':
             # 'lpt_nn': [6, 50],
             # 'rac_1dcnn': [6, [20, 50, 80], 16, 3],
             'grid': [0.3, 6, 50],
+            'lpt': [0.3, 6, 50, 50]
         },
         {
             'pos': [1, 2],
-            'mag': [0.2, 0.4],
-            'fs': [3, 5]
+            # 'mag': [0.2, 0.4],
+            # 'fs': [0, 5]
         }
     )
 
