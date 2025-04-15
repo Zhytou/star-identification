@@ -61,7 +61,7 @@ def check_accuracy(method: str, model: nn.Module, loader: DataLoader, device=tor
     return acc
 
 
-def train(method: str, model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader: DataLoader, test_loader: DataLoader=None, device=torch.device('cpu')):
+def train(method: str, model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader: DataLoader, val_loader: DataLoader=None, device=torch.device('cpu')):
     '''
         Train the model.
     Args:
@@ -77,6 +77,8 @@ def train(method: str, model: nn.Module, optimizer: optim.Optimizer, num_epochs:
         accs: the accuracy of each epoch
     '''
     ls, accs = [], []
+
+    model.to(device)
     for epoch in range(num_epochs):
         # set the model into train model
         model.train()
@@ -111,27 +113,31 @@ def train(method: str, model: nn.Module, optimizer: optim.Optimizer, num_epochs:
             return
         
         ls.append(loss.item())
-        if test_loader:
-            accuracy = check_accuracy(method, model, test_loader, device)
-            print(f'Epoch: {epoch+1}, Accuracy: {accuracy}%')
-            accs.append(accuracy)
+        if val_loader:
+            tra_acc = check_accuracy(method, model, loader, device)
+            val_acc = check_accuracy(method, model, val_loader, device)
+            print(f'Epoch: {epoch+1},  Loss: {loss.item()}, Accuracy: {tra_acc}%, Validation Accuracy: {val_acc}%')
+            accs.append(tra_acc)
 
     return ls, accs
 
 
-def do_train(meth_params: dict, batch_size: int=128, num_epochs: int=10, learning_rate: float=0.01, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu")):
+def do_train(meth_params: dict, batch_size: int=256, num_epochs: int=10, learning_rate: float=0.01, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu")):
     '''
         Train the model for different method.
     Args:
         meth_params: the parameters for the method
     '''
     # print the training setting
-    print(f'Batch size: {batch_size}, Num epochs: {num_epochs}, Learning rate: {learning_rate}')
-    print(f'Using device: {device}')
+    print('Batch size:', batch_size, 'Num epochs:', num_epochs, 'Learning rate:', learning_rate)
+    print('Using device:', device)
+    print('Number of class', num_class)
+    print('Simulation config:', sim_cfg)
 
     for method in meth_params:
         # generation config for each method
         gen_cfg = f'{gcata_name}_0_'+'_'.join(map(str, meth_params[method]))
+        print('Method:', method, 'Generating config:', gen_cfg)
 
         # define model
         model = create_model(method, meth_params[method], num_class)
@@ -159,8 +165,12 @@ def do_train(meth_params: dict, batch_size: int=128, num_epochs: int=10, learnin
             
         # do training
         optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=0.0001)  
-        ls, accs = train(method, model, optimizer, num_epochs, train_loader, test_loader, device=device)
+        ls, accs = train(method, model, optimizer, num_epochs, train_loader, val_loader, device=device)
         
+        # check accuracy on test set
+        test_acc = check_accuracy(method, model, test_loader, device)
+        print(f'Test Accuracy: {test_acc}%')
+
         # save the best model and training log
         torch.save(model.state_dict(), model_path)
         with open(os.path.join(model_dir, 'train.log'), 'a+') as f:
@@ -168,4 +178,12 @@ def do_train(meth_params: dict, batch_size: int=128, num_epochs: int=10, learnin
     
 
 if __name__ == '__main__':
-    do_train({'rac_1dcnn': [6, [20, 50, 80], 16, 3]}, learning_rate=0.001)
+    do_train(
+        {
+            # 'lpt_nn': [6, 50],
+            'rac_1dcnn': [5.5, [20, 50, 80], 16, 3],
+        },
+        num_epochs=20,
+        batch_size=512,
+        learning_rate=0.001
+    )

@@ -1,7 +1,9 @@
-from math import radians, sin, cos, tan, sqrt, exp
+from math import radians, degrees, sin, cos, tan, sqrt, exp, atan
+import cv2
 import numpy as np
 import pandas as pd
 
+from utils import convert_q2euler
 
 # read star catalogue
 cata_path = 'catalogue/sao.csv'
@@ -71,6 +73,36 @@ def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float
     return noised_img
 
 
+def gen_false_stars(num: int, pos: np.array, min_d: int=6, mag_range: tuple=(3, 6), size: tuple=(512, 512)) -> np.ndarray:
+    '''
+        Add false stars to the image.
+    Args:
+        img: the image to add false stars
+        num: the number of false stars
+        pos: the positions of true stars
+        min_d: the minimum distance between false stars and true stars
+        mag_range: the range of magnitude of false stars
+    Returns:
+        false_stars: the false stars
+    '''
+    h, w = size
+    false_stars = []
+    while len(false_stars) < num:
+        # rand pixel
+        row = np.random.randint(2, h-2)
+        col = np.random.randint(2, w-2)
+        # offset
+        row += np.random.rand()
+        col += np.random.rand()
+        if len(pos) > 0:
+            ds = np.linalg.norm(pos-(row, col), axis=1)
+            if ds.min() < min_d:
+                continue
+        mag = np.random.uniform(mag_range[0], mag_range[1])
+        false_stars.append([-1, row, col, 0, 0, mag])
+    return np.array(false_stars)
+
+
 def get_stellar_intensity(magnitude: float) -> float:
     """
         Get the stellar intensity from the stellar magnitude.
@@ -125,7 +157,7 @@ def draw_star(position: tuple[float, float], magnitude: float, img: np.ndarray, 
     return img
 
 
-def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0, background: float=np.inf, limit_mag: float=7.0,  fov: float=10, h: int=512, w: int=512, f: float=58e-3, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False) -> tuple[np.ndarray, list]:
+def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0, background: float=np.inf, limit_mag: float=7.0, fovy: float=10, fovx: float=10, h: int=512, w: int=512, pixel: float=67e-6, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False) -> tuple[np.ndarray, list]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
@@ -195,36 +227,16 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
         
         return M
 
-    def gen_false_stars(num: int, pos: np.array, min_d: int=3*roi, mag_range: tuple=(3, 6)) -> np.ndarray:
-        '''
-            Add false stars to the image.
-        Args:
-            img: the image to add false stars
-            num: the number of false stars
-            pos: the positions of true stars
-            min_d: the minimum distance between false stars and true stars
-            mag_range: the range of magnitude of false stars
-        Returns:
-            false_stars: the false stars
-        '''
-        false_stars = []
-        while len(false_stars) < num:
-            # rand pixel
-            row = np.random.randint(roi, h-roi)
-            col = np.random.randint(roi, w-roi)
-            # offset
-            row += np.random.rand()
-            col += np.random.rand()
-            if len(pos) > 0:
-                ds = np.linalg.norm(pos-(row, col), axis=1)
-                if ds.min() < min_d:
-                    continue
-            mag = np.random.uniform(mag_range[0], mag_range[1])
-            false_stars.append([-1, row, col, 0, 0, mag])
-        return np.array(false_stars)
-
     # get rotation matrix
     M = get_rotation_matrix(ra, de, roll)
+
+    # get field of view
+    fov = sqrt(fovx**2 + fovy**2)
+
+    f1 = pixel * w / (2*tan(radians(fovx/2)))
+    f2 = pixel * h / (2*tan(radians(fovy/2)))
+
+    assert np.abs(f1-f2) <= 1e-2, "Focal length should be the same in both directions."
 
     # search for image-able stars
     if True:
@@ -263,8 +275,8 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     stars_within_fov[['X2', 'Y2', 'Z2']] = stars_within_fov[['X1', 'Y1', 'Z1']].dot(M.T)
     
     # convert to image coordinate system
-    stars_within_fov['X3'] = w/2*(1+stars_within_fov['X2']/stars_within_fov['Z2']/tan(radians(fov)/2))
-    stars_within_fov['Y3'] = h/2*(1+stars_within_fov['Y2']/stars_within_fov['Z2']/tan(radians(fov)/2))
+    stars_within_fov['X3'] = w/2*(1+stars_within_fov['X2']/stars_within_fov['Z2']/tan(radians(fovx)/2))
+    stars_within_fov['Y3'] = h/2*(1+stars_within_fov['Y2']/stars_within_fov['Z2']/tan(radians(fovy)/2))
     
     # add positional noise if needed
     if sigma_pos > 0:
@@ -294,7 +306,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
 
     # add false stars if needed
     if num_fs > 0:
-        false_stars = gen_false_stars(num_fs, stars_within_fov[['Row', 'Col']].to_numpy())
+        false_stars = gen_false_stars(num_fs, stars_within_fov[['Row', 'Col']].to_numpy(), size=(h, w))
         stars = np.concatenate((stars, false_stars), axis=0)
     
     # sort stars by magnitude
@@ -312,12 +324,9 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     
 
 if __name__ == '__main__':
-    h=w=512
-    ids, ras, des = catalogue['Star ID'], catalogue['Ra'], catalogue['De']
-
-    for id, ra, de in zip(ids, ras, des):
-        print(f"Star ID: {id}, RA: {ra}, DE: {de}")
-        _, stars = create_star_image(ra, de, 0, w=w, h=h, coords_only=True)
-
-        idx = np.where(stars[:, 0] == id)[0][0]
-        print(f"Star ID: {stars[idx][0]}, Row: {stars[idx][1]}, Col: {stars[idx][2]}, RA: {stars[idx][3]}, DE: {stars[idx][4]}, Mag: {stars[idx][5]}")
+    h, w = 1024, 1024
+    ra, de, roll = radians(249.2104), radians(-12.0386), radians(-13.3845)
+    img, stars = create_star_image(ra, de, roll, h=h, w=w, limit_mag=6, fovx=12, fovy=12)
+    print(np.round(stars[:, 0:3], 2))
+    cv2.imshow('img', img)
+    cv2.waitKey(-1)
