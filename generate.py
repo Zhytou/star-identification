@@ -13,16 +13,16 @@ from simulate import create_star_image
 from extract import get_star_centroids
 
 # simulation configuration
-h = w = 512
-fov = 15
-limit_mag = 6
-f = 5.8e-3
-pixel = 2*tan(radians(fov/2))*f/h
+h, w = 1024, 1280
+fovx, fovy = 14, 11
+limit_mag = 5.2
+f = 34e-3
+pixel = 4.7e-6
 
-sim_cfg = f'{h}_{w}_{fov}_{limit_mag}'
+sim_cfg = f'{h}_{w}_{fovx}_{fovy}_{limit_mag}'
 
 # guide star catalogue for pattern match database and nn dataset generation
-gcata_path = 'catalogue/sao5.0_d0.2.csv'
+gcata_path = 'catalogue/sao5.2.csv'
 # use for generation config
 gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
 # guide star catalogue
@@ -32,7 +32,7 @@ gcatalogue = pd.read_csv(gcata_path, usecols= ["Star ID", "Ra", "De", "Magnitude
 num_class = len(gcatalogue)
 
 # minimum number of stars in the region for pattern generation
-min_num_star = 7
+min_num_star = -1
 
 # define the path to store the database and pattern as well as dataset
 database_path = f'database/{sim_cfg}'
@@ -75,7 +75,7 @@ def generate_pm_database(meth_params: dict, use_preprocess: bool = False, num_th
 
         database = pd.DataFrame(columns=range(mat_size))
         for gidx, star_id, ra, de in zip(idxs, gcatalogue.loc[idxs, 'Star ID'], gcatalogue.loc[idxs, 'Ra'], gcatalogue.loc[idxs, 'De']):
-            img, stars = create_star_image(ra, de, 0, h=h, w=w, fov=fov, limit_mag=limit_mag, coords_only=not use_preprocess)
+            img, stars = create_star_image(ra, de, 0, h=h, w=w, fovx=fovx, fovy=fovy, limit_mag=limit_mag, coords_only=not use_preprocess)
             # get the centroids of the stars in the image
             if use_preprocess:
                 coords = np.array(get_star_centroids(img))
@@ -143,6 +143,11 @@ def generate_pm_database(meth_params: dict, use_preprocess: bool = False, num_th
         # store the rest of the results
         return database
 
+    if meth_params == {}:
+        return
+
+    print('Database Generation', meth_params)
+
     # use thread pool to generate the database
     pool = ThreadPoolExecutor(max_workers=num_thd)
     tasks = defaultdict(list)
@@ -203,6 +208,10 @@ def generate_pm_database(meth_params: dict, use_preprocess: bool = False, num_th
         df = pd.concat(dfs, ignore_index=True)
         df.to_csv(f'{path}/{method}.csv', index=False)
 
+    pool.shutdown()
+
+    return 
+
 
 def generate_nn_dataset(method: str, meth_params: list, mode: str, num_vec: int, idxs: list, use_preprocess: bool, sigma_pos: float, sigma_mag: float, num_fs: int, num_ms: int):
     '''
@@ -243,17 +252,19 @@ def generate_nn_dataset(method: str, meth_params: list, mode: str, num_vec: int,
     if mode == 'random':
         ras = np.random.uniform(0, 2*np.pi, num_vec)
         des = np.arcsin(np.random.uniform(-1, 1, num_vec))
+        rolls = np.random.uniform(0, 2*np.pi, num_vec)
     elif mode == 'supplementary':
         ras = np.clip(gcatalogue.loc[idxs, 'Ra']+np.radians(np.random.normal(0, 5, len(idxs))), 0, 2*np.pi)
         des = np.clip(gcatalogue.loc[idxs, 'De']+np.radians(np.random.normal(0, 5, len(idxs))), -np.pi/2, np.pi/2)
+        rolls = np.random.uniform(0, 2*np.pi, len(idxs))
     else:
         print('Invalid mode!')
         return
 
     # generate the star image
-    for ra, de in zip(ras, des):
+    for ra, de, roll in zip(ras, des, rolls):
         # stars is a np array [[id, row, col, mag]]
-        img, stars = create_star_image(ra, de, 0, h=h, w=w, fov=fov, limit_mag=limit_mag, sigma_pos=sigma_pos, sigma_mag=sigma_mag, num_fs=num_fs, num_ms=num_ms, coords_only=not use_preprocess)
+        img, stars = create_star_image(ra, de, roll, h=h, w=w, fovx=fovx, fovy=fovy, limit_mag=limit_mag, sigma_pos=sigma_pos, sigma_mag=sigma_mag, num_fs=num_fs, num_ms=num_ms, coords_only=not use_preprocess)
         # get star ids and coordinates
         ids = stars[:, 0]
         coords = stars[:, 1:3]
@@ -330,40 +341,6 @@ def generate_nn_dataset(method: str, meth_params: list, mode: str, num_vec: int,
                         for j in range(Ns):
                             label[f'n{i}_sector{j}'] = 0
                 labels.append(label)
-            elif method == 'daa_1dcnn':
-                # parse the parameters:
-                r, arr_N = meth_params
-                # calculate the radius in pixels
-                R = tan(radians(r))*f/pixel
-                if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
-                    continue
-                # exclude angles and distances outside the region
-                ags = ags[ds <= R]
-                ds = ds[ds <= R]
-                # skip if only the reference star in the region
-                if len(ags) == 0:
-                    continue
-                for i, seq in enumerate([ds, ags]):
-                    # discretize the feature sequence(distances and angles) with different levels
-                    tot_N = 0
-                    for N in arr_N:
-                        # density is set True
-                        if i == 0:
-                            pdf, _ = np.histogram(seq, bins=N, range=(0, R), density=True)
-                        elif i == 1:
-                            pdf, _ = np.histogram(seq, bins=N, range=(-np.pi, np.pi), density=True)
-                        else:
-                            print("wrong index")
-                        for j, p in enumerate(pdf):
-                            j += tot_N
-                            label[f's{i}_feat{j}'] = p
-                        tot_N += N
-                    # statistics of distances and angles
-                    stats = [np.min(seq), np.max(seq), np.median(seq), np.mean(seq)]
-                    for j, stat in enumerate(stats):
-                        j += tot_N
-                        label[f's{i}_feat{j}'] = stat
-                labels.append(label)
             elif method == 'lpt_nn':
                 # parse the parameters:
                 r, Nd= meth_params
@@ -384,7 +361,7 @@ def generate_nn_dataset(method: str, meth_params: list, mode: str, num_vec: int,
     return pd.DataFrame(labels)
 
 
-def generate_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: str=None, max_num_samp: int=20):
+def generate_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: str=None, max_num_samp: int=20, f: float=f, pixel: float=pixel, realshot: bool=False):
     '''
         Generate the pattern with the given star coordinates for one star image.
     Args:
@@ -433,10 +410,13 @@ def generate_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img
                 # if coord[0] < R/2 or coord[0] > h-R/2 or coord[1] < R/2 or coord[1] > w-R/2:
                 #     continue
                 # get catalogue index of the guide star
-                if star_id not in gcatalogue['Star ID'].to_numpy():
-                    cata_idx = -1
-                else:
+                if not realshot and star_id not in gcatalogue['Star ID'].to_numpy():
+                    continue
+                elif star_id in gcatalogue['Star ID'].to_numpy():
                     cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
+                else:
+                    cata_idx = -1
+
                 pattern = {
                     'star_id': star_id,
                     'cata_idx': cata_idx,
@@ -481,9 +461,8 @@ def generate_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img
                 #     continue
                 
                 if star_id not in gcatalogue['Star ID'].to_numpy():
-                    cata_idx = -1
-                else:
-                    cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
+                    continue
+                cata_idx = gcatalogue[gcatalogue['Star ID'] == star_id].index.to_list()[0]
                 pattern = {
                     'star_id': star_id,
                     'cata_idx': cata_idx,
@@ -610,7 +589,7 @@ def generate_test_samples(num_vec: int, meth_params: dict, use_preprocess: bool,
 
     # generate the star image
     for ra, de in zip(ras, des):
-        img, stars = create_star_image(ra, de, 0, h=h, w=w, fov=fov, limit_mag=limit_mag, sigma_pos=sigma_pos, sigma_mag=sigma_mag, num_fs=num_fs, num_ms=num_ms, coords_only=not use_preprocess)
+        img, stars = create_star_image(ra, de, 0, h=h, w=w, fovx=fovx, fovy=fovy, limit_mag=limit_mag, sigma_pos=sigma_pos, sigma_mag=sigma_mag, num_fs=num_fs, num_ms=num_ms, coords_only=not use_preprocess)
         # get star ids
         ids = stars[:, 0]
 
@@ -645,12 +624,12 @@ def generate_realshot_test_samples(img_paths: list[str], meth_params: dict):
         # read the image
         img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
         # get the centroids of the stars in the image
-        coords = np.array(get_star_centroids(img, 'MEDIAN', 'Liebe', 'CCL', 'CoG'))
-
+        coords = np.array(get_star_centroids(img, 'MEDIAN', 'Liebe', 'CCL', 'CoG', pixel_limit=3))
+        
         # get star ids
         ids = np.full(len(coords), -1)
         # generate pattern
-        img_patterns = generate_pattern(meth_params, coords, ids, img_id=os.path.basename(img_path), max_num_samp=20)
+        img_patterns = generate_pattern(meth_params, coords, ids, img_id=os.path.basename(img_path), max_num_samp=20, realshot=True)
         for method in img_patterns:
             patterns[method].extend(img_patterns[method])
     
@@ -689,14 +668,13 @@ def aggregate_nn_dataset(ds_sizes: dict, meth_params: dict, noise_params: dict, 
         num_thd: the number of threads to generate the test samples
     '''
 
-    def wait_tasks(tasks: dict, root_dirs: dict, file_name: str='labels.csv', col_name: str=None):
+    def wait_tasks(tasks: dict, root_dirs: dict, file_name: str='labels.csv'):
         '''
             Wait for all tasks to be done. Then, merge the result of async tasks and store it in labels.csv. 
         Args:
             tasks: the tasks to be done
             root_dirs: the root directory for each method to store the dataset
             file_name: the name of the aggregated file to be stored
-            col_name: the column name of the label
         Returns:
             tasks: the tasks done(reserved keys and empty list for values)
         '''
@@ -726,19 +704,7 @@ def aggregate_nn_dataset(ds_sizes: dict, meth_params: dict, noise_params: dict, 
 
                 # aggregate the dataset
                 df = pd.concat(dfs, ignore_index=True)
-                dfs.clear()
-                
-                # truncate and store the dataset
-                # !select all columns to avoid DataFrameGroupBy.apply warning
-                df = df.groupby(col_name, as_index=False)[df.columns].apply(lambda x: x.sample(n=min(len(x), sds_sizes[sds_name])))
-                # print
                 df.to_csv(sds_label_file, index=False)
-                                
-                # print dataset distribution per class
-                if col_name:
-                    df_info = df[col_name].value_counts()
-                    print(method, sds_name, 'num_gen_class', len(df_info))
-                    print(df_info.tail(3))
 
     def parse_params(s: str):
         '''
@@ -762,7 +728,7 @@ def aggregate_nn_dataset(ds_sizes: dict, meth_params: dict, noise_params: dict, 
                 ms = int(number)
         return pos, mag, fs, ms
 
-    def aggr_dataset(root_dirs: dict, file_name: str='labels.csv'):
+    def aggr_dataset(root_dirs: dict, file_name: str='labels.csv',  col_name: str='cata_idx'):
         '''
             Aggregate all the sub dataset and generate labels.csv for each dataset
         Args:
@@ -773,16 +739,27 @@ def aggregate_nn_dataset(ds_sizes: dict, meth_params: dict, noise_params: dict, 
             # iterate dataset by name(train/validate/test)
             for ds_name in ds_sizes:
                 # concat the dataframe only if the sds_name is include ds_name, e.g. train/pos1 includes train
-                dfs = [pd.read_csv(os.path.join(root_dirs[method], sds_name, file_name)) for sds_name in sds_sizes if ds_name in sds_name]
+                dfs = []
+                for sds_name in sds_sizes:
+                    if ds_name not in sds_name:
+                        continue
+                    df = pd.read_csv(os.path.join(root_dirs[method], sds_name, file_name))
+                    # !truncate the dataset(select all columns to avoid DataFrameGroupBy.apply warning)
+                    df = df.groupby(col_name, as_index=False)[df.columns].apply(lambda x: x.sample(n=min(len(x), sds_sizes[sds_name])))
+        
+                    dfs.append(df)
+                    df_info = df['cata_idx'].value_counts()
+                    print(method, sds_name, df_info.sum()/len(df_info))
+                
                 if len(dfs) > 0:
                     df = pd.concat(dfs, ignore_index=True)
-                    df.to_csv(os.path.join(root_dirs[method], name, file_name), index=False)
-
-    # use thread pool
-    pool = ThreadPoolExecutor(max_workers=num_thd)
+                    df.to_csv(os.path.join(root_dirs[method], ds_name, file_name), index=False)
 
     if ds_sizes == {}:
         return
+
+    # use thread pool
+    pool = ThreadPoolExecutor(max_workers=num_thd)
 
     # calculate the noised ratio
     n = sum(len(value) for value in noise_params.values())
@@ -799,7 +776,7 @@ def aggregate_nn_dataset(ds_sizes: dict, meth_params: dict, noise_params: dict, 
         for ntype, nvals in noise_params.items():
             for nval in nvals:
                 sds_sizes[f'{name}/{ntype}{nval}'] = max(1, int(num_samp*noised_ratio))
-    print(sds_sizes)
+    print('Dataset generation', sds_sizes)
 
     # rough generation
     tasks = {}
@@ -807,7 +784,8 @@ def aggregate_nn_dataset(ds_sizes: dict, meth_params: dict, noise_params: dict, 
     root_dirs = {}
     for method in meth_params:
         gen_cfg = f'{gcata_name}_{int(use_preprocess)}_'+'_'.join(map(str, meth_params[method]))
-        
+        print('Method:', method, 'Simulation config:', sim_cfg, 'Generation config:', gen_cfg)
+
         tasks[method] = defaultdict(list)
         root_dirs[method] = os.path.join(dataset_path, method, gen_cfg)
         # iterate through each sub dataset(e.g. train/pos1)
@@ -831,9 +809,9 @@ def aggregate_nn_dataset(ds_sizes: dict, meth_params: dict, noise_params: dict, 
                 pct = 0
                 avg_num_mss = sds_size
 
-            # roughly generate the samples for each class, only if pct <= 0.95 and avg_num_mss > 1
-            num_round = min(num_thd//5, int(avg_num_mss)+1) if pct <= 0.95 or avg_num_mss > 1 else 0
-            print(method, sds_name, 'pct', pct, 'num_round', num_round)            
+            # roughly generate the samples for each class, only if pct <= 0.8 and avg_num_mss > 1
+            num_round = min(num_thd//5, max(int(avg_num_mss), 1)) if pct <= 0.8 and avg_num_mss >= 1 else 0
+            print(sds_name, 'pct', pct, 'mss', avg_num_mss, 'num_round', num_round)            
             
             # parse parameters
             pos, mag, fs, ms = parse_params(sds_name)
@@ -843,8 +821,9 @@ def aggregate_nn_dataset(ds_sizes: dict, meth_params: dict, noise_params: dict, 
                 tasks[method][sds_name].append(task)
 
     # wait for all tasks to be done and merge the results
-    wait_tasks(tasks, root_dirs, 'labels.csv', 'cata_idx')
-    aggr_dataset(root_dirs)
+    wait_tasks(tasks, root_dirs, 'labels.csv')
+    if tasks == {}:
+        aggr_dataset(root_dirs, 'labels.csv', 'cata_idx')
 
     if not fine_grained:
         return
@@ -884,10 +863,10 @@ def aggregate_nn_dataset(ds_sizes: dict, meth_params: dict, noise_params: dict, 
                 tasks[method][sds_name].append(task)
     
     # wait for all tasks to be done and merge the results
-    wait_tasks(tasks, root_dirs, 'labels.csv', 'cata_idx')
-    
-    # aggregate the labels.csv in root directory
-    aggr_dataset(root_dirs)
+    wait_tasks(tasks, root_dirs, 'labels.csv')
+    aggr_dataset(root_dirs, 'labels.csv', 'cata_idx')
+
+    pool.shutdown()
 
 
 def aggregate_test_samples(num_vec: int, meth_params: dict, test_params: dict, use_preprocess: bool=False, num_thd: int = 20):
@@ -935,6 +914,8 @@ def aggregate_test_samples(num_vec: int, meth_params: dict, test_params: dict, u
     if num_vec == 0:
         return
 
+    print('Test Sample Generation', num_vec, meth_params, test_params)
+
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thd)
     # tasks for later aggregation
@@ -942,13 +923,13 @@ def aggregate_test_samples(num_vec: int, meth_params: dict, test_params: dict, u
 
     # add tasks to the thread pool
     for pos in test_params.get('pos', []):
-        task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, sigma_pos=pos)
+        task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, sigma_pos=pos, sigma_mag=0.1)
         tasks[f'pos{pos}'].append(task)
     for mag in test_params.get('mag', []):
-        task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, sigma_mag=mag)
+        task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, sigma_pos=0.5, sigma_mag=mag)
         tasks[f'mag{mag}'].append(task)
     for fs in test_params.get('fs', []):
-        task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, num_fs=fs)
+        task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, sigma_pos=0.5, sigma_mag=0.2, num_fs=fs)
         tasks[f'fs{fs}'].append(task)
     for ms in test_params.get('ms', []):
         task = pool.submit(generate_test_samples, num_vec, meth_params, use_preprocess, num_ms=ms)
@@ -974,54 +955,60 @@ def aggregate_test_samples(num_vec: int, meth_params: dict, test_params: dict, u
         if not os.path.exists(path):
             continue
         # sub test dir names
-        test_names = os.listdir(path)
+        test_names = list(tasks.keys())#os.listdir(path)
         for tn in test_names:
             p = os.path.join(path, tn)
             dfs = [pd.read_csv(os.path.join(p, f)) for f in os.listdir(p) if f != 'labels.csv']
-            print(p, len(dfs))
             if len(dfs) > 0:        
                 df = pd.concat(dfs, ignore_index=True)
                 df.to_csv(os.path.join(p, 'labels.csv'), index=False)
+                # count the number of samples for each class
+                print('Method:', method, 'Test:', tn, 'Number of test images', len(df['img_id'].unique()))
+
+    pool.shutdown()
 
 
 if __name__ == '__main__':
     generate_pm_database({
-        'grid': [0.3, 6, 50], 
-        'lpt': [0.3, 6, 50, 50]
+        # 'grid': [0.3, 6, 50], 
+        # 'lpt': [0.3, 6, 50, 50]
     })
-    aggregate_nn_dataset(
-        {
-            'train': 10, 
-            # 'validate': 1,
-            # 'test': 1
-        },
-        {
-            # 'lpt_nn': [6, 50],
-            'rac_1dcnn': [6, [20, 50, 80], 16, 3]
-        }, 
-        {
-            'pos': [2],
-            'mag': [0.4],
-            'fs': [5]
-        },
-        use_preprocess=False, 
-        default_ratio=0.25, 
-        fine_grained=True, 
-        num_thd=20
-    )
-    aggregate_test_samples(
-        0, 
-        {
-            # 'grid': [0.3, 6, 50],
-            # 'lpt': [0.3, 6, 50, 50],
-            # 'lpt_nn': [6, 50],
-            'rac_1dcnn': [6, [20, 50, 80], 16, 3]
-        }, 
-        {
-            'pos': [1, 2], 
-            'mag': [0.2, 0.4], 
-            'fs': [1, 2, 3, 4]
-        },
-        use_preprocess=False
-    )
+    if True:
+        aggregate_nn_dataset(
+            {
+                'train': 70, 
+                # 'validate': 4,
+                # 'test': 4
+            },
+            {
+                # 'lpt_nn': [6, 50],
+                'rac_1dcnn': [5.5, [20, 50, 80], 16, 3]
+            }, 
+            {
+                'pos': [3],
+                'mag': [0.5],
+                'fs': [6]
+            },
+            use_preprocess=False, 
+            default_ratio=0.0, 
+            fine_grained=True, 
+            num_thd=20
+        )
+    
+    if False:
+        aggregate_test_samples(
+            200, 
+            {
+                'grid': [0.3, 6, 50],
+                'lpt': [0.3, 6, 50, 50],
+                'lpt_nn': [6, 50],
+                'rac_1dcnn': [6, [20, 50, 80], 16, 3]
+            }, 
+            {
+                'pos': [0, 0.5, 1, 1.5, 2], 
+                'mag': [0, 0.1, 0.2, 0.3, 0.4], 
+                'fs': [0, 1, 2, 3, 4]
+            },
+            use_preprocess=False
+        )
     
