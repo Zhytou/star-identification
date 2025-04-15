@@ -17,7 +17,10 @@ def filter_image(img: np.ndarray, method: str='GAUSSIAN', size: int=3, sigma: fl
     elif method == 'MEAN':
         filtered_img = cv2.blur(img, (size, size))
     elif method == 'MEDIAN':
-        filtered_img = cv2.medianBlur(img, size)
+        d = size//2
+        padded_img = np.pad(img, ((d, d), (d, d)), mode='constant')
+        filtered_img = cv2.medianBlur(padded_img, size)
+        filtered_img = filtered_img[d:-d, d:-d]
     elif method == 'GLP':
         f = np.fft.fft2(img)
         fshift = np.fft.fftshift(f)

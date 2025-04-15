@@ -429,11 +429,8 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
         group_coords: the coordinates of the grouped pixels(which are the potential stars)
         num_group: the number of the grouped
     """
-    # if img[u, v] < threshold: 0, else: img[u, v]
-    # _, img = cv2.threshold(img, threshold, 255, cv2.THRESH_TOZERO)
-
-    # if img[u, v] > 0: 1, else: 0
-    _, binary_img = cv2.threshold(img, threshold, 1, cv2.THRESH_BINARY)
+    binary_img = np.zeros_like(img)
+    binary_img[img >= threshold] = 1
 
     group_coords = []
 
@@ -446,30 +443,18 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
                 continue
             group_coords.append((rows, cols))
     elif method == 'CCL':
-        label_img = connected_components_label(binary_img, connectivity)
-        # _, label_img = cv2.connectedComponents(binary_img, connectivity=connectivity)
+        # label_img = connected_components_label(binary_img, connectivity)
+        _, label_img = cv2.connectedComponents(binary_img, connectivity=connectivity)
         rows, cols = np.nonzero(label_img)
         labels = label_img[rows, cols]
 
-        # group the coordinates by label
-        label = 1
-        coords = []
+        # labels pixel > pixel_limit
+        ulabels, ucnts = np.unique(labels, return_counts=True)
+        ulabels = ulabels[ucnts >= pixel_limit]
 
-        for rowi, coli, labeli in zip(rows, cols, labels):
-            # get the coords for each label
-            if labeli == label:
-                coords.append((rowi, coli))
-                continue
-            
-            # two small to be a star
-            if len(coords) >= pixel_limit:
-                group_coords.append(np.transpose(coords))
-                label = labeli
-                coords = []
-        
-        # last group
-        if len(coords) >= pixel_limit:
-            group_coords.append(np.transpose(coords))
+        for label in ulabels:
+            coords = rows[labels == label], cols[labels == label]
+            group_coords.append(coords)
     elif method == 'RLC':
         runs = run_length_code_label(binary_img, connectivity)
         

@@ -111,7 +111,7 @@ def cal_compensate(esti_x):
     return -2.4194299127361094*np.sin(0.014439263775565864*esti_x-0.007147436746119124)
 
 
-def get_star_centroids(img: np.ndarray, den_method: str, thr_method: str, seg_method: str, cen_method: str | list[str], num_esti: int=1) -> list[tuple[float, float]] | dict[str, list[tuple[float, float]]]:
+def get_star_centroids(img: np.ndarray, den_method: str, thr_method: str, seg_method: str, cen_method: str | list[str], pixel_limit: int=5, num_esti: int=1) -> list[tuple[float, float]] | dict[str, list[tuple[float, float]]]:
     '''
         Get the centroids of the stars in the image.
     Args:
@@ -132,7 +132,7 @@ def get_star_centroids(img: np.ndarray, den_method: str, thr_method: str, seg_me
     T =  cal_threshold(filtered_img, thr_method)
 
     # rough group star using connectivity
-    group_coords = group_star(filtered_img, seg_method, T, connectivity=4, pixel_limit=7)
+    group_coords = group_star(filtered_img, seg_method, T, connectivity=4, pixel_limit=pixel_limit)
 
     # calculate the centroid coordinate with threshold and weight
     centroids = {}

@@ -380,27 +380,27 @@ if __name__ == '__main__':
     fov = 15
     f = 58e-3
     num_limit = 20
-    mag_limit = 5.5
+    mag_limit = 5.2
     agd_limit = 0.2
 
     raw_file = 'raw_catalogue/sao_j2000.dat'
     parsed_file = 'catalogue/sao.csv'
-    limit_parsed_file = 'catalogue/sao7.0.csv'
+    limit_file = f'catalogue/sao{mag_limit}.csv'
     filtered_file = f'catalogue/sao{mag_limit}_d{agd_limit}.csv' # process double star and magnitude threshold
     uniform_filtered_file = f'catalogue/sao{mag_limit}_d{agd_limit}_{fov}_{num_limit}.csv'
 
     df = parse_heasarc_sao(raw_file, parsed_file)
-    df = df[df['Magnitude'] <= 7.0].reset_index(drop=True)
-    if not os.path.exists(limit_parsed_file):
-        df.to_csv(limit_parsed_file)
+    df = df[df['Magnitude'] <= mag_limit].reset_index(drop=True)
+    if not os.path.exists(limit_file):
+        df.to_csv(limit_file)
 
-    if os.path.exists(filtered_file):
-        f_df = pd.read_csv(filtered_file)
-    else:
-        f_df = filter_catalogue(df, num_limit, mag_limit, agd_limit, fov=fov, f=f, uniform=False).reset_index(drop=True)
-        f_df.to_csv(filtered_file)
+    # if os.path.exists(filtered_file):
+    #     f_df = pd.read_csv(filtered_file)
+    # else:
+    #     f_df = filter_catalogue(df, num_limit, mag_limit, agd_limit, fov=fov, f=f, uniform=False).reset_index(drop=True)
+    #     f_df.to_csv(filtered_file)
 
-    draw_star_distribution(f_df)
+    # draw_star_distribution(f_df)
     # draw_probability_versus_star_num_within_fov(f_df, fov=fov, f=f, num_vec=3000)
     
     # if os.path.exists(uniform_filtered_file):
