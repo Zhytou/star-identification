@@ -57,8 +57,8 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
 
         # close match | soft match
         dds = {
-            0.8: [(-1, 0), (1, 0), (0, -1), (0, 1)],
-            0.4: [(-1, -1), (-1, 1), (1, -1), (1, 1)],
+            0.6: [(-1, 0), (1, 0), (0, -1), (0, 1)],
+            0.3: [(-1, -1), (-1, 1), (1, -1), (1, 1)],
             # 0.2: [(-2, 0), (2, 0), (0, -2), (0, 2)],
             # 0.1: [(-1, -2), (-1, 2), (1, -2), (1, 2), (-2, -1), (-2, 1), (2, -1), (2, 1)],
             # 0.05: [(-2, -2), (-2, 2), (2, -2), (2, 2)],
@@ -326,6 +326,9 @@ def do_test(meth_params: dict, test_params: dict, num_thd: int=20):
         meth_params: the parameters for the test sample generation, possible methods include:
         test_params: the parameters for the test sample generation
     '''
+    if meth_params == {}:
+        return
+
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thd)
     # tasks for later aggregation
@@ -334,31 +337,29 @@ def do_test(meth_params: dict, test_params: dict, num_thd: int=20):
     # aggregate test params
     test_names = []
     for test_type in test_params:
-        if test_type == 'default':
-            test_names.append(test_type)
-        else:
-            test_names.extend(f'{test_type}{val}' for val in test_params[test_type])
+        test_names.extend(f'{test_type}{val}' for val in test_params[test_type])
 
+    print('Simulation config:', sim_cfg)
+    print('Test names:', test_names)
     # add each test task to the threadpool
     for method in meth_params:
         # generation config for each method
         gen_cfg = f'{gcata_name}_0_'+'_'.join(map(str, meth_params[method]))
-        print(gen_cfg)
+        print('Method:', method, 'Generation config:', gen_cfg)
         if method in ['grid', 'lpt']:
             # load the database
             db = pd.read_csv(os.path.join('database', sim_cfg, gen_cfg, f'{method}.csv'))
             # average count of 1 in guide star pattern
             avg_cnt = np.sum(db.notna().values)/len(db)
-            print(method, 'avg db pat cnt', avg_cnt)
             # parse method parameters
             if method == 'grid':
                 _, Rp, L = meth_params[method]
                 size = (L, L)
-                T = avg_cnt/4
+                T = avg_cnt/6
             else:
                 _, Rp, L1, L2 = meth_params[method]
                 size = (int(L1), int(L2))
-                T = avg_cnt/5
+                T = avg_cnt/4
         elif method in ['rac_1dcnn', 'daa_1dcnn', 'lpt_nn']:
             batch_size = 100
             # use gpu if available
@@ -412,21 +413,23 @@ def do_test(meth_params: dict, test_params: dict, num_thd: int=20):
             else:
                 res[method][name].append((x, y))
 
+    pool.shutdown()
+
     return res
 
 
 if __name__ == '__main__':
     res = do_test(
         {
-            # 'lpt_nn': [6, 50],
-            # 'rac_1dcnn': [6, [20, 50, 80], 16, 3],
-            'grid': [0.3, 6, 50],
-            'lpt': [0.3, 6, 50, 50]
+            'lpt_nn': [6, 50],
+            'rac_1dcnn': [6, [20, 50, 80], 16, 3],
+            # 'grid': [0.3, 6, 50],
+            # 'lpt': [0.3, 6, 50, 50]
         },
         {
-            'pos': [1, 2],
-            # 'mag': [0.2, 0.4],
-            # 'fs': [0, 5]
+            # 'pos': [0, 0.5, 1, 1.5, 2],
+            # 'mag': [0, 0.1, 0.2, 0.3, 0.4],
+            'fs': [0, 1, 2, 3, 4]
         }
     )
 
