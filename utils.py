@@ -72,6 +72,32 @@ def draw_freq_spectrum(img: np.ndarray):
     plt.show()
 
 
+def draw_img_with_id_label(img: np.ndarray, coords: np.ndarray, ids: np.ndarray, output_path=None):
+    '''
+        Draw the image with the id label.
+    '''
+    h, w = img.shape[:2]
+
+    _, ax = plt.subplots(figsize=(10, 10))
+    ax.imshow(img, cmap='gray', origin='lower')  
+    
+    ax.set_xlim(0, w)
+    ax.set_ylim(0, h)
+    ax.axis('off')
+    ax.invert_yaxis()
+    
+    for id, (row, col) in zip(ids, coords):
+        row, col = min(int(row)+5, h-10), min(int(col)+5, w-10)
+        ax.text(col, row, str(id), fontsize=8, color='white', backgroundcolor=(0, 0, 0, 0.5), ha='left', va='top')
+
+    plt.show()
+
+    if output_path:
+        plt.savefig(output_path, bbox_inches='tight', pad_inches=1, dpi=300)
+    
+    plt.close()
+
+
 def cal_snr(img: np.ndarray, noised_img: np.ndarray):
     '''
         Calculate the signal-to-noise ratio between the original image and the noised image.
