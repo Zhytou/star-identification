@@ -3,9 +3,8 @@ import pandas as pd
 import torch
 import torch.nn as nn, torch.optim as optim
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 
-from generate import gcata_name, num_class, sim_cfg
 from dataset import create_dataset
 from models import create_model
 
@@ -111,23 +110,34 @@ def train(method: str, model: nn.Module, optimizer: optim.Optimizer, num_epochs:
                 optimizer.step()
         else:
             return
+
+        val_acc = check_accuracy(method, model, val_loader, device) if val_loader else 0.0
+        print(f'Epoch: {epoch+1},  Loss: {loss.item()}, Validation Accuracy: {val_acc}%')
         
         ls.append(loss.item())
-        if val_loader:
-            tra_acc = check_accuracy(method, model, loader, device)
-            val_acc = check_accuracy(method, model, val_loader, device)
-            print(f'Epoch: {epoch+1},  Loss: {loss.item()}, Accuracy: {tra_acc}%, Validation Accuracy: {val_acc}%')
-            accs.append(tra_acc)
+        accs.append(val_acc)
 
     return ls, accs
 
 
-def do_train(meth_params: dict, batch_size: int=256, num_epochs: int=10, learning_rate: float=0.01, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu")):
+def do_train(meth_params: dict, simu_params: dict, gcata_path: str, batch_size: int=256, num_epochs: int=10, learning_rate: float=0.01, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu")):
     '''
         Train the model for different method.
     Args:
         meth_params: the parameters for the method
     '''
+
+    # simulation config
+    sim_cfg = f"{simu_params['h']}_{simu_params['w']}_{simu_params['fovx']}_{simu_params['fovy']}_{simu_params['limit_mag']}"
+    
+    # guide star catalogue
+    gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
+    gcata = pd.read_csv(gcata_path, usecols=["Star ID", "Ra", "De", "Magnitude"])
+    num_class = len(gcata)
+
+    # noise config
+    noise_cfg = f"{simu_params['sigma_pos']}_{simu_params['sigma_mag']}_{simu_params['num_fs']}_{simu_params['num_ms']}"
+
     # print the training setting
     print('Batch size:', batch_size, 'Num epochs:', num_epochs, 'Learning rate:', learning_rate)
     print('Using device:', device)
@@ -136,18 +146,23 @@ def do_train(meth_params: dict, batch_size: int=256, num_epochs: int=10, learnin
 
     for method in meth_params:
         # generation config for each method
-        gen_cfg = f'{gcata_name}_0_'+'_'.join(map(str, meth_params[method]))
+        gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
         print('Method:', method, 'Generating config:', gen_cfg)
 
         # define model
         model = create_model(method, meth_params[method], num_class)
 
         # define datasets for train, validate and test
-        dataset_dir = os.path.join('dataset', sim_cfg, method, gen_cfg)
-        train_dataset, val_dataset, test_dataset = [create_dataset(method, os.path.join(dataset_dir, dataset_type), gen_cfg) for dataset_type in ['train', 'validate', 'test']]
+        dataset_dir = os.path.join('dataset', sim_cfg, method, gen_cfg, noise_cfg)
+        dataset = create_dataset(method, dataset_dir, gen_cfg)
+        dataset_size = len(dataset)
 
         # define data loaders
-        train_loader, val_loader, test_loader = [DataLoader(dataset, batch_size, shuffle=True) for dataset in [train_dataset, val_dataset, test_dataset]]
+        train_size, val_size = int(0.8 * dataset_size), int(0.1 * dataset_size)
+        test_size = dataset_size - train_size - val_size
+        train_loader, val_loader, test_loader = [DataLoader(sub_dataset, batch_size, shuffle=True) for sub_dataset in random_split(dataset, [train_size, val_size, test_size])]
+        # print datasets' sizes
+        print(f'Training set: {train_size}, Validation set: {val_size}, Test set: {test_size}')
 
         # check model directory exsitence
         model_dir = os.path.join('model', sim_cfg, method, gen_cfg)
@@ -159,9 +174,6 @@ def do_train(meth_params: dict, batch_size: int=256, num_epochs: int=10, learnin
         if os.path.exists(model_path):
             model.load_state_dict(torch.load(model_path))
         model.to(device)
-
-        # print datasets' sizes
-        print(f'Training set: {len(train_dataset)}, Validation set: {len(val_dataset)}, Test set: {len(test_dataset)}')
             
         # do training
         optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=0.0001)  
@@ -181,8 +193,20 @@ if __name__ == '__main__':
     do_train(
         {
             # 'lpt_nn': [6, 50],
-            'rac_1dcnn': [5.5, [20, 50, 80], 16, 3],
+            'rac_1dcnn': [0, 5.5, [20, 50, 80], 16, 3],
         },
+        {
+            'h': 1024,
+            'w': 1280,
+            'fovx': 14,
+            'fovy': 11,
+            'limit_mag': 5.2,
+            'sigma_pos': 3,
+            'sigma_mag': 0.5,
+            'num_fs': 7,
+            'num_ms': 0
+        },
+        gcata_path='./catalogue/sao4.5.csv',
         num_epochs=20,
         batch_size=512,
         learning_rate=0.001

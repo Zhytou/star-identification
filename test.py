@@ -11,7 +11,6 @@ from torch.utils.data import DataLoader
 from concurrent.futures import ThreadPoolExecutor
 from sklearn.cluster import DBSCAN
 
-from generate import sim_cfg, num_class, gcatalogue, gcata_name
 from dataset import create_dataset
 from models import create_model
 
@@ -57,8 +56,8 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
 
         # close match | soft match
         dds = {
-            0.6: [(-1, 0), (1, 0), (0, -1), (0, 1)],
-            0.3: [(-1, -1), (-1, 1), (1, -1), (1, 1)],
+            # 0.2: [(-1, 0), (1, 0), (0, -1), (0, 1)],
+            # 0.1: [(-1, -1), (-1, 1), (1, -1), (1, 1)],
             # 0.2: [(-2, 0), (2, 0), (0, -2), (0, 2)],
             # 0.1: [(-1, -2), (-1, 2), (1, -2), (1, 2), (-2, -1), (-2, 1), (2, -1), (2, 1)],
             # 0.05: [(-2, -2), (-2, 2), (2, -2), (2, 2)],
@@ -319,12 +318,9 @@ def draw_results(res: dict, save: bool=False):
     plt.show()
 
 
-def do_test(meth_params: dict, test_params: dict, num_thd: int=20):
+def do_test(meth_params: dict, simu_params: dict, test_params: dict, gcata_path: str, num_thd: int=20):
     '''
         Do test.
-    Args:
-        meth_params: the parameters for the test sample generation, possible methods include:
-        test_params: the parameters for the test sample generation
     '''
     if meth_params == {}:
         return
@@ -339,23 +335,35 @@ def do_test(meth_params: dict, test_params: dict, num_thd: int=20):
     for test_type in test_params:
         test_names.extend(f'{test_type}{val}' for val in test_params[test_type])
 
+    # simulation config
+    sim_cfg = f'{simu_params["h"]}_{simu_params["w"]}_{simu_params["fovx"]}_{simu_params["fovy"]}_{simu_params["limit_mag"]}'
+
+    # read the guide star catalogue
+    gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
+    gcata = pd.read_csv(gcata_path, usecols=['Star ID', 'Ra', 'De', 'Magnitude'])
+    num_class = len(gcata)
+
+    print('Test')
+    print('------------------')
     print('Simulation config:', sim_cfg)
     print('Test names:', test_names)
+
     # add each test task to the threadpool
     for method in meth_params:
         # generation config for each method
-        gen_cfg = f'{gcata_name}_0_'+'_'.join(map(str, meth_params[method]))
-        print('Method:', method, 'Generation config:', gen_cfg)
+        gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
+        print('Method:', method, '\nGeneration config:', gen_cfg)
         if method in ['grid', 'lpt']:
             # load the database
             db = pd.read_csv(os.path.join('database', sim_cfg, gen_cfg, f'{method}.csv'))
             # average count of 1 in guide star pattern
             avg_cnt = np.sum(db.notna().values)/len(db)
+            print('Average count of 1 in guide star pattern:', avg_cnt)
             # parse method parameters
             if method == 'grid':
                 _, Rp, L = meth_params[method]
                 size = (L, L)
-                T = avg_cnt/6
+                T = avg_cnt/2.8
             else:
                 _, Rp, L1, L2 = meth_params[method]
                 size = (int(L1), int(L2))
@@ -387,7 +395,6 @@ def do_test(meth_params: dict, test_params: dict, num_thd: int=20):
                 loader = DataLoader(dataset, batch_size)
                 tasks[method][test_name] = pool.submit(check_nn_accuracy, method, best_model, loader, df['img_id'], device=device)
     
-
     # aggregate the results
     res = {}
     for method in tasks:
@@ -398,16 +405,11 @@ def do_test(meth_params: dict, test_params: dict, num_thd: int=20):
 
             # use regex to parse test parameters
             match = re.match('(pos|mag|fs)([0-9]+\.?[0-9]*)', test_name)
-            if match is None:
-                name, x = 'default', 0
-            else:
-                name, x = match.groups()
-                x = float(x)
+            assert match is not None, 'Cannot parse the test name'
+            name, x = match.groups()
+            x = float(x)
             
             # store the results
-            if name == 'default':
-                res[method]['default'] = y
-                continue
             if name not in res[method].keys():
                 res[method][name] = [(x, y)]
             else:
@@ -421,16 +423,24 @@ def do_test(meth_params: dict, test_params: dict, num_thd: int=20):
 if __name__ == '__main__':
     res = do_test(
         {
-            'lpt_nn': [6, 50],
-            'rac_1dcnn': [6, [20, 50, 80], 16, 3],
-            # 'grid': [0.3, 6, 50],
+            # 'lpt_nn': [6, 50],
+            # 'rac_1dcnn': [6, [20, 50, 80], 16, 3],
+            'grid': [0.3, 6, 50],
             # 'lpt': [0.3, 6, 50, 50]
         },
         {
-            # 'pos': [0, 0.5, 1, 1.5, 2],
+            'h': 512,
+            'w': 512,
+            'fovx': 15,
+            'fovy': 15,
+            'limit_mag': 6
+        },
+        {
+            'pos': [0, 1, 2, 3, 4],
             # 'mag': [0, 0.1, 0.2, 0.3, 0.4],
-            'fs': [0, 1, 2, 3, 4]
-        }
+            # 'fs': [0, 1, 2, 3, 4]
+        },
+        './catalogue/sao5.0_d0.2.csv',
     )
 
     print(res)
