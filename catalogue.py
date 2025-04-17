@@ -380,7 +380,7 @@ if __name__ == '__main__':
     fov = 15
     f = 58e-3
     num_limit = 20
-    mag_limit = 5.2
+    mag_limit = 4.5
     agd_limit = 0.2
 
     raw_file = 'raw_catalogue/sao_j2000.dat'

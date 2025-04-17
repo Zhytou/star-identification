@@ -226,7 +226,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
         MM = rotate_z(roll) @ rotate_x(np.pi/2+de) @ rotate_z(ra-np.pi/2)
         
         assert np.allclose(M, MM), f"Rotation matrix is not correct. {M} != {MM}"
-        
+
         return M
 
     # get rotation matrix
@@ -345,7 +345,7 @@ if __name__ == '__main__':
     # ra, de, roll = 2.4307639, -1.03454944, -90
 
     print(np.degrees(ra), np.degrees(de), np.degrees(roll))
-    img, stars = create_star_image(ra, de, roll, h=h, w=w, limit_mag=5.5, fovx=12, fovy=12)
+    img, stars = create_star_image(ra, de, roll, h=h, w=w, limit_mag=4.5, fovx=12, fovy=12)
 
     # ids = np.array([38787, 39053, 39336, 24412, 39404, 38980, 38597, 38890, 38872, 24531, 24314, 38849, 38768])
     # coords = stars[np.isin(stars[:, 0], ids), 1:3]

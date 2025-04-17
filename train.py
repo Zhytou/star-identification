@@ -135,9 +135,6 @@ def do_train(meth_params: dict, simu_params: dict, gcata_path: str, batch_size: 
     gcata = pd.read_csv(gcata_path, usecols=["Star ID", "Ra", "De", "Magnitude"])
     num_class = len(gcata)
 
-    # noise config
-    noise_cfg = f"{simu_params['sigma_pos']}_{simu_params['sigma_mag']}_{simu_params['num_fs']}_{simu_params['num_ms']}"
-
     # print the training setting
     print('Batch size:', batch_size, 'Num epochs:', num_epochs, 'Learning rate:', learning_rate)
     print('Using device:', device)
@@ -153,7 +150,7 @@ def do_train(meth_params: dict, simu_params: dict, gcata_path: str, batch_size: 
         model = create_model(method, meth_params[method], num_class)
 
         # define datasets for train, validate and test
-        dataset_dir = os.path.join('dataset', sim_cfg, method, gen_cfg, noise_cfg)
+        dataset_dir = os.path.join('dataset', sim_cfg, method, gen_cfg)
         dataset = create_dataset(method, dataset_dir, gen_cfg)
         dataset_size = len(dataset)
 
@@ -193,7 +190,7 @@ if __name__ == '__main__':
     do_train(
         {
             # 'lpt_nn': [6, 50],
-            'rac_1dcnn': [0, 5.5, [20, 50, 80], 16, 3],
+            'rac_1dcnn': [0.3, 5.5, [25, 50], 16, 3],
         },
         {
             'h': 1024,
@@ -201,10 +198,6 @@ if __name__ == '__main__':
             'fovx': 14,
             'fovy': 11,
             'limit_mag': 5.2,
-            'sigma_pos': 3,
-            'sigma_mag': 0.5,
-            'num_fs': 7,
-            'num_ms': 0
         },
         gcata_path='./catalogue/sao4.5.csv',
         num_epochs=20,

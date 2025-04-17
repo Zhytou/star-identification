@@ -88,18 +88,18 @@ def create_model(method: str, meth_params: list, num_class: int):
     Args:
         method: the method name
         meth_params: the parameters for the method
-            rac_1dcnn: [R, [num_ring1, num_ring2, ...], num_sector, num_neighbor]
-            daa_1dcnn: [R, [num_ring1, num_ring2, ...]]
-            lpt_nn: [R, num_dist]
+            rac_1dcnn: [Rb, Rp, [num_ring1, num_ring2, ...], num_sector, num_neighbor]
+            daa_1dcnn: [Rb, Rp, [num_ring1, num_ring2, ...]]
+            lpt_nn: [Rb, Rp, num_dist]
         num_class: the number of classes
     Returns:
         model: the model
     '''
     method_mapping = {
         #! carefaul!, rac_1dcnn accept (num_ring, num_neighbor, num_sector)
-        'rac_1dcnn': (RAC_CNN, lambda params: (sum(params[1]), (params[3], params[2]), num_class)),
-        'daa_1dcnn': (DAA_CNN, lambda params: ((2, sum(params[1]) + 4), num_class)),
-        'lpt_nn': (FNN, lambda params: (params[1], num_class))
+        'rac_1dcnn': (RAC_CNN, lambda params: (sum(params[-3]), (params[-1], params[-2]), num_class)),
+        'daa_1dcnn': (DAA_CNN, lambda params: ((2, sum(params[-1])), num_class)),
+        'lpt_nn': (FNN, lambda params: (params[-1], num_class))
     }
 
     model_info = method_mapping.get(method)
