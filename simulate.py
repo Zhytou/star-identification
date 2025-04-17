@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from utils import convert_q2euler
+from utils import convert_rade2deg, draw_img_with_id_label
 
 # read star catalogue
 cata_path = 'catalogue/sao.csv'
@@ -211,19 +211,21 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
                              [-sin(theta), cos(theta), 0],
                              [0, 0, 1]])
         
-        # a1 = sin(ra)*cos(roll) - cos(ra)*sin(de)*sin(roll)
-        # a2 = -sin(ra)*sin(roll) - cos(ra)*sin(de)*cos(roll)
-        # a3 = -cos(ra)*cos(de)
-        # b1 = -cos(ra)*cos(roll) - sin(ra)*sin(de)*sin(roll)
-        # b2 = cos(ra)*sin(roll) - sin(ra)*sin(de)*cos(roll)
-        # b3 = -sin(ra)*cos(de)
-        # c1 = cos(ra)*sin(roll)
-        # c2 = cos(de)*cos(roll)
-        # c3 = -sin(de)
+        a1 = sin(ra)*cos(roll) - cos(ra)*sin(de)*sin(roll)
+        a2 = -cos(ra)*cos(roll) - sin(ra)*sin(de)*sin(roll)
+        a3 = cos(de)*sin(roll)
+        b1 = -sin(ra)*sin(roll) - cos(ra)*sin(de)*cos(roll)
+        b2 = cos(ra)*sin(roll) - sin(ra)*sin(de)*cos(roll)
+        b3 = cos(de)*cos(roll)
+        c1 = -cos(ra)*cos(de)
+        c2 = -sin(ra)*cos(de)
+        c3 = -sin(de)
         
-        # M = np.array([[a1, a2, a3], [b1, b2, b3], [c1, c2, c3]])
+        M = np.array([[a1, a2, a3], [b1, b2, b3], [c1, c2, c3]])
 
-        M = rotate_z(roll) @ rotate_x(np.pi/2-de) @ rotate_z(np.pi/2+ra)
+        MM = rotate_z(roll) @ rotate_x(np.pi/2+de) @ rotate_z(ra-np.pi/2)
+        
+        assert np.allclose(M, MM), f"Rotation matrix is not correct. {M} != {MM}"
         
         return M
 
@@ -276,7 +278,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     
     # convert to image coordinate system
     stars_within_fov['X3'] = w/2*(1+stars_within_fov['X2']/stars_within_fov['Z2']/tan(radians(fovx)/2))
-    stars_within_fov['Y3'] = h/2*(1+stars_within_fov['Y2']/stars_within_fov['Z2']/tan(radians(fovy)/2))
+    stars_within_fov['Y3'] = h/2*(1-stars_within_fov['Y2']/stars_within_fov['Z2']/tan(radians(fovy)/2))
     
     # add positional noise if needed
     if sigma_pos > 0:
@@ -325,8 +327,39 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
 
 if __name__ == '__main__':
     h, w = 1024, 1024
-    ra, de, roll = radians(249.2104), radians(-12.0386), radians(-13.3845)
-    img, stars = create_star_image(ra, de, roll, h=h, w=w, limit_mag=6, fovx=12, fovy=12)
-    print(np.round(stars[:, 0:3], 2))
-    cv2.imshow('img', img)
-    cv2.waitKey(-1)
+
+    # test 1
+    # ra, de, roll = radians(249.2104), radians(-12.0386), radians(13.3845)
+
+    # test 2
+    R = np.array([
+        [-0.433199091912544, 0.824750788118732, -0.363489593061036,],
+        [0.821815221905931, 0.195853597987896, -0.535033745850578,],
+        [-0.370078758928222, -0.530497413426989, -0.762636352751049]
+    ])
+    ra, de, roll = np.arctan(R[2][1]/R[2][0]), -np.arcsin(R[2][2]), np.arctan(R[0][2]/R[1][2])
+    print(np.degrees(0.97269308), np.degrees(0.83405023))
+    print(convert_rade2deg(np.degrees(ra), np.degrees(de)))
+
+    # test 3
+    # ra, de, roll = 2.4307639, -1.03454944, -90
+
+    print(np.degrees(ra), np.degrees(de), np.degrees(roll))
+    img, stars = create_star_image(ra, de, roll, h=h, w=w, limit_mag=5.5, fovx=12, fovy=12)
+
+    # ids = np.array([38787, 39053, 39336, 24412, 39404, 38980, 38597, 38890, 38872, 24531, 24314, 38849, 38768])
+    # coords = stars[np.isin(stars[:, 0], ids), 1:3]
+    # ids = np.intersect1d(ids, stars[:, 0]).astype(int)
+    
+    ids = stars[:, 0].astype(int)
+    coords = stars[:, 1:3].astype(int)
+    # print(ids, coords)
+
+    draw_img_with_id_label(img, coords, ids)
+
+    # img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    # for row, col in coords:
+    #     cv2.circle(img, (int(col), int(row)), 5, (0, 0, 255), -1)
+    
+    # cv2.imshow('img', img)
+    # cv2.waitKey(-1)
