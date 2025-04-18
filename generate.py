@@ -29,12 +29,12 @@ def get_rotation_matrix(v: np.ndarray, w: np.ndarray) -> np.ndarray:
     return np.array([[cos_theta, -sin_theta], [sin_theta, cos_theta]])
 
 
-def generate_pm_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd: int = 10):
+def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd: int = 10):
     '''
         Generate the pattern database for the given star catalogue.
     '''
     
-    def generate_database(method: str, idxs: pd.Index, mat_size: int=0):
+    def gen_sub_database(method: str, idxs: pd.Index, mat_size: int=0):
         '''
             Generate the pattern database for the given star catalogue.
         '''
@@ -171,7 +171,7 @@ def generate_pm_database(meth_params: dict, simu_params: dict, gcata_path: str, 
             beg, end = i*len_td, min((i+1)*len_td, len(gcata))
             if beg >= end:
                 continue
-            task = pool.submit(generate_database, method, gcata.index[beg:end], mat_size)
+            task = pool.submit(gen_sub_database, method, gcata.index[beg:end], mat_size)
             tasks[method].append(task)
     
     # wait all tasks to be done and merge all the results
@@ -199,7 +199,7 @@ def generate_pm_database(meth_params: dict, simu_params: dict, gcata_path: str, 
     return 
 
 
-def generate_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, scale: float, img_id: str, h: int, w: int, gcata: pd.DataFrame, max_num_samp: int=20, realshot: bool=False):
+def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, scale: float, img_id: str, h: int, w: int, gcata: pd.DataFrame, max_num_samp: int=20, realshot: bool=False):
     '''
         Generate the pattern with the given star coordinates for one star image.
     Args:
@@ -367,9 +367,9 @@ def generate_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, sca
     return pats_dict
 
 
-def generate_test_samples(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.DataFrame, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0):
+def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.DataFrame, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0):
     '''
-        Generate pattern match test case.
+        Generate test samples.
     Args:
         num_img: number of test images expected to be generated
         meth_params: the parameters for the test sample generation
@@ -454,7 +454,7 @@ def generate_test_samples(num_img: int, meth_params: dict, simu_params: dict, gc
         scale = min(simu_params['h'], simu_params['w'])/(2*tan(radians(fov/2)))
 
         # patterns for this image
-        img_patterns = generate_pattern(meth_params, coords, ids, scale, img_id, simu_params['h'], simu_params['w'], gcata, max_num_samp=20)
+        img_patterns = gen_pattern(meth_params, coords, ids, scale, img_id, simu_params['h'], simu_params['w'], gcata, max_num_samp=20)
         for method in img_patterns:
             patterns[method].extend(img_patterns[method])
 
@@ -480,7 +480,7 @@ def generate_realshot_test_samples(img_paths: list[str], meth_params: dict):
         # get star ids
         ids = np.full(len(coords), -1)
         # generate pattern
-        img_patterns = generate_pattern(meth_params, coords, ids, img_id=os.path.basename(img_path), max_num_samp=20, realshot=True)
+        img_patterns = gen_pattern(meth_params, coords, ids, img_id=os.path.basename(img_path), max_num_samp=20, realshot=True)
         for method in img_patterns:
             patterns[method].extend(img_patterns[method])
     
@@ -491,7 +491,7 @@ def generate_realshot_test_samples(img_paths: list[str], meth_params: dict):
     return patterns
 
 
-def aggregate_test_samples(num_img: int, meth_params: dict, simu_params: dict, test_params: dict, gcata_path: str, num_thd: int = 20):
+def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: dict, gcata_path: str, num_thd: int = 20):
     '''
     Aggregate the test samples. 
     Args:
@@ -553,11 +553,11 @@ def aggregate_test_samples(num_img: int, meth_params: dict, simu_params: dict, t
 
     # add tasks to the thread pool
     for pos in test_params.get('pos', []):
-        tasks[f'pos{pos}'].append(pool.submit(generate_test_samples, num_img, meth_params, simu_params, gcata, sigma_pos=pos))
+        tasks[f'pos{pos}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, sigma_pos=pos))
     for mag in test_params.get('mag', []):
-        tasks[f'mag{mag}'].append(pool.submit(generate_test_samples, num_img, meth_params, simu_params, gcata, sigma_mag=mag))
+        tasks[f'mag{mag}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, sigma_mag=mag))
     for fs in test_params.get('fs', []):
-        tasks[f'fs{fs}'].append(pool.submit(generate_test_samples, num_img, meth_params, simu_params, gcata, num_fs=fs))
+        tasks[f'fs{fs}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, num_fs=fs))
 
     # sub test name
     for st_name in tasks:
@@ -593,11 +593,11 @@ def aggregate_test_samples(num_img: int, meth_params: dict, simu_params: dict, t
 
 
 if __name__ == '__main__':
-    if False:
-        generate_pm_database(
+    if True:
+        gen_database(
             {
-                'grid': [0.3, 6, 90], 
-                # 'lpt': [0.3, 6, 50, 50]
+                # 'grid': [0.3, 6, 90], 
+                'lpt': [0.3, 6, 50, 50]
             },
             {
                 'h': 512,
@@ -610,7 +610,7 @@ if __name__ == '__main__':
         )
 
     if True:
-        aggregate_test_samples(
+        agg_sample(
             400, 
             {
                 'grid': [0.3, 6, 90],
@@ -626,9 +626,9 @@ if __name__ == '__main__':
                 'limit_mag': 6
             },
             {
-                # 'pos': [0, 1, 2, 3, 4], 
+                'pos': [0, 1, 2, 3, 4], 
                 # 'mag': [0, 0.1, 0.2, 0.3, 0.4], 
-                'fs': [0, 1, 2, 3, 4]
+                # 'fs': [0, 1, 2, 3, 4]
             },
             './catalogue/sao5.0_d0.2_15_20.csv',
         )
