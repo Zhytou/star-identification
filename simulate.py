@@ -5,6 +5,7 @@ import pandas as pd
 
 from utils import convert_rade2deg, draw_img_with_id_label
 
+
 # read star catalogue
 cata_path = 'catalogue/sao.csv'
 catalogue = pd.read_csv(cata_path, usecols=['Star ID', 'Ra', 'De', 'Magnitude'])
@@ -157,6 +158,52 @@ def draw_star(position: tuple[float, float], magnitude: float, img: np.ndarray, 
     return img
 
 
+def get_rotation_matrix(ra: float, de: float, roll: float) -> np.ndarray:
+    """
+        Get the rotation matrix from celestial coordinates to star sensor coordinates. (W = M * V)
+    Args:
+        ra: right ascension in radians
+        de: declination in radians
+        roll: roll angle of star sensor in radians
+    Returns:
+        M: rotation matrix
+    """
+
+    def rotate_x(theta: float) -> np.ndarray:
+        '''
+            Rotate around x-axis.
+        '''
+        return np.array([[1, 0, 0],
+                            [0, cos(theta), sin(theta)],
+                            [0, -sin(theta), cos(theta)]])
+
+    def rotate_z(theta: float) -> np.ndarray:
+        '''
+            Rotate around z-axis.
+        '''
+        return np.array([[cos(theta), sin(theta), 0],
+                            [-sin(theta), cos(theta), 0],
+                            [0, 0, 1]])
+    
+    a1 = sin(ra)*cos(roll) - cos(ra)*sin(de)*sin(roll)
+    a2 = -cos(ra)*cos(roll) - sin(ra)*sin(de)*sin(roll)
+    a3 = cos(de)*sin(roll)
+    b1 = -sin(ra)*sin(roll) - cos(ra)*sin(de)*cos(roll)
+    b2 = cos(ra)*sin(roll) - sin(ra)*sin(de)*cos(roll)
+    b3 = cos(de)*cos(roll)
+    c1 = -cos(ra)*cos(de)
+    c2 = -sin(ra)*cos(de)
+    c3 = -sin(de)
+    
+    M = np.array([[a1, a2, a3], [b1, b2, b3], [c1, c2, c3]])
+
+    MM = rotate_z(roll) @ rotate_x(np.pi/2+de) @ rotate_z(ra-np.pi/2)
+    
+    assert np.allclose(M, MM), f"Rotation matrix is not correct. {M} != {MM}"
+
+    return M
+
+
 def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0, background: float=np.inf, limit_mag: float=7.0, fovy: float=10, fovx: float=10, h: int=512, w: int=512, pixel: float=67e-6, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False) -> tuple[np.ndarray, list]:
     """
         Create a star image from the given right ascension, declination and roll angle.
@@ -184,51 +231,6 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
         stars: stars drawn in the image
     """
 
-    def get_rotation_matrix(ra: float, de: float, roll: float) -> np.ndarray:
-        """
-            Get the rotation matrix from star sensor coordinates to celestial coordinates. Note that M is an orthogonal matrix, which means the transpose of M represents the transformation matrix from celestial coordinates to star sensor coordinates.
-        Args:
-            ra: right ascension in radians
-            de: declination in radians
-            roll: roll angle of star sensor in radians
-        Returns:
-            M: rotation matrix
-        """
-
-        def rotate_x(theta: float) -> np.ndarray:
-            '''
-                Rotate around x-axis.
-            '''
-            return np.array([[1, 0, 0],
-                             [0, cos(theta), sin(theta)],
-                             [0, -sin(theta), cos(theta)]])
-
-        def rotate_z(theta: float) -> np.ndarray:
-            '''
-                Rotate around z-axis.
-            '''
-            return np.array([[cos(theta), sin(theta), 0],
-                             [-sin(theta), cos(theta), 0],
-                             [0, 0, 1]])
-        
-        a1 = sin(ra)*cos(roll) - cos(ra)*sin(de)*sin(roll)
-        a2 = -cos(ra)*cos(roll) - sin(ra)*sin(de)*sin(roll)
-        a3 = cos(de)*sin(roll)
-        b1 = -sin(ra)*sin(roll) - cos(ra)*sin(de)*cos(roll)
-        b2 = cos(ra)*sin(roll) - sin(ra)*sin(de)*cos(roll)
-        b3 = cos(de)*cos(roll)
-        c1 = -cos(ra)*cos(de)
-        c2 = -sin(ra)*cos(de)
-        c3 = -sin(de)
-        
-        M = np.array([[a1, a2, a3], [b1, b2, b3], [c1, c2, c3]])
-
-        MM = rotate_z(roll) @ rotate_x(np.pi/2+de) @ rotate_z(ra-np.pi/2)
-        
-        assert np.allclose(M, MM), f"Rotation matrix is not correct. {M} != {MM}"
-
-        return M
-
     # get rotation matrix
     M = get_rotation_matrix(ra, de, roll)
 
@@ -246,9 +248,19 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
         ra1, ra2 = (ra - (R/cos(de))), (ra + (R/cos(de)))
         de1, de2 = (de - R), (de + R)
         assert ra1 < ra2 and de1 < de2
-
-        stars_within_fov = catalogue[(ra1 <= catalogue['Ra']) & (catalogue['Ra'] <= ra2) & 
-                                    (de1 <= catalogue['De']) & (catalogue['De'] <= de2)].copy()
+        if ra1 >= 0 and ra2 <= 2*np.pi:
+            stars_within_fov = catalogue[(ra1 <= catalogue['Ra']) & (catalogue['Ra'] <= ra2) & 
+                                        (de1 <= catalogue['De']) & (catalogue['De'] <= de2)].copy()
+        elif ra2 > 2*np.pi:
+            ra2 -= 2*np.pi
+            stars_within_fov = catalogue[((ra1 <= catalogue['Ra']) & (catalogue['Ra'] <= 2*np.pi)) | 
+                                        ((0 <= catalogue['Ra']) & (catalogue['Ra'] <= ra2)) & 
+                                        (de1 <= catalogue['De']) & (catalogue['De'] <= de2)].copy()
+        else:
+            ra1 += 2*np.pi
+            stars_within_fov = catalogue[((ra1 <= catalogue['Ra']) & (catalogue['Ra'] <= 2*np.pi)) | 
+                                        ((0 <= catalogue['Ra']) & (catalogue['Ra'] <= ra2)) & 
+                                        (de1 <= catalogue['De']) & (catalogue['De'] <= de2)].copy()
     else:
         # star sensor coord
         sensor = np.array([cos(ra)*cos(de), sin(ra)*cos(de), sin(de)]).transpose()
@@ -326,7 +338,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     
 
 if __name__ == '__main__':
-    h, w = 1024, 1024
+    h, w = 1024, 1280
 
     # test 1
     # ra, de, roll = radians(249.2104), radians(-12.0386), radians(13.3845)
@@ -340,12 +352,17 @@ if __name__ == '__main__':
     ra, de, roll = np.arctan(R[2][1]/R[2][0]), -np.arcsin(R[2][2]), np.arctan(R[0][2]/R[1][2])
     print(np.degrees(0.97269308), np.degrees(0.83405023))
     print(convert_rade2deg(np.degrees(ra), np.degrees(de)))
+    f = 35269.52
+    pixel = 5.5
+    fovx = degrees(2 * atan(w * pixel / (2 * f)))
+    fovy = degrees(2 * atan(h * pixel / (2 * f)))
 
     # test 3
     # ra, de, roll = 2.4307639, -1.03454944, -90
 
     print(np.degrees(ra), np.degrees(de), np.degrees(roll))
-    img, stars = create_star_image(ra, de, roll, h=h, w=w, limit_mag=4.5, fovx=12, fovy=12)
+    print(fovx, fovy)
+    img, stars = create_star_image(ra, de, roll, h=h, w=w, limit_mag=5.2, fovx=fovx, fovy=fovy)
 
     # ids = np.array([38787, 39053, 39336, 24412, 39404, 38980, 38597, 38890, 38872, 24531, 24314, 38849, 38768])
     # coords = stars[np.isin(stars[:, 0], ids), 1:3]
@@ -361,5 +378,5 @@ if __name__ == '__main__':
     # for row, col in coords:
     #     cv2.circle(img, (int(col), int(row)), 5, (0, 0, 255), -1)
     
-    # cv2.imshow('img', img)
+    cv2.imwrite('img.png', img)
     # cv2.waitKey(-1)
