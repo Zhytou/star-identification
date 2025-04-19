@@ -29,180 +29,6 @@ def get_rotation_matrix(v: np.ndarray, w: np.ndarray) -> np.ndarray:
     return np.array([[cos_theta, -sin_theta], [sin_theta, cos_theta]])
 
 
-def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd: int = 10):
-    '''
-        Generate the pattern database for the given star catalogue.
-    '''
-    
-    def gen_sub_database(method: str, idxs: pd.Index, mat_size: int=0):
-        '''
-            Generate the pattern database for the given star catalogue.
-        '''
-
-        database = pd.DataFrame(columns=range(mat_size))
-        for gidx, star_id, ra, de in zip(idxs, gcata.loc[idxs, 'Star ID'], gcata.loc[idxs, 'Ra'], gcata.loc[idxs, 'De']):
-            img, stars = create_star_image(
-                ra, de, 0, 
-                h=simu_params['h'],
-                w=simu_params['w'],
-                fovx=simu_params['fovx'],
-                fovy=simu_params['fovy'],
-                limit_mag=simu_params['limit_mag'],
-                coords_only=True
-            )
-
-            # get the centroids of the stars in the image
-            if False:
-                coords = np.array(get_star_centroids(img))
-            else:
-                coords = stars[:, 1:3]
-
-            # find the index of the reference star in the catalogue
-            ridx = np.where(stars[:, 0] == star_id)[0][0]
-            if (coords[ridx][0] - simu_params['h']/2)**2 + (coords[ridx][1] - simu_params['w']/2)**2 > 0.1:
-                print('The star is not in the center of the image!')
-                continue
-
-            # calculate the relative coordinates
-            coords = coords - coords[ridx]
-            
-            # calculate the distance between the star and the center of the image
-            distances = np.linalg.norm(coords, axis=1)
-            
-            # sort the stars by distance with accending order
-            coords = coords[distances.argsort()]
-            distances = np.sort(distances)
-            
-            assert coords[0][0]==0 and coords[0][1]==0 and distances[0]==0, "The first star is not the reference star."
-
-            # exclude the reference star (h/2, w/2)
-            coords, distances = coords[1:], distances[1:]
-            
-            if method == 'grid':
-                # exclude stars out of region
-                coords = coords[(distances >= Rb) & (distances <= Rp)] 
-                if len(coords) < min_num_star:
-                    continue
-                # find the nearest neighbor star
-                v1 = coords[0]
-                v2 = np.array([0, 1])
-                # calculate rotation matrix
-                M = get_rotation_matrix(v1, v2)
-                rot_coords = coords @ M.T
-                assert np.allclose(rot_coords[0], [0, np.linalg.norm(v1)], atol=1e-3), "Rotation matrix is not correct."
-                # calculate the pattern
-                grid = np.zeros((Lg, Lg), dtype=int)
-                for coord in rot_coords:
-                    row = int((coord[0]/Rp+1)/2*Lg)
-                    col = int((coord[1]/Rp+1)/2*Lg)
-                    grid[row][col] = 1
-                # iterate the 1's position of the grid
-                for pidx in np.flatnonzero(grid):
-                    database.loc[gidx, pidx] = star_id
-            elif method == 'lpt':
-                # exclude stars out of region
-                coords = coords[(distances >= Rb) & (distances <= Rp)]
-                distances = distances[(distances >= Rb) & (distances <= Rp)]
-                if len(coords) < min_num_star:
-                    continue
-                # do log-polar transform 
-                # distance = ln(sqrt(y^2+x^2)), theta = actan(y/x)
-                thetas = np.arctan2(coords[:, 1], coords[:, 0])
-                # make sure the nearest star's theta is 0
-                thetas = thetas - thetas[0]
-                # make sure the thetas are in the range of [-pi, pi]
-                thetas %= 2*np.pi
-                thetas[thetas >= np.pi] -= 2*np.pi
-                thetas[thetas < -np.pi] += 2*np.pi
-                # generate the pattern
-                for d, t in zip(distances, thetas):
-                    pidx = int((d-Rb)/(Rp-Rb)*Nd)*Nt+int((t+np.pi)/(2*np.pi)*Nt)
-                    database.loc[gidx, pidx] = star_id
-            else:
-                pass
-    
-        # store the rest of the results
-        return database
-
-    if meth_params == {}:
-        return
-
-    # read the star catalogue
-    gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
-    gcata = pd.read_csv(gcata_path, usecols=['Star ID', 'Ra', 'De', 'Magnitude'])
-
-    # simulation config
-    sim_cfg = f'{simu_params["h"]}_{simu_params["w"]}_{simu_params["fovx"]}_{simu_params["fovy"]}_{simu_params["limit_mag"]}'
-
-    print('Database Generation')
-    print('-------------------')
-    print('Method parameters:', meth_params)
-    print('Simulation parameters:', simu_params)
-    print('Guide star catalogue:', gcata_path)
-    
-    # use thread pool to generate the database
-    pool = ThreadPoolExecutor(max_workers=num_thd)
-    tasks = defaultdict(list)
-
-    # iterate the methods
-    for method in meth_params.keys():
-        fov = min(simu_params['fovx'], simu_params['fovy'])
-        scale = min(simu_params['h'], simu_params['w'])/(2*tan(radians(fov/2)))
-
-        if method == 'grid':
-            # parse parameters: buffer radius, pattern radius and grid length
-            rb, rp, Lg = meth_params[method]
-            # radius in pixels
-            Rb, Rp = tan(radians(rb))*scale, tan(radians(rp))*scale
-            # pattern matrix size
-            mat_size = Lg*Lg
-        elif method == 'lpt':
-            # parse parameters: buffer radius, pattern radius, number of distance bins and number of theta bins
-            rb, rp, Nd, Nt = meth_params[method]
-            # radius in pixels
-            Rb, Rp = tan(radians(rb))*scale, tan(radians(rp))*scale
-            # pattern matrix size
-            mat_size = Nd*Nt
-        else:
-            print('Invalid method!')
-            return
-        
-        # number of round used for this method
-        num_round = num_thd//len(meth_params)
-        len_td = len(gcata)//num_round
-        # add task
-        for i in range(num_round):
-            beg, end = i*len_td, min((i+1)*len_td, len(gcata))
-            if beg >= end:
-                continue
-            task = pool.submit(gen_sub_database, method, gcata.index[beg:end], mat_size)
-            tasks[method].append(task)
-    
-    # wait all tasks to be done and merge all the results
-    for method in tasks.keys():
-        # generation config for each method
-        gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
-
-        # make directory to store the database
-        db_dir = os.path.join('database', sim_cfg, gen_cfg)
-        os.makedirs(db_dir, exist_ok=True)
-
-        # temporary results
-        dfs = []
-        for task in tasks[method]:
-            df = task.result()
-            if len(df) > 0:
-                dfs.append(df)
-
-        # merge the results
-        df = pd.concat(dfs, ignore_index=True)
-        df.to_csv(f'{db_dir}/{method}.csv', index=False)
-
-    pool.shutdown()
-
-    return 
-
-
 def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: str, h: int, w: int, f: float, gcata: pd.DataFrame, max_num_samp: int=20, realshot: bool=False):
     '''
         Generate the pattern with the given star coordinates for one star image.
@@ -283,16 +109,16 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
             if len(exc_cs) < min_num_star:
                 continue
 
+            # initialize the pattern
+            pat = {
+                'star_id': star_id,
+                'cata_idx': cata_idx,
+                'img_id': img_id
+            }
+
             if method == 'rac_1dcnn':
                 # parse the rest parameters
                 arr_Nr, Ns, Nn = meth_params[method][2:]
-
-                # initialize the pattern
-                pat = {
-                    'star_id': star_id,
-                    'cata_idx': cata_idx,
-                    'img_id': img_id
-                }
                 
                 # construct radial features
                 tot_Nr = 0
@@ -324,16 +150,9 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
                         for j in range(Ns):
                             pat[f'n{i}_sector{j}'] = 0
 
-                pats_dict[method].append(pat)
             elif method == 'lpt_nn':
                 # parse the rest parameters
                 Nd = meth_params[method][2]
-
-                pat = {
-                    'star_id': star_id,
-                    'cata_idx': cata_idx,
-                    'img_id': img_id
-                }
 
                 # count the number of stars in each distance bin
                 d_cnts, _ = np.histogram(ds, bins=Nd, range=(rb, rp))
@@ -342,7 +161,6 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
                 for i, dc in enumerate(d_cnts):
                     pat[f'dist{i}'] = dc
                 
-                pats_dict[method].append(pat)
             elif method == 'grid':
                 # parse the rest parameter
                 Lg = meth_params[method][2]
@@ -370,11 +188,8 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
                     grid[row][col] = 1
                 
                 # store the 1's position of grid
-                pats_dict[method].append({
-                    'img_id': img_id,
-                    'pattern': ' '.join(map(str, np.flatnonzero(grid))), 
-                    'id': star_id
-                })
+                pat['pat'] = ' '.join(map(str, np.flatnonzero(grid)))
+
             elif method == 'lpt':
                 # parse the rest parameters
                 Nd, Nt = meth_params[method][2:]
@@ -387,18 +202,146 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
                 rot_ags[rot_ags >= np.pi] -= 2*np.pi
                 rot_ags[rot_ags < -np.pi] += 2*np.pi
                 
-                # generate the pattern
-                pat = [int((d-Rb)/(Rp-Rb)*Nd)*Nt+int((t+np.pi)/(2*np.pi)*Nt) for d, t in zip(exc_ds, rot_ags)]
-                
-                pats_dict[method].append({
-                    'img_id': img_id,
-                    'pattern': ' '.join(map(str, pat)),
-                    'id': star_id
-                })
+                # generate the grid
+                grid = [int((d-Rb)/(Rp-Rb)*Nd)*Nt+int((t+np.pi)/(2*np.pi)*Nt) for d, t in zip(exc_ds, rot_ags)]
+                pat['pat'] = ' '.join(map(str, grid))
+            
             else:
                 print('Invalid method')
     
+            pats_dict[method].append(pat)
+
     return pats_dict
+
+
+def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd: int = 10):
+    '''
+        Generate the pattern database for the given star catalogue.
+    '''
+    
+    def gen_sub_database(idxs: pd.Index):
+        '''
+            Generate the pattern database for the given star catalogue.
+        '''
+
+        db_dict = defaultdict(list)
+        for star_id, ra, de in gcata.loc[idxs, ['Star ID', 'Ra', 'De']].to_numpy():
+            star_id = int(star_id)
+
+            _, stars = create_star_image(
+                ra, de, 0, 
+                h=simu_params['h'],
+                w=simu_params['w'],
+                fovx=simu_params['fovx'],
+                fovy=simu_params['fovy'],
+                limit_mag=simu_params['limit_mag'],
+                sigma_pos=simu_params['sigma_pos'],
+                sigma_mag=simu_params['sigma_mag'],
+                num_fs=simu_params['num_fs'],
+                num_ms=simu_params['num_ms'],
+                coords_only=True
+            )
+
+            # get the coordinates and ids of the stars
+            ids = stars[:, 0]
+            coords = stars[:, 1:3]
+
+            # generate only the patterns for the given star
+            ids[ids != star_id] = -1
+        
+            # generate the patterns
+            pats_dict = gen_pattern(
+                meth_params, 
+                coords, 
+                ids, 
+                img_id=str(uuid.uuid1()),
+                h=simu_params['h'], 
+                w=simu_params['w'], 
+                f=f, 
+                gcata=gcata
+            )
+            
+            for method in pats_dict:
+                assert len(pats_dict[method]) == 1
+
+                # get the pattern for the given star
+                pat = pats_dict[method][0]
+                assert pat['star_id'] == star_id
+
+                # process pattern to generate a database entry(lookup table)
+                pat = pat['pat'].split(' ')
+                
+                db_entry = {}
+                for p in pat:
+                    db_entry[int(p)] = star_id
+                db_dict[method].append(db_entry)
+
+        return db_dict
+    
+    if meth_params == {}:
+        return
+
+    # read the star catalogue
+    gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
+    gcata = pd.read_csv(gcata_path, usecols=['Star ID', 'Ra', 'De', 'Magnitude'])
+
+    # simulation config
+    sim_cfg = f'{simu_params["h"]}_{simu_params["w"]}_{simu_params["fovx"]}_{simu_params["fovy"]}_{simu_params["limit_mag"]}'
+
+    # focus in pixels used to calculate the buffer and pattern radius
+    f1 = simu_params['w'] / (2 * tan(radians(simu_params['fovx'] / 2)))
+    f2 = simu_params['h'] / (2 * tan(radians(simu_params['fovy'] / 2)))
+    assert np.isclose(f1, f2), "The focal length in x and y direction are not equal."
+    f = (f1 + f2) / 2
+
+    print('Database Generation')
+    print('-------------------')
+    print('Method parameters:', meth_params)
+    print('Simulation parameters:', simu_params)
+    print('Guide star catalogue:', gcata_path)
+    
+    # use thread pool to generate the database
+    pool = ThreadPoolExecutor(max_workers=num_thd)
+    tasks = []
+
+    # number of round used for this method
+    num_round = num_thd//len(meth_params)
+    len_td = len(gcata)//num_round
+    
+    # add task
+    for i in range(num_round):
+        beg, end = i*len_td, min((i+1)*len_td, len(gcata))
+        if beg >= end:
+            continue
+        tasks.append(pool.submit(gen_sub_database, gcata.index[beg:end]))
+    
+    dfs_dict = defaultdict(list)
+    # wait all tasks to be done and merge all the results
+    for task in tasks:
+        db_dicts = task.result()
+
+        for method in db_dicts:
+            dfs_dict[method].append(pd.DataFrame(db_dicts[method]))
+        
+    # merge the results
+    for method in dfs_dict:
+        # generation config for each method
+        gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
+
+        # default noise config for each method
+        noise_cfg = f'{simu_params["sigma_pos"]}_{simu_params["sigma_mag"]}_{simu_params["num_fs"]}_{simu_params["num_ms"]}'
+
+        # make directory to store the database
+        db_dir = os.path.join('database', sim_cfg, method, gen_cfg, noise_cfg)
+        os.makedirs(db_dir, exist_ok=True)
+
+        # save the database
+        df = pd.concat(dfs_dict[method], ignore_index=True)
+        df.to_csv(os.path.join(db_dir, 'db.csv'), index=False)
+
+    pool.shutdown()
+
+    return 
 
 
 def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.DataFrame, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0):
@@ -447,8 +390,9 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
     ras = np.random.uniform(0, 2*np.pi, num_img)
     des = np.arcsin(np.random.uniform(-1, 1, num_img))
     # ras, des = gcata[['Ra', 'De']].sample(num_img).to_numpy().T
-    # ras = np.full(num_img, 4.1837814)
-    # des = np.full(num_img, -0.4557763)
+    # 183987
+    ras = np.full(num_img, 4.1837814)
+    des = np.full(num_img, -0.4557763)
     rolls = np.random.uniform(0, 2*np.pi, num_img)
 
     # focus in pixels used to calculate the buffer and pattern radius
@@ -458,7 +402,7 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
     f = (f1+f2)/2
 
     # the dict to store the results
-    patterns = defaultdict(list)
+    df_dict = defaultdict(list)
 
     # generate the star image
     for ra, de, roll in zip(ras, des, rolls):
@@ -482,6 +426,8 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
         if len(np.intersect1d(ids, gcata['Star ID'].to_numpy())) <= min(min_num_star, 3):
             continue
     
+        ids[ids != 183987] = -1
+
         # get the centroids of the stars in the image
         if False:
             coords = np.array(get_star_centroids(img))
@@ -492,15 +438,15 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
         img_id = str(uuid.uuid1())
 
         # patterns for this image
-        img_patterns = gen_pattern(meth_params, coords, ids, img_id, simu_params['h'], simu_params['w'], f, gcata, max_num_samp=20)
-        for method in img_patterns:
-            patterns[method].extend(img_patterns[method])
+        img_pats = gen_pattern(meth_params, coords, ids, img_id, simu_params['h'], simu_params['w'], f, gcata, max_num_samp=20)
+        for method in img_pats:
+            df_dict[method].extend(img_pats[method])
 
     # convert the results into dataframe
-    for method in patterns:
-        patterns[method] = pd.DataFrame(patterns[method])
+    for method in df_dict:
+        df_dict[method] = pd.DataFrame(df_dict[method])
     
-    return patterns
+    return df_dict
 
 
 def gen_real_sample(img_paths: list[str], meth_params: dict):
@@ -629,6 +575,8 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
 
     pool.shutdown()
 
+    return
+
 
 if __name__ == '__main__':
     if False:
@@ -642,7 +590,11 @@ if __name__ == '__main__':
                 'w': 512,
                 'fovx': 12,
                 'fovy': 12,
-                'limit_mag': 6
+                'limit_mag': 6,
+                'sigma_pos': 0,
+                'sigma_mag': 0,
+                'num_fs': 0,
+                'num_ms': 0,
             },
             './catalogue/sao6.0_d0.2_12_12.csv',
         )
