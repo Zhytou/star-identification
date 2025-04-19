@@ -3,7 +3,7 @@ import uuid
 import cv2
 import numpy as np
 import pandas as pd
-from math import radians, tan
+from math import radians, tan, cos
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from scipy.spatial.distance import cdist
@@ -62,13 +62,17 @@ def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd:
             if (coords[ridx][0] - simu_params['h']/2)**2 + (coords[ridx][1] - simu_params['w']/2)**2 > 0.1:
                 print('The star is not in the center of the image!')
                 continue
+
             # calculate the relative coordinates
             coords = coords - coords[ridx]
+            
             # calculate the distance between the star and the center of the image
             distances = np.linalg.norm(coords, axis=1)
+            
             # sort the stars by distance with accending order
             coords = coords[distances.argsort()]
             distances = np.sort(distances)
+            
             assert coords[0][0]==0 and coords[0][1]==0 and distances[0]==0, "The first star is not the reference star."
 
             # exclude the reference star (h/2, w/2)
@@ -199,7 +203,7 @@ def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd:
     return 
 
 
-def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, scale: float, img_id: str, h: int, w: int, gcata: pd.DataFrame, max_num_samp: int=20, realshot: bool=False):
+def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: str, h: int, w: int, f: float, gcata: pd.DataFrame, max_num_samp: int=20, realshot: bool=False):
     '''
         Generate the pattern with the given star coordinates for one star image.
     Args:
@@ -208,6 +212,9 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, scale: f
         ids: the ids of the stars
         scale: the scale used for region radius calculation
         img_id: the id of the image
+        h: the height of the image
+        w: the width of the image
+        f: the focal length of the camera(in pixel)
         max_num_samp: the maximum number of stars to be used as reference star
     Return:
         patterns: the pattern generated
@@ -218,13 +225,27 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, scale: f
     if len(coords) < min_num_star:
         return pats_dict
 
-    # distances = np.linalg.norm(stars[:,None,:] - stars[None,:,:], axis=-1)
+    assert len(coords) == len(ids) and coords.shape[1] == 2, "The coordinates and ids are not matched."
+
+    # distances between each stars
+    # np.linalg.norm(stars[:,None,:] - stars[None,:,:], axis=-1)
     distances = cdist(coords, coords, 'euclidean')
+    
+    # angles with respect to the reference star
     angles = np.arctan2(coords[:, 1] - coords[:, 1][:, None], coords[:, 0] - coords[:, 0][:, None])
     
+    # angular distances with respect to the origin
+    n = len(coords)
+    points = np.hstack([
+        coords-np.array([h/2, w/2]),
+        np.full((n, 1), f)
+    ])
+    norm = np.linalg.norm(points, axis=1)
+    ang_dists = np.dot(points, points.T) / np.outer(norm, norm)
+
     # choose top max_num_samp brightest star as the reference star
-    n = min(len(ids), max_num_samp+1)
-    for star_id, coord, ds, ags in zip(ids[:n], coords[:n, :], distances[:n, :], angles[:n, :]):
+    n = min(n, max_num_samp+1)
+    for star_id, coord, ds, ags, ads in zip(ids[:n], coords[:n, :], distances[:n, :], angles[:n, :], ang_dists[:n, :]):
         # get catalogue index of the guide star
         if not realshot and star_id not in gcata['Star ID'].to_numpy():
             continue
@@ -233,40 +254,55 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, scale: f
         else:
             cata_idx = -1
 
-        # coords and angles are both sorted by distance with accending order
-        cs, ags = coords[np.argsort(ds)], ags[np.argsort(ds)]
-        ds = np.sort(ds)
+        # coords, distance and angles are all sorted by angular distances with descending order
+        # ! angle bigger, the angular distance(cos) is smaller
+        cs, ds, ags = coords[np.argsort(ads)[::-1]], ds[np.argsort(ads)[::-1]], ags[np.argsort(ads)[::-1]]
+        ads = np.sort(ads)[::-1]
+
         # remove the first element, which is reference star
-        assert coord[0] == cs[0][0] and coord[1] == cs[0][1] and ds[0] == 0 and ags[0] == 0
-        cs, ds, ags = cs[1:], ds[1:], ags[1:]
+        assert np.isclose(ads[0], 1) and np.allclose(cs[0], coord) and np.isclose(ds[0], 0) and np.isclose(ags[0], 0), "The first element is not the reference star."
+        cs, ds, ags, ads = cs[1:], ds[1:], ags[1:], ads[1:]
         # calculate the relative coordinates
         cs = cs-coord
-        if len(cs) < min_num_star:
-            # skip if not enough stars in the region
-            continue
-        
+
         for method in meth_params:
+            # parse the buffer radius and pattern radius
+            Rb, Rp = meth_params[method][:2]
+            assert Rb < Rp, "Buffer radius should be smaller than pattern radius."
+            
+            # buffer and pattern radius in cos angular distance
+            Rb, Rp = cos(radians(Rb)), cos(radians(Rp))
+
+            # buffer and pattern radius in pixels
+            # !the pattern radius is always half of the image size
+            rb, rp = 0, min(h, w)/2
+
+            # exclude stars outside the region
+            exc_cs, exc_ds, exc_ags = cs[(ads >= Rp) & (ads <= Rb)], ds[(ads >= Rp) & (ads <= Rb)], ags[(ads >= Rp) & (ads <= Rb)]
+            assert len(exc_cs) == len(exc_ds) == len(exc_ags), "The number of stars in the region is not matched."
+            if len(exc_cs) < min_num_star:
+                continue
+
             if method == 'rac_1dcnn':
-                # parse the parameters
-                rb, rp, arr_Nr, Ns, Nn = meth_params[method]
-                # radius in pixels
-                Rb, Rp = tan(radians(rb))*scale, tan(radians(rp))*scale
-                pattern = {
+                # parse the rest parameters
+                arr_Nr, Ns, Nn = meth_params[method][2:]
+
+                # initialize the pattern
+                pat = {
                     'star_id': star_id,
                     'cata_idx': cata_idx,
                     'img_id': img_id
                 }
                 
+                # construct radial features
                 tot_Nr = 0
                 for Nr in arr_Nr:
-                    r_cnts, _ = np.histogram(ds, bins=Nr, range=(Rb, Rp))
+                    r_cnts, _ = np.histogram(exc_ds, bins=Nr, range=(rb, rp))
                     for i, rc in enumerate(r_cnts):
                         i += tot_Nr
-                        pattern[f'ring{i}'] = rc
+                        pat[f'ring{i}'] = rc
                     tot_Nr += Nr
                 
-                # exlcude stars' angle out of region
-                exc_ags = ags[(ds >= Rb) & (ds <= Rp)]
                 # uses several neighbor stars as the starting angle to obtain the cyclic features
                 for i, ag in enumerate(exc_ags[:Nn]):
                     # rotate stars
@@ -276,62 +312,63 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, scale: f
                     rot_ags[rot_ags > np.pi] -= 2*np.pi
                     rot_ags[rot_ags < -np.pi] += 2*np.pi
                     assert np.all((rot_ags < np.pi) & (rot_ags > -np.pi))
+
                     # calculate sectore counts using histogram
                     s_cnts, _ = np.histogram(rot_ags, bins=Ns, range=(-np.pi, np.pi))
                     for j, sc in enumerate(s_cnts):
-                        pattern[f'n{i}_sector{j}'] = sc
+                        pat[f'n{i}_sector{j}'] = sc
+                
                 # add trailing zero if there is not enough neighbors
                 if len(exc_ags) < Nn:
                     for i in range(len(exc_ags), Nn):
                         for j in range(Ns):
-                            pattern[f'n{i}_sector{j}'] = 0
+                            pat[f'n{i}_sector{j}'] = 0
 
-                pats_dict[method].append(pattern)
+                pats_dict[method].append(pat)
             elif method == 'lpt_nn':
-                # parse the parameters
-                rb, rp, Nd = meth_params[method]
-                # radius in pixels
-                Rb, Rp = tan(radians(rb))*scale, tan(radians(rp))*scale
-                pattern = {
+                # parse the rest parameters
+                Nd = meth_params[method][2]
+
+                pat = {
                     'star_id': star_id,
                     'cata_idx': cata_idx,
                     'img_id': img_id
                 }
+
                 # count the number of stars in each distance bin
-                d_cnts, _ = np.histogram(ds, bins=Nd, range=(Rb, Rp))
+                d_cnts, _ = np.histogram(ds, bins=Nd, range=(rb, rp))
+                
                 # normalize d_cnts
                 for i, dc in enumerate(d_cnts):
-                    pattern[f'dist{i}'] = dc
-                pats_dict[method].append(pattern)
+                    pat[f'dist{i}'] = dc
+                
+                pats_dict[method].append(pat)
             elif method == 'grid':
-                # parse the parameters: buffer radius, pattern radius and grid length
-                rb, rp, Lg = meth_params[method]
-                # radius in pixels
-                Rb, Rp = tan(radians(rb))*scale, tan(radians(rp))*scale
-                # exclude stars outside the region
-                exc_cs, exc_ds = cs[(ds >= Rb) & (ds <= Rp)], ds[(ds >= Rb) & (ds <= Rp)]
-                if len(exc_cs) < min_num_star:
-                    continue
+                # parse the rest parameter
+                Lg = meth_params[method][2]
+
+                # skip if the distance to nearest star is bigger than the distance of reference star to border
                 border_d = min(
                     coord[0], coord[1],
                     h-coord[0], w-coord[1],
                 )
-                # skip if the distance to nearest star is bigger than the distance of reference star to border
-                if exc_ds[0] > border_d:
+                if exc_ds[-1] > border_d:
                     # print(exc_ds[0], border_d)
                     continue
+
                 # rotate stars
-                v1 = exc_cs[0]
-                v2 = np.array([0, 1])
+                v1, v2 = exc_cs[0], np.array([0, 1])
                 M = get_rotation_matrix(v1, v2)
                 rot_cs = exc_cs @ M.T
                 assert np.allclose(rot_cs[0], [0, np.linalg.norm(v1)], atol=1e-3), "Rotation matrix is not correct."
+                
                 # calculate the pattern
                 grid = np.zeros((Lg, Lg), dtype=int)
                 for c in rot_cs:
-                    row = int((c[0]/Rp+1)/2*Lg)
-                    col = int((c[1]/Rp+1)/2*Lg)
+                    row = int((c[0]/rp+1)/2*Lg)
+                    col = int((c[1]/rp+1)/2*Lg)
                     grid[row][col] = 1
+                
                 # store the 1's position of grid
                 pats_dict[method].append({
                     'img_id': img_id,
@@ -339,26 +376,23 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, scale: f
                     'id': star_id
                 })
             elif method == 'lpt':
-                # parse parameters: buffer radius, pattern radius, number of distance bins and number of theta bins
-                rb, rp, Nd, Nt = meth_params[method]
-                # radius in pixels
-                Rb, Rp = tan(radians(rb))*scale, tan(radians(rp))*scale
-                # exclude stars outside the region
-                exc_ags, exc_ds = ags[(ds >= Rb) & (ds <= Rp)], ds[(ds >= Rb) & (ds <= Rp)]
-                if len(exc_ags) < min_num_star:
-                    continue
-                # log-polar transform is already done, where exc_ags is the thetas and exc_ds is the distances
+                # parse the rest parameters
+                Nd, Nt = meth_params[method][2:]
+
+                # !log-polar transform is already done, where exc_ags is the thetas and exc_ds is the distances
                 # rotate the stars, so that the nearest star's theta is 0
                 rot_ags = exc_ags - exc_ags[0]
                 # make sure the thetas are in the range of [-pi, pi]
                 rot_ags %= 2*np.pi
                 rot_ags[rot_ags >= np.pi] -= 2*np.pi
                 rot_ags[rot_ags < -np.pi] += 2*np.pi
+                
                 # generate the pattern
-                pattern = [int((d-Rb)/(Rp-Rb)*Nd)*Nt+int((t+np.pi)/(2*np.pi)*Nt) for d, t in zip(exc_ds, rot_ags)]
+                pat = [int((d-Rb)/(Rp-Rb)*Nd)*Nt+int((t+np.pi)/(2*np.pi)*Nt) for d, t in zip(exc_ds, rot_ags)]
+                
                 pats_dict[method].append({
                     'img_id': img_id,
-                    'pattern': ' '.join(map(str, pattern)),
+                    'pattern': ' '.join(map(str, pat)),
                     'id': star_id
                 })
             else:
@@ -413,7 +447,15 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
     ras = np.random.uniform(0, 2*np.pi, num_img)
     des = np.arcsin(np.random.uniform(-1, 1, num_img))
     # ras, des = gcata[['Ra', 'De']].sample(num_img).to_numpy().T
-    rolls = np.full(num_img, 0) #np.random.uniform(0, 2*np.pi, num_img)
+    # ras = np.full(num_img, 4.1837814)
+    # des = np.full(num_img, -0.4557763)
+    rolls = np.random.uniform(0, 2*np.pi, num_img)
+
+    # focus in pixels used to calculate the buffer and pattern radius
+    f1 = simu_params['w'] / (2 * tan(radians(simu_params['fovx'] / 2)))
+    f2 = simu_params['h'] / (2 * tan(radians(simu_params['fovy'] / 2)))
+    assert np.isclose(f1, f2), "The focal length in x and y direction are not equal."
+    f = (f1+f2)/2
 
     # the dict to store the results
     patterns = defaultdict(list)
@@ -449,12 +491,8 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
         # generate image id
         img_id = str(uuid.uuid1())
 
-        # scale used to calculate the radius in pixels
-        fov = min(simu_params['fovx'], simu_params['fovy'])
-        scale = min(simu_params['h'], simu_params['w'])/(2*tan(radians(fov/2)))
-
         # patterns for this image
-        img_patterns = gen_pattern(meth_params, coords, ids, scale, img_id, simu_params['h'], simu_params['w'], gcata, max_num_samp=20)
+        img_patterns = gen_pattern(meth_params, coords, ids, img_id, simu_params['h'], simu_params['w'], f, gcata, max_num_samp=20)
         for method in img_patterns:
             patterns[method].extend(img_patterns[method])
 
@@ -465,7 +503,7 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
     return patterns
 
 
-def generate_realshot_test_samples(img_paths: list[str], meth_params: dict):
+def gen_real_sample(img_paths: list[str], meth_params: dict):
     '''
         Generate pattern match test case using real star image.
     '''
@@ -593,11 +631,11 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
 
 
 if __name__ == '__main__':
-    if True:
+    if False:
         gen_database(
             {
-                # 'grid': [0.3, 6, 90], 
-                'lpt': [0.3, 6, 50, 50]
+                'grid': [0.3, 6, 90], 
+                # 'lpt': [0.3, 6, 50, 50]
             },
             {
                 'h': 512,
@@ -606,7 +644,7 @@ if __name__ == '__main__':
                 'fovy': 12,
                 'limit_mag': 6
             },
-            './catalogue/sao5.0_d0.2_15_20.csv',
+            './catalogue/sao6.0_d0.2_12_12.csv',
         )
 
     if True:
@@ -630,6 +668,6 @@ if __name__ == '__main__':
                 # 'mag': [0, 0.1, 0.2, 0.3, 0.4], 
                 # 'fs': [0, 1, 2, 3, 4]
             },
-            './catalogue/sao5.0_d0.2_15_20.csv',
+            './catalogue/sao6.0_d0.2_12_12.csv',
         )
     

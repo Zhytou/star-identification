@@ -9,6 +9,9 @@ from utils import convert_rade2deg, draw_img_with_id_label
 # read star catalogue
 cata_path = 'catalogue/sao.csv'
 catalogue = pd.read_csv(cata_path, usecols=['Star ID', 'Ra', 'De', 'Magnitude'])
+catalogue['X'] = np.cos(catalogue['Ra'])*np.cos(catalogue['De'])
+catalogue['Y'] = np.sin(catalogue['Ra'])*np.cos(catalogue['De'])
+catalogue['Z'] = np.sin(catalogue['De'])
 
 
 def cal_avg_star_num_within_fov(mv_limit: float=6.0, fov: float=15) -> float:
@@ -235,7 +238,9 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     M = get_rotation_matrix(ra, de, roll)
 
     # get field of view
-    fov = sqrt(fovx**2 + fovy**2)
+    # ? what happern, when fovx != fovy
+    fov = max(fovx, fovy)
+    # fov = sqrt(fovx**2 + fovy**2)
 
     f1 = pixel * w / (2*tan(radians(fovx/2)))
     f2 = pixel * h / (2*tan(radians(fovy/2)))
@@ -265,10 +270,6 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
         # star sensor coord
         sensor = np.array([cos(ra)*cos(de), sin(ra)*cos(de), sin(de)]).transpose()
 
-        catalogue['X'] = np.cos(catalogue['Ra'])*np.cos(catalogue['De'])
-        catalogue['Y'] = np.sin(catalogue['Ra'])*np.cos(catalogue['De'])
-        catalogue['Z'] = np.sin(catalogue['De'])
-
         # fov restriction
         catalogue['Angle'] = catalogue[['X', 'Y', 'Z']].dot(sensor)
         stars_within_fov = catalogue[catalogue['Angle'] >= cos(radians(fov/2))].copy()
@@ -284,25 +285,20 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
 
     # print(f"Found {len(stars_within_fov)} stars within the field of view after mag filtering.")
 
-    # convert to celestial coordinate system
-    stars_within_fov['X1'] = np.cos(stars_within_fov['Ra'])*np.cos(stars_within_fov['De'])
-    stars_within_fov['Y1'] = np.sin(stars_within_fov['Ra'])*np.cos(stars_within_fov['De'])
-    stars_within_fov['Z1'] = np.sin(stars_within_fov['De'])
-
-    # convert to star sensor coordinate system
-    stars_within_fov[['X2', 'Y2', 'Z2']] = stars_within_fov[['X1', 'Y1', 'Z1']].dot(M.T)
+    # convert from celestial coordinate system to star sensor coordinate system
+    stars_within_fov[['X', 'Y', 'Z']] = stars_within_fov[['X', 'Y', 'Z']].dot(M.T)
     
     # convert to image coordinate system
-    stars_within_fov['X3'] = w/2*(1+stars_within_fov['X2']/stars_within_fov['Z2']/tan(radians(fovx)/2))
-    stars_within_fov['Y3'] = h/2*(1-stars_within_fov['Y2']/stars_within_fov['Z2']/tan(radians(fovy)/2))
+    stars_within_fov['X'] = w/2*(1+stars_within_fov['X']/stars_within_fov['Z']/tan(radians(fovx)/2))
+    stars_within_fov['Y'] = h/2*(1-stars_within_fov['Y']/stars_within_fov['Z']/tan(radians(fovy)/2))
     
     # add positional noise if needed
     if sigma_pos > 0:
-        stars_within_fov['X3'] += np.random.normal(0, sigma_pos, size=len(stars_within_fov['X3']))
-        stars_within_fov['Y3'] += np.random.normal(0, sigma_pos, size=len(stars_within_fov['Y3']))
+        stars_within_fov['X'] += np.random.normal(0, sigma_pos, size=len(stars_within_fov['X']))
+        stars_within_fov['Y'] += np.random.normal(0, sigma_pos, size=len(stars_within_fov['Y']))
 
     # exclude stars beyond range
-    stars_within_fov = stars_within_fov[stars_within_fov['X3'].between(roi, w-roi) & stars_within_fov['Y3'].between(roi, h-roi)]
+    stars_within_fov = stars_within_fov[stars_within_fov['X'].between(roi, w-roi) & stars_within_fov['Y'].between(roi, h-roi)]
 
     # print(f"Found {len(stars_within_fov)} stars within the field of view after pos filtering.")
 
@@ -312,7 +308,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     else:
         img = get_stellar_intensity(background) * np.ones((h,w))
 
-    stars_within_fov.rename(columns={'X3': 'Col', 'Y3': 'Row'}, inplace=True)
+    stars_within_fov.rename(columns={'X': 'Col', 'Y': 'Row'}, inplace=True)
     stars_within_fov = stars_within_fov[['Star ID', 'Row', 'Col', 'Ra', 'De','Magnitude']].reset_index(drop=True)
 
     # exclude missing stars if needed
@@ -348,25 +344,25 @@ if __name__ == '__main__':
     # ra, de, roll = radians(249.2104), radians(-12.0386), radians(13.3845)
 
     # test 2
-    # R = np.array([
-    #     [-0.433199091912544, 0.824750788118732, -0.363489593061036,],
-    #     [0.821815221905931, 0.195853597987896, -0.535033745850578,],
-    #     [-0.370078758928222, -0.530497413426989, -0.762636352751049]
-    # ])
-    # ra, de, roll = np.arctan(R[2][1]/R[2][0]), -np.arcsin(R[2][2]), np.arctan(R[0][2]/R[1][2])
-    # print(np.degrees(0.97269308), np.degrees(0.83405023))
-    # print(convert_rade2deg(np.degrees(ra), np.degrees(de)))
-    # f = 35269.52
-    # pixel = 5.5
-    # fovx = degrees(2 * atan(w * pixel / (2 * f)))
-    # fovy = degrees(2 * atan(h * pixel / (2 * f)))
-    # limit_mag = 5.2
+    R = np.array([
+        [-0.433199091912544, 0.824750788118732, -0.363489593061036,],
+        [0.821815221905931, 0.195853597987896, -0.535033745850578,],
+        [-0.370078758928222, -0.530497413426989, -0.762636352751049]
+    ])
+    ra, de, roll = np.arctan(R[2][1]/R[2][0]), -np.arcsin(R[2][2]), np.arctan(R[0][2]/R[1][2])
+    print(np.degrees(0.97269308), np.degrees(0.83405023))
+    print(convert_rade2deg(np.degrees(ra), np.degrees(de)))
+    f = 35269.52
+    pixel = 5.5
+    fovx = degrees(2 * atan(w * pixel / (2 * f)))
+    fovy = degrees(2 * atan(h * pixel / (2 * f)))
+    limit_mag = 5.5
 
     # test 3
-    ra, de, roll = 0.84016492, -1.00045128, 0
-    h = w = 512
-    fovx = fovy = 12
-    limit_mag = 6
+    # ra, de, roll = 0.84016492, -1.00045128, 0
+    # h = w = 512
+    # fovx = fovy = 12
+    # limit_mag = 6
 
     print(np.degrees(ra), np.degrees(de), np.degrees(roll))
     print(fovx, fovy)
