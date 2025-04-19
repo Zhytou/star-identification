@@ -31,17 +31,16 @@ def draw_star_distribution(catalogue: pd.DataFrame, title: str = '', ax: axes.Ax
     plt.show()
 
 
-def draw_probability_versus_star_num_within_fov(catalogue: pd.DataFrame, ax: axes.Axes = None, title: str = '', fov: int=20, num_vec: int=100000):
+def draw_probability_versus_star_num_within_fov(catalogue: pd.DataFrame, ax: axes.Axes = None, title: str = '', fov: int=20, num_vec: int=10000):
     '''
         Draw the probability distribution of the number of stars within fov.
     Args:
         catalogue: the original catalogue
         ax: the axes to draw
         title: the title of the plot
+        fov: the field of view in degrees
         num_vec: the number of vectors to be generated
     '''
-    # calculate the half of fov diagonal distance
-    R = sqrt((radians(fov)**2)+(radians(fov)**2))/2
     
     # generate random right ascension[-pi, pi] and declination[-pi/2, pi/2], method from http://www.opticsjournal.net/Articles/Abstract?aid=OJbf48ddeef697ba09
     ras = np.random.uniform(0, 2*pi, num_vec)
@@ -87,6 +86,7 @@ def draw_probability_versus_star_num_within_fov(catalogue: pd.DataFrame, ax: axe
         ax.set_title(title)
         ax.set_xlim(0, 100)
         ax.set_ylim(0, 20)
+        ax.set_xticks(np.arange(0, 100, 5))
         ax.set_xlabel('Number of stars within fov')
         ax.set_ylabel('Probability%')
         ax.grid(True)
@@ -225,9 +225,6 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mag_limit: float=6
         the filtered catalogue
     '''
 
-    # calculate the half of fov diagonal distance
-    R = sqrt((radians(fov)**2)+(radians(fov)**2))/2
-
     num_dark_star_excl = len(catalogue)
 
     # eliminate the stars with magnitude > mag_limit
@@ -296,6 +293,8 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mag_limit: float=6
             angle = catalogue[['X', 'Y', 'Z']].dot(sensor)
             stars_within_fov = catalogue[angle >= cos(radians(fov/2))].copy()
         else:
+            # calculate the half of fov diagonal distance
+            R = sqrt((radians(fov)**2)+(radians(fov)**2))/2
             # get the rough range of ra & de
             ra1, ra2 = (ra - (R/cos(de))), (ra + (R/cos(de)))
             de1, de2 = (de - R), (de + R)
@@ -349,23 +348,23 @@ if __name__ == '__main__':
     if not os.path.exists(limit_file):
         df.to_csv(limit_file)
 
-    if os.path.exists(filtered_file):
-        f_df = pd.read_csv(filtered_file)
-    else:
-        f_df = filter_catalogue(df, num_limit, mag_limit, agd_limit, fov=fov, uniform=False).reset_index(drop=True)
-        f_df.to_csv(filtered_file)
+    # if os.path.exists(filtered_file):
+    #     f_df = pd.read_csv(filtered_file)
+    # else:
+    #     f_df = filter_catalogue(df, num_limit, mag_limit, agd_limit, fov=fov, uniform=False).reset_index(drop=True)
+    #     f_df.to_csv(filtered_file)
 
-    draw_star_distribution(f_df)
+    # draw_star_distribution(f_df)
     # draw_probability_versus_star_num_within_fov(f_df, fov=fov, num_vec=3000)
     
-    # if os.path.exists(uniform_filtered_file):
-    #     uf_df = pd.read_csv(uniform_filtered_file)
-    # else:
-    #     uf_df = filter_catalogue(df, num_limit, mag_limit, agd_limit, fov=fov, num_vec=360).reset_index(drop=True)
-    #     uf_df.to_csv(uniform_filtered_file)
+    if os.path.exists(uniform_filtered_file):
+        uf_df = pd.read_csv(uniform_filtered_file)
+    else:
+        uf_df = filter_catalogue(df, num_limit, mag_limit, agd_limit, fov=fov, num_vec=360).reset_index(drop=True)
+        uf_df.to_csv(uniform_filtered_file)
     
     # draw_star_distribution(uf_df)
-    # draw_probability_versus_star_num_within_fov(uf_df, fov=fov, num_vec=3000)
+    draw_probability_versus_star_num_within_fov(uf_df, fov=fov, num_vec=3000)
 
     # fig1, axs1 = plt.subplots(1, 2)
     # draw_star_distribution(df, axs1[0], "Original")

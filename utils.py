@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 
 from astropy import units as u
@@ -100,6 +101,25 @@ def draw_img_with_id_label(img: np.ndarray, coords: np.ndarray, ids: np.ndarray,
         plt.savefig(output_path, bbox_inches='tight', pad_inches=1, dpi=300)
     
     plt.close()
+
+
+def describe_database(db: pd.DataFrame):
+    '''
+        Describe the database.
+    '''
+
+    db.columns = db.columns.astype(int)
+    db_info = np.sum(db.notna().to_numpy(), axis=1)
+    max_cnt, min_cnt, avg_cnt = np.max(db_info), np.min(db_info), np.sum(db_info)/len(db)
+
+    print(
+        'Max count of 1 in pattern matrix', max_cnt, 
+        '\nMin count of 1 in pattern matrix', min_cnt, 
+        '\nAvg count of 1 in pattern matrix', avg_cnt
+    )
+
+    plt.hist(db_info, bins=max_cnt, edgecolor='black')
+    plt.show()
 
 
 def cal_snr(img: np.ndarray, noised_img: np.ndarray):
