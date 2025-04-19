@@ -243,7 +243,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     assert np.abs(f1-f2) <= 1e-2, "Focal length should be the same in both directions."
 
     # search for image-able stars
-    if True:
+    if False:
         R = sqrt((radians(fov)**2)+(radians(fov)**2))/2
         ra1, ra2 = (ra - (R/cos(de))), (ra + (R/cos(de)))
         de1, de2 = (de - R), (de + R)
@@ -265,8 +265,12 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
         # star sensor coord
         sensor = np.array([cos(ra)*cos(de), sin(ra)*cos(de), sin(de)]).transpose()
 
+        catalogue['X'] = np.cos(catalogue['Ra'])*np.cos(catalogue['De'])
+        catalogue['Y'] = np.sin(catalogue['Ra'])*np.cos(catalogue['De'])
+        catalogue['Z'] = np.sin(catalogue['De'])
+
         # fov restriction
-        catalogue['Angle'] = np.arccos(catalogue[['X', 'Y', 'Z']].dot(sensor))
+        catalogue['Angle'] = catalogue[['X', 'Y', 'Z']].dot(sensor)
         stars_within_fov = catalogue[catalogue['Angle'] >= cos(radians(fov/2))].copy()
 
     # print(f"Found {len(stars_within_fov)} stars within the field of view.")
@@ -344,25 +348,29 @@ if __name__ == '__main__':
     # ra, de, roll = radians(249.2104), radians(-12.0386), radians(13.3845)
 
     # test 2
-    R = np.array([
-        [-0.433199091912544, 0.824750788118732, -0.363489593061036,],
-        [0.821815221905931, 0.195853597987896, -0.535033745850578,],
-        [-0.370078758928222, -0.530497413426989, -0.762636352751049]
-    ])
-    ra, de, roll = np.arctan(R[2][1]/R[2][0]), -np.arcsin(R[2][2]), np.arctan(R[0][2]/R[1][2])
-    print(np.degrees(0.97269308), np.degrees(0.83405023))
-    print(convert_rade2deg(np.degrees(ra), np.degrees(de)))
-    f = 35269.52
-    pixel = 5.5
-    fovx = degrees(2 * atan(w * pixel / (2 * f)))
-    fovy = degrees(2 * atan(h * pixel / (2 * f)))
+    # R = np.array([
+    #     [-0.433199091912544, 0.824750788118732, -0.363489593061036,],
+    #     [0.821815221905931, 0.195853597987896, -0.535033745850578,],
+    #     [-0.370078758928222, -0.530497413426989, -0.762636352751049]
+    # ])
+    # ra, de, roll = np.arctan(R[2][1]/R[2][0]), -np.arcsin(R[2][2]), np.arctan(R[0][2]/R[1][2])
+    # print(np.degrees(0.97269308), np.degrees(0.83405023))
+    # print(convert_rade2deg(np.degrees(ra), np.degrees(de)))
+    # f = 35269.52
+    # pixel = 5.5
+    # fovx = degrees(2 * atan(w * pixel / (2 * f)))
+    # fovy = degrees(2 * atan(h * pixel / (2 * f)))
+    # limit_mag = 5.2
 
     # test 3
-    # ra, de, roll = 2.4307639, -1.03454944, -90
+    ra, de, roll = 0.84016492, -1.00045128, 0
+    h = w = 512
+    fovx = fovy = 12
+    limit_mag = 6
 
     print(np.degrees(ra), np.degrees(de), np.degrees(roll))
     print(fovx, fovy)
-    img, stars = create_star_image(ra, de, roll, h=h, w=w, limit_mag=5.2, fovx=fovx, fovy=fovy)
+    img, stars = create_star_image(ra, de, roll, h=h, w=w, limit_mag=limit_mag, fovx=fovx, fovy=fovy)
 
     # ids = np.array([38787, 39053, 39336, 24412, 39404, 38980, 38597, 38890, 38872, 24531, 24314, 38849, 38768])
     # coords = stars[np.isin(stars[:, 0], ids), 1:3]

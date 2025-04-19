@@ -72,7 +72,7 @@ def draw_freq_spectrum(img: np.ndarray):
     plt.show()
 
 
-def draw_img_with_id_label(img: np.ndarray, coords: np.ndarray, ids: np.ndarray, output_path=None):
+def draw_img_with_id_label(img: np.ndarray, coords: np.ndarray, ids: np.ndarray, grid_on: bool=False, grid_step: int=10, output_path: str=None):
     '''
         Draw the image with the id label.
     '''
@@ -83,9 +83,13 @@ def draw_img_with_id_label(img: np.ndarray, coords: np.ndarray, ids: np.ndarray,
     
     ax.set_xlim(0, w)
     ax.set_ylim(0, h)
-    ax.axis('off')
+    ax.axis('on')
     ax.invert_yaxis()
-    
+    if grid_on:
+        ax.set_xticks(np.arange(0, w, grid_step))
+        ax.set_yticks(np.arange(0, h, grid_step))
+        ax.grid(grid_on, color='r', linewidth=2)
+
     for id, (row, col) in zip(ids, coords):
         row, col = min(int(row)+5, h-10), min(int(col)+5, w-10)
         ax.text(col, row, str(id), fontsize=8, color='white', backgroundcolor=(0, 0, 0, 0.5), ha='left', va='top')
