@@ -52,6 +52,7 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
         return pats_dict
 
     assert len(coords) == len(ids) and coords.shape[1] == 2, "The coordinates and ids are not matched."
+    n = len(coords)
 
     # distances between each stars
     # np.linalg.norm(stars[:,None,:] - stars[None,:,:], axis=-1)
@@ -61,7 +62,6 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
     angles = np.arctan2(coords[:, 1] - coords[:, 1][:, None], coords[:, 0] - coords[:, 0][:, None])
     
     # angular distances with respect to the origin
-    n = len(coords)
     points = np.hstack([
         coords-np.array([h/2, w/2]),
         np.full((n, 1), f)
@@ -70,8 +70,9 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
     ang_dists = np.dot(points, points.T) / np.outer(norm, norm)
 
     # choose top max_num_samp brightest star as the reference star
-    n = min(n, max_num_samp+1)
-    for star_id, coord, ds, ags, ads in zip(ids[:n], coords[:n, :], distances[:n, :], angles[:n, :], ang_dists[:n, :]):
+    n = min(n, max_num_samp+1) if realshot else n
+
+    for star_id, coord, ds, ags, ads in zip(ids[:n], coords[:n], distances[:n], angles[:n], ang_dists[:n]):
         # get catalogue index of the guide star
         if not realshot and star_id not in gcata['Star ID'].to_numpy():
             continue
@@ -170,8 +171,7 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
                     coord[0], coord[1],
                     h-coord[0], w-coord[1],
                 )
-                if exc_ds[-1] > border_d:
-                    # print(exc_ds[0], border_d)
+                if exc_ds[0] > border_d:
                     continue
 
                 # rotate stars
@@ -203,7 +203,14 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
                 rot_ags[rot_ags < -np.pi] += 2*np.pi
                 
                 # generate the grid
-                grid = [int((d-Rb)/(Rp-Rb)*Nd)*Nt+int((t+np.pi)/(2*np.pi)*Nt) for d, t in zip(exc_ds, rot_ags)]
+                # TODO: fix the grid construction with rb and rp
+                grid = []
+                for d, t in zip(exc_ds, rot_ags):
+                    # get the grid index
+                    i = int(d/Rp*Nd)
+                    j = int((t+np.pi)/(2*np.pi)*Nt)
+                    
+                    grid.append(i*Nt+j)
                 pat['pat'] = ' '.join(map(str, grid))
             
             else:
@@ -355,9 +362,6 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
                 arr_Nr: the array of ring number
                 Ns: the number of sectors
                 Nn: the minimum number of neighbor stars in the region
-            'rac_1dcnn':
-                r: the radius of the region in degrees
-                arr_N: the array of histgram bins number for discretizing the feature sequences
             'lpt_nn': 
                 r: the radius of the region in degrees
                 Nd: the number of distance bins
@@ -370,18 +374,10 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
                 rp: the radius of pattern region in degrees
                 Nd: the number of distance bins
                 Nt: the number of theta bins
-            'rac': radial and cyclic algorithm
-                rb: the radius of buffer region in degreess
-                rr: the radius of pattern region for radial features in degrees
-                rc: the radius of pattern region for cyclic features in degrees
-                Nr: the number of rings
-                Ns: the number of sectors
         sigma_pos: the standard deviation of the positional noise
         sigma_mag: the standard deviation of the magnitude noise
         num_fs: the number of false stars
         num_ms: the number of missing stars
-        max_num_samp: the maximum number of samples for each test image
-            In other words, we can use the top num_samp brightest to construct pattern at most.
     Returns:
         dict: method->dataframe
     '''
@@ -391,8 +387,8 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
     des = np.arcsin(np.random.uniform(-1, 1, num_img))
     # ras, des = gcata[['Ra', 'De']].sample(num_img).to_numpy().T
     # 183987
-    ras = np.full(num_img, 4.1837814)
-    des = np.full(num_img, -0.4557763)
+    # ras = np.full(num_img, 4.1837814)
+    # des = np.full(num_img, -0.4557763)
     rolls = np.random.uniform(0, 2*np.pi, num_img)
 
     # focus in pixels used to calculate the buffer and pattern radius
@@ -417,17 +413,15 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
             sigma_mag=sigma_mag,
             num_fs=num_fs,
             num_ms=num_ms, 
-            coords_only=False
+            coords_only=True
         )
         # get star ids
         ids = stars[:, 0]
 
         # two few guide stars to identify
-        if len(np.intersect1d(ids, gcata['Star ID'].to_numpy())) <= min(min_num_star, 3):
+        if len(np.intersect1d(ids, gcata['Star ID'].to_numpy())) < min(min_num_star, 3):
             continue
-    
-        ids[ids != 183987] = -1
-
+        
         # get the centroids of the stars in the image
         if False:
             coords = np.array(get_star_centroids(img))
@@ -438,7 +432,16 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
         img_id = str(uuid.uuid1())
 
         # patterns for this image
-        img_pats = gen_pattern(meth_params, coords, ids, img_id, simu_params['h'], simu_params['w'], f, gcata, max_num_samp=20)
+        img_pats = gen_pattern(
+            meth_params, 
+            coords, 
+            ids, 
+            img_id, 
+            h=simu_params['h'], 
+            w=simu_params['w'],
+            f=f, 
+            gcata=gcata, 
+        )
         for method in img_pats:
             df_dict[method].extend(img_pats[method])
 
@@ -579,11 +582,11 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
 
 
 if __name__ == '__main__':
-    if False:
+    if True:
         gen_database(
             {
-                'grid': [0.3, 6, 90], 
-                # 'lpt': [0.3, 6, 50, 50]
+                # 'grid': [0.1, 6, 50], 
+                'lpt': [0.1, 6, 50, 50]
             },
             {
                 'h': 512,
@@ -596,15 +599,15 @@ if __name__ == '__main__':
                 'num_fs': 0,
                 'num_ms': 0,
             },
-            './catalogue/sao6.0_d0.2_12_12.csv',
+            './catalogue/sao6.0_d0.03_12_15.csv',
         )
 
     if True:
         agg_sample(
             400, 
             {
-                'grid': [0.3, 6, 90],
-                # 'lpt': [0.3, 6, 50, 50],
+                # 'grid': [0.1, 6, 50],
+                'lpt': [0.1, 6, 50, 50],
                 # 'lpt_nn': [6, 50],
                 # 'rac_1dcnn': [6, [20, 50, 80], 16, 3]
             }, 
@@ -616,10 +619,10 @@ if __name__ == '__main__':
                 'limit_mag': 6
             },
             {
-                'pos': [0, 1, 2, 3, 4], 
+                'pos': [0, 0.5, 1, 1.5, 2], 
                 # 'mag': [0, 0.1, 0.2, 0.3, 0.4], 
                 # 'fs': [0, 1, 2, 3, 4]
             },
-            './catalogue/sao6.0_d0.2_12_12.csv',
+            './catalogue/sao6.0_d0.03_12_15.csv',
         )
     
