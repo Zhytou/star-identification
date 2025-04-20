@@ -136,6 +136,8 @@ def do_train(meth_params: dict, simu_params: dict, gcata_path: str, batch_size: 
     num_class = len(gcata)
 
     # print the training setting
+    print('Train')
+    print('-----------')
     print('Batch size:', batch_size, 'Num epochs:', num_epochs, 'Learning rate:', learning_rate)
     print('Using device:', device)
     print('Number of class', num_class)
@@ -190,16 +192,16 @@ if __name__ == '__main__':
     do_train(
         {
             # 'lpt_nn': [6, 50],
-            'rac_1dcnn': [0.3, 5.5, [25, 50], 16, 3],
+            'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
         },
         {
-            'h': 1024,
-            'w': 1280,
-            'fovx': 14,
-            'fovy': 11,
-            'limit_mag': 5.2,
+            'h': 512,
+            'w': 512,
+            'fovx': 12,
+            'fovy': 12,
+            'limit_mag': 6,
         },
-        gcata_path='./catalogue/sao4.5.csv',
+        gcata_path='catalogue/sao6.0_d0.03_12_15.csv',
         num_epochs=20,
         batch_size=512,
         learning_rate=0.001

@@ -244,8 +244,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
 
     f1 = pixel * w / (2*tan(radians(fovx/2)))
     f2 = pixel * h / (2*tan(radians(fovy/2)))
-
-    assert np.abs(f1-f2) <= 1e-2, "Focal length should be the same in both directions."
+    assert np.isclose(f1, f2), "Focal length should be the same in both directions."
 
     # search for image-able stars
     if False:
@@ -382,5 +381,5 @@ if __name__ == '__main__':
     # for row, col in coords:
     #     cv2.circle(img, (int(col), int(row)), 5, (0, 0, 255), -1)
     
-    cv2.imwrite('img.png', img)
+    # cv2.imwrite('img.png', img)
     # cv2.waitKey(-1)

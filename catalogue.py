@@ -279,12 +279,12 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mag_limit: float=6
     ra_grid, de_grid = np.meshgrid(ras, des)
     ras, des = ra_grid.flatten(), de_grid.flatten()
 
-    sensor_x = np.cos(ra_grid)*np.cos(de_grid)
-    sensor_y = np.sin(ra_grid)*np.cos(de_grid)
-    sensor_z = np.sin(de_grid)
-    sensors = np.array([sensor_x.flatten(), sensor_y.flatten(), sensor_z.flatten()]).transpose()
+    sensor_x = np.cos(ras)*np.cos(des)
+    sensor_y = np.sin(ras)*np.cos(des)
+    sensor_z = np.sin(des)
+    sensors = np.array([sensor_x, sensor_y, sensor_z]).transpose()
 
-    print('ras', ras.shape, 'des', des.shape, 'sensors', sensors.shape)
+    # print('ras', ras.shape, 'des', des.shape, 'sensors', sensors.shape)
 
     for ra, de, sensor in zip(ras, des, sensors):
         # fov restriction
@@ -332,10 +332,10 @@ def filter_catalogue(catalogue: pd.DataFrame, num_limit: int, mag_limit: float=6
 
 if __name__ == '__main__':
     # filter parameters
-    fov = 12
-    num_limit = 12
-    mag_limit = 6.0
-    agd_limit = 0.2
+    fov = 9
+    num_limit = 10
+    mag_limit = 5.5
+    agd_limit = 0.03
 
     raw_file = 'raw_catalogue/sao_j2000.dat'
     parsed_file = 'catalogue/sao.csv'
@@ -344,9 +344,9 @@ if __name__ == '__main__':
     uniform_filtered_file = f'catalogue/sao{mag_limit}_d{agd_limit}_{fov}_{num_limit}.csv'
 
     df = parse_heasarc_sao(raw_file, parsed_file)
-    df = df[df['Magnitude'] <= mag_limit].reset_index(drop=True)
-    if not os.path.exists(limit_file):
-        df.to_csv(limit_file)
+    # df = df[df['Magnitude'] <= mag_limit].reset_index(drop=True)
+    # if not os.path.exists(limit_file):
+    #     df.to_csv(limit_file)
 
     # if os.path.exists(filtered_file):
     #     f_df = pd.read_csv(filtered_file)
@@ -363,7 +363,7 @@ if __name__ == '__main__':
         uf_df = filter_catalogue(df, num_limit, mag_limit, agd_limit, fov=fov, num_vec=360).reset_index(drop=True)
         uf_df.to_csv(uniform_filtered_file)
     
-    # draw_star_distribution(uf_df)
+    draw_star_distribution(uf_df)
     draw_probability_versus_star_num_within_fov(uf_df, fov=fov, num_vec=3000)
 
     # fig1, axs1 = plt.subplots(1, 2)

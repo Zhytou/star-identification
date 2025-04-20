@@ -105,8 +105,10 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
             rb, rp = 0, min(h, w)/2
 
             # exclude stars outside the region
-            exc_cs, exc_ds, exc_ags = cs[(ads >= Rp) & (ads <= Rb)], ds[(ads >= Rp) & (ads <= Rb)], ags[(ads >= Rp) & (ads <= Rb)]
+            exc_cs, exc_ds, exc_ags = cs[(ads > Rp) & (ads < Rb)], ds[(ads > Rp) & (ads < Rb)], ags[(ads > Rp) & (ads < Rb)]
             assert len(exc_cs) == len(exc_ds) == len(exc_ags), "The number of stars in the region is not matched."
+            # due to the precision of the float, the assert may fail
+            # assert np.all((exc_ds > rb) & (exc_ds < rp)), f"The distance of stars in the region is not in the range of [rb, rp]. {exc_ds}"
             if len(exc_cs) < min_num_star:
                 continue
 
@@ -206,11 +208,17 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
                 # TODO: fix the grid construction with rb and rp
                 grid = []
                 for d, t in zip(exc_ds, rot_ags):
+                    # due to the percision of the float, the distance may be out of range
+                    if d < rb or d > rp:
+                        continue
+
                     # get the grid index
-                    i = int(d/Rp*Nd)
+                    i = int(d/rp*Nd)
                     j = int((t+np.pi)/(2*np.pi)*Nt)
                     
                     grid.append(i*Nt+j)
+                    assert(i < Nd and j < Nt), f"Grid index out of range: {i}, {j}, {Nd}, {Nt}, {exc_ds[-1]}, {ads[-1]}, "
+                
                 pat['pat'] = ' '.join(map(str, grid))
             
             else:
@@ -582,11 +590,11 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
 
 
 if __name__ == '__main__':
-    if True:
+    if False:
         gen_database(
             {
-                # 'grid': [0.1, 6, 50], 
-                'lpt': [0.1, 6, 50, 50]
+                'grid': [0.3, 6, 50], 
+                # 'lpt': [0.3, 6, 25, 36]
             },
             {
                 'h': 512,
@@ -606,10 +614,10 @@ if __name__ == '__main__':
         agg_sample(
             400, 
             {
-                # 'grid': [0.1, 6, 50],
-                'lpt': [0.1, 6, 50, 50],
+                # 'grid': [0.3, 6, 50],
+                # 'lpt': [0.3, 6, 25, 36],
                 # 'lpt_nn': [6, 50],
-                # 'rac_1dcnn': [6, [20, 50, 80], 16, 3]
+                'rac_1dcnn': [0.1, 6, [25, 50], 16, 3]
             }, 
             {
                 'h': 512,
@@ -620,8 +628,8 @@ if __name__ == '__main__':
             },
             {
                 'pos': [0, 0.5, 1, 1.5, 2], 
-                # 'mag': [0, 0.1, 0.2, 0.3, 0.4], 
-                # 'fs': [0, 1, 2, 3, 4]
+                'mag': [0, 0.1, 0.2, 0.3, 0.4], 
+                'fs': [0, 1, 2, 3, 4]
             },
             './catalogue/sao6.0_d0.03_12_15.csv',
         )
