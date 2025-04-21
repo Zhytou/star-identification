@@ -7,6 +7,16 @@ from astropy.coordinates import SkyCoord
 from skimage.metrics import structural_similarity
 
 
+def get_angdist(points: np.ndarray):
+    '''
+        Get the angular distance of the points.
+    '''
+    norm = np.linalg.norm(points, axis=1)
+    angd = np.dot(points, points.T) / np.outer(norm, norm)
+
+    return angd
+
+
 def convert_rade2deg(ra: float, dec: float):
     '''
         Convert the RA and DE from degree to timezone.
