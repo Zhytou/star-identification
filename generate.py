@@ -443,6 +443,8 @@ def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: i
 
     for method in pats_dict:
         pats_dict[method] = pd.DataFrame(pats_dict[method])
+        if len(pats_dict[method]) == 0:
+            continue
         # make directory
         ds_path = os.path.join(ds_paths[method], f'{star_id}')
         os.makedirs(ds_path, exist_ok=True)

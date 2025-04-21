@@ -96,7 +96,7 @@ def cluster_by_angle(cata: pd.DataFrame, ids: np.ndarray, r: float):
     # get the label of biggest cluster
     ulabels, cnts = np.unique(labels, return_counts=True)
     # verify failure, if cannot determine the biggest cluster
-    if np.sum(np.max(cnts) == cnts) > 1:
+    if np.max(cnts) < 3 or np.sum(np.max(cnts) == cnts) > 1:
         return np.full_like(ids, -1)
 
     # get the ids of stars not in the biggest cluster
@@ -263,7 +263,7 @@ def predict(method: str, model: nn.Module, loader: DataLoader, T: float=0, devic
     return res
 
 
-def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, gen_cfg: str, Rp: float, gcata: pd.DataFrame, batch_size: int=512, device=torch.device('cpu')):
+def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, gen_cfg: str, Rp: float, gcata: pd.DataFrame, batch_size: int=2048, device=torch.device('cpu')):
     '''
         Evaluate the model's accuracy on the provided data loader.
     '''
@@ -462,6 +462,8 @@ def do_test(meth_params: dict, simu_params: dict, test_params: dict, gcata_path:
 
             # load best model
             model.load_state_dict(torch.load(os.path.join('model', sim_cfg, method, gen_cfg, 'best_model.pth')))
+
+            print('Device:', device)
         else:
             print('Wrong Method!')
             continue
@@ -522,7 +524,7 @@ def do_test(meth_params: dict, simu_params: dict, test_params: dict, gcata_path:
 if __name__ == '__main__':
     res = do_test(
         {
-            # 'lpt_nn': [6, 50],
+            'lpt_nn': [0.1, 6, 25],
             'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
             # 'grid': [0.3, 6, 50], 
             # 'lpt': [0.3, 6, 25, 36]
