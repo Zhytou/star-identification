@@ -1,5 +1,4 @@
 from math import radians, degrees, sin, cos, tan, sqrt, exp, atan
-import cv2
 import numpy as np
 import pandas as pd
 
@@ -8,10 +7,10 @@ from utils import convert_rade2deg, draw_img_with_id_label
 
 # read star catalogue
 cata_path = 'catalogue/sao.csv'
-catalogue = pd.read_csv(cata_path, usecols=['Star ID', 'Ra', 'De', 'Magnitude'])
-catalogue['X'] = np.cos(catalogue['Ra'])*np.cos(catalogue['De'])
-catalogue['Y'] = np.sin(catalogue['Ra'])*np.cos(catalogue['De'])
-catalogue['Z'] = np.sin(catalogue['De'])
+cata = pd.read_csv(cata_path, usecols=['Star ID', 'Ra', 'De', 'Magnitude'])
+cata['X'] = np.cos(cata['Ra'])*np.cos(cata['De'])
+cata['Y'] = np.sin(cata['Ra'])*np.cos(cata['De'])
+cata['Z'] = np.sin(cata['De'])
 
 
 def cal_avg_star_num_within_fov(mv_limit: float=6.0, fov: float=15) -> float:
@@ -253,25 +252,25 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
         de1, de2 = (de - R), (de + R)
         assert ra1 < ra2 and de1 < de2
         if ra1 >= 0 and ra2 <= 2*np.pi:
-            stars_within_fov = catalogue[(ra1 <= catalogue['Ra']) & (catalogue['Ra'] <= ra2) & 
-                                        (de1 <= catalogue['De']) & (catalogue['De'] <= de2)].copy()
+            stars_within_fov = cata[(ra1 <= cata['Ra']) & (cata['Ra'] <= ra2) & 
+                                    (de1 <= cata['De']) & (cata['De'] <= de2)].copy()
         elif ra2 > 2*np.pi:
             ra2 -= 2*np.pi
-            stars_within_fov = catalogue[((ra1 <= catalogue['Ra']) & (catalogue['Ra'] <= 2*np.pi)) | 
-                                        ((0 <= catalogue['Ra']) & (catalogue['Ra'] <= ra2)) & 
-                                        (de1 <= catalogue['De']) & (catalogue['De'] <= de2)].copy()
+            stars_within_fov = cata[((ra1 <= cata['Ra']) & (cata['Ra'] <= 2*np.pi)) | 
+                                    ((0 <= cata['Ra']) & (cata['Ra'] <= ra2)) & 
+                                    (de1 <= cata['De']) & (cata['De'] <= de2)].copy()
         else:
             ra1 += 2*np.pi
-            stars_within_fov = catalogue[((ra1 <= catalogue['Ra']) & (catalogue['Ra'] <= 2*np.pi)) | 
-                                        ((0 <= catalogue['Ra']) & (catalogue['Ra'] <= ra2)) & 
-                                        (de1 <= catalogue['De']) & (catalogue['De'] <= de2)].copy()
+            stars_within_fov = cata[((ra1 <= cata['Ra']) & (cata['Ra'] <= 2*np.pi)) | 
+                                    ((0 <= cata['Ra']) & (cata['Ra'] <= ra2)) & 
+                                    (de1 <= cata['De']) & (cata['De'] <= de2)].copy()
     else:
         # star sensor coord
         sensor = np.array([cos(ra)*cos(de), sin(ra)*cos(de), sin(de)]).transpose()
 
         # fov restriction
-        catalogue['Angle'] = catalogue[['X', 'Y', 'Z']].dot(sensor)
-        stars_within_fov = catalogue[catalogue['Angle'] >= cos(radians(fov/2))].copy()
+        cata['Angle'] = cata[['X', 'Y', 'Z']].dot(sensor)
+        stars_within_fov = cata[cata['Angle'] >= cos(radians(fov/2))].copy()
 
     # print(f"Found {len(stars_within_fov)} stars within the field of view.")
 
@@ -343,25 +342,37 @@ if __name__ == '__main__':
     # ra, de, roll = radians(249.2104), radians(-12.0386), radians(13.3845)
 
     # test 2
+    # picdata.mat
     R = np.array([
         [-0.433199091912544, 0.824750788118732, -0.363489593061036,],
         [0.821815221905931, 0.195853597987896, -0.535033745850578,],
         [-0.370078758928222, -0.530497413426989, -0.762636352751049]
     ])
-    ra, de, roll = np.arctan(R[2][1]/R[2][0]), -np.arcsin(R[2][2]), np.arctan(R[0][2]/R[1][2])
-    print(np.degrees(0.97269308), np.degrees(0.83405023))
-    print(convert_rade2deg(np.degrees(ra), np.degrees(de)))
     f = 35269.52
     pixel = 5.5
-    fovx = degrees(2 * atan(w * pixel / (2 * f)))
-    fovy = degrees(2 * atan(h * pixel / (2 * f)))
     limit_mag = 5.5
 
     # test 3
-    # ra, de, roll = 0.84016492, -1.00045128, 0
-    # h = w = 512
-    # fovx = fovy = 12
-    # limit_mag = 6
+    # 20161227225347.bmp
+    R = np.array([
+        [-0.1574, 0.0803, -0.9843],
+        [0.9857, -0.0474, -0.1615],
+        [-0.0596, -0.9956, -0.0717],
+    ])
+    # 20161227225550.bmp
+    R = np.array([
+        [-0.157354524403952, 0.080254948679595, -0.984275721971258],
+        [0.985741422718652, -0.047398268182872, -0.161453558987943],
+        [-0.059610411726599, -0.995646798511249, -0.071652295344149]
+    ])
+    f = 34000
+    pixel = 6.7
+    limit_mag = 5
+
+    ra, de, roll = np.arctan(R[2][1]/R[2][0]), -np.arcsin(R[2][2]), np.arctan(R[0][2]/R[1][2])
+    print(convert_rade2deg(np.degrees(ra), np.degrees(de)))
+    fovx = degrees(2 * atan(w * pixel / (2 * f)))
+    fovy = degrees(2 * atan(h * pixel / (2 * f)))
 
     print(np.degrees(ra), np.degrees(de), np.degrees(roll))
     print(fovx, fovy)
