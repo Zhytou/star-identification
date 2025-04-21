@@ -5,90 +5,35 @@ import numpy as np
 from math import radians, tan
 from concurrent.futures import ThreadPoolExecutor
 
-from simulate import create_star_image
-from generate import gen_pattern
+from generate import gen_sample, gen_dataset
 from collections import defaultdict
-
-
-def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: int, star_ra: float, star_de: float, offset :float, num_roll: int, gcata: pd.DataFrame):
-    '''
-        Generate dataset for NN model using the given star catalogue.
-    '''
-    name = uuid.uuid1()
-
-    # generate right ascension[-pi, pi] and declination[-pi/2, pi/2]
-    ras = np.clip(np.full(num_roll, star_ra) + np.radians(np.random.normal(0, offset, num_roll)), 0, 2*np.pi)
-    des = np.clip(np.full(num_roll, star_de) + np.radians(np.random.normal(0, offset, num_roll)), -np.pi/2, np.pi/2)
-    rolls = np.arange(0, 2*np.pi, 2*np.pi/num_roll)
-    pats_dict = defaultdict(list)
-
-    # focus in pixels used to calculate the buffer and pattern radius
-    f1 = simu_params['w'] / (2 * tan(radians(simu_params['fovx'] / 2)))
-    f2 = simu_params['h'] / (2 * tan(radians(simu_params['fovy'] / 2)))
-    assert np.isclose(f1, f2), f"The focal length in x direction is {f1}, while in y direction is {f2}."
-    f = (f1+f2)/2
-
-    # generate the star image
-    for ra, de, roll in zip(ras, des, rolls):
-        # stars is a np array [[id, row, col, mag]]
-        _,  stars = create_star_image(ra, de, roll, 
-            h=simu_params['h'], 
-            w=simu_params['w'],
-            fovx=simu_params['fovx'],
-            fovy=simu_params['fovy'],
-            # pixel=simu_params['pixel'],
-            limit_mag=simu_params['limit_mag'],
-            sigma_pos=simu_params['sigma_pos'],
-            sigma_mag=simu_params['sigma_mag'],
-            num_fs=simu_params['num_fs'],
-            num_ms=simu_params['num_ms'], 
-            coords_only=False
-        )
-
-        # get star ids and coordinates
-        ids = stars[:, 0]
-        coords = stars[:, 1:3]
-        
-        # set all the star ids to -1 except the given star id in order to make sure only generate the pattern for the given star id
-        ids[ids != star_id] = -1
-        
-        if np.all(ids == -1):
-            continue
-
-        # generate a unique img id for later accuracy calculation
-        img_id = str(uuid.uuid1())
-
-        # generate the pattern(dict, method->pattern) for the given star id
-        pat_dict = gen_pattern(
-            meth_params, 
-            coords, 
-            ids, 
-            img_id, 
-            f=f,
-            h=simu_params['h'], 
-            w=simu_params['w'], 
-            gcata=gcata
-        )
-
-        # store the patterns
-        for method, pat in pat_dict.items():
-            assert len(pat) == 1, f"Error: {len(pat)} patterns generated for method {method}."
-            pat = pat[0]
-            pat['roll'] = roll
-            pats_dict[method].append(pat)
-
-    for method in pats_dict:
-        pats_dict[method] = pd.DataFrame(pats_dict[method])
-        # make directory
-        ds_path = os.path.join(ds_paths[method], f'{star_id}')
-        os.makedirs(ds_path, exist_ok=True)
-        # save the dataset
-        pats_dict[method].to_csv(os.path.join(ds_path, f'{name}_{num_roll}.csv'), index=False)
 
 
 def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: float=1, num_roll: int=360, num_thd: int=20):
     '''
-        Aggregate the dataset into a single dataframe.
+        Aggregate the training datasets.
+    Args:
+        meth_params: the parameters of methods, possible methods include:
+            'rac_1dcnn': Rb Rp arr_Nr Ns Nn
+            'lpt_nn': Rb Rp Nd
+            'grid': Rb Rp Ng
+            'lpt': Rb Rp Nd Nt
+        test_params: the parameters for the test sample generation
+            'pos': the standard deviation of the positional noise
+            'mag': the standard deviation of the magnitude noise
+            'fs': the number of false stars
+            'ms': the number of missing stars
+        simu_params: the parameters for the simulation
+            'h': the height of the image
+            'w': the width of the image
+            'fovx': the field of view in x direction
+            'fovy': the field of view in y direction
+            'limit_mag': the limit magnitude
+            'pixel': the pixel size
+        gcata_path: the path to the guide star catalogue
+        offset: the offset of degrees to be added to the RA and Dec of the stars
+        num_roll: the number of rolls to be applied to the stars
+        num_thd: the number of threads to generate the test samples
     '''
 
     if meth_params == {}:
@@ -99,6 +44,7 @@ def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: f
     print('Method parameters:', meth_params)
     print('Simulation parameters:', simu_params)
     print('Guide star catalogue:', gcata_path)
+    print('Offset:', offset)
     print('Number of rolls:', num_roll)
     print('----------------------')
 
@@ -139,11 +85,11 @@ def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: f
 
     for task in tasks:
         task.result()
-    
 
-if __name__ == '__main__':
-    if False:
-        dir = 'dataset/512_512_12_12_6/rac_1dcnn/sao6.0_d0.03_12_15_0.1_6_[25, 50]_16_3'
+    # aggregate the dataset
+    for method in meth_params:
+        gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
+        dir = os.path.join('dataset', sim_cfg, method, gen_cfg)
         dfs = []
 
         for offset_dir in os.listdir(dir):
@@ -161,10 +107,104 @@ if __name__ == '__main__':
         df = pd.concat(dfs, ignore_index=True)
         df.to_csv(os.path.join(dir, 'labels.csv'), index=False)
 
+    return
+
+
+def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: dict, gcata_path: str, num_thd: int = 20):
+    '''
+        Aggregate the test samples. 
+    Args:
+        num_img: number of test images expected to be generated
+        meth_params: the parameters of methods, possible methods include:
+            'rac_1dcnn': Rb Rp arr_Nr Ns Nn
+            'lpt_nn': Rb Rp Nd
+            'grid': Rb Rp Ng
+            'lpt': Rb Rp Nd Nt
+        test_params: the parameters for the test sample generation
+            'pos': the standard deviation of the positional noise
+            'mag': the standard deviation of the magnitude noise
+            'fs': the number of false stars
+            'ms': the number of missing stars
+        simu_params: the parameters for the simulation
+            'h': the height of the image
+            'w': the width of the image
+            'fovx': the field of view in x direction
+            'fovy': the field of view in y direction
+            'limit_mag': the limit magnitude
+            'pixel': the pixel size
+        num_thd: the number of threads to generate the test samples
+    '''
+
+    if num_img == 0:
+        return
+
+    print('Test Image Generation')
+    print('----------------------')
+    print('Method Parameters:', meth_params)
+    print('Simulation Parameters:', simu_params)
+    print('Number of test images expected to be generated:', num_img)
+    print('----------------------')
+
+    # simulation config
+    sim_cfg = f'{simu_params["h"]}_{simu_params["w"]}_{simu_params["fovx"]}_{simu_params["fovy"]}_{simu_params["limit_mag"]}'
+
+    # read the guide star catalogue
+    gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
+    gcata = pd.read_csv(gcata_path, usecols=['Star ID', 'Ra', 'De', 'Magnitude'])
+
+    # use thread pool
+    pool = ThreadPoolExecutor(max_workers=num_thd)
+    # tasks for later aggregation
+    tasks = defaultdict(list)
+
+    # add tasks to the thread pool
+    for pos in test_params.get('pos', []):
+        tasks[f'pos{pos}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, sigma_pos=pos))
+    for mag in test_params.get('mag', []):
+        tasks[f'mag{mag}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, sigma_mag=mag))
+    for fs in test_params.get('fs', []):
+        tasks[f'fs{fs}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, num_fs=fs))
+
+    # sub test name
+    for st_name in tasks:
+        for task in tasks[st_name]:
+            # get the async task result and store the returned dataframe
+            df_dict = task.result()
+            for method in df_dict:
+                gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
+                st_path = os.path.join('test', sim_cfg, method, gen_cfg, st_name)
+                if not os.path.exists(st_path):
+                    os.makedirs(st_path)
+                df = df_dict[method]
+                df.to_csv(os.path.join(st_path, str(uuid.uuid1())), index=False)
+
+    # aggregate all the test patterns
+    for method in meth_params:
+        gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
+        path = os.path.join('test', sim_cfg, method, gen_cfg)
+        if not os.path.exists(path):
+            continue
+        # sub test dir names
+        test_names = list(tasks.keys())
+        for tn in test_names:
+            p = os.path.join(path, tn)
+            dfs = [pd.read_csv(os.path.join(p, f)) for f in os.listdir(p) if f != 'labels.csv']
+            if len(dfs) > 0:        
+                df = pd.concat(dfs, ignore_index=True)
+                df.to_csv(os.path.join(p, 'labels.csv'), index=False)
+                # count the number of samples for each class
+                print('Method and test name:', method, tn, '\nTotal number of images for this sub test', len(df['img_id'].unique()))
+
+    pool.shutdown()
+
+    return
+
+
+if __name__ == '__main__':
     if True:
         agg_dataset(
             meth_params={
-                # 'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
+                'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
                 'lpt_nn': [0.1, 6, 25],
             },
             simu_params={
@@ -173,7 +213,7 @@ if __name__ == '__main__':
                 'fovx': 12,
                 'fovy': 12,
                 'limit_mag': 6,
-                'sigma_pos': 0,
+                'sigma_pos': 2,
                 'sigma_mag': 0,
                 'num_fs': 0,
                 'num_ms': 0
@@ -205,3 +245,28 @@ if __name__ == '__main__':
             num_roll=10,
             num_thd=20
         )
+    
+    if True:
+        agg_sample(
+            400, 
+            {
+                # 'grid': [0.3, 6, 50],
+                # 'lpt': [0.3, 6, 25, 36],
+                'lpt_nn': [0.1, 6, 25],
+                # 'rac_1dcnn': [0.1, 6, [25, 50], 16, 3]
+            }, 
+            {
+                'h': 512,
+                'w': 512,
+                'fovx': 12,
+                'fovy': 12,
+                'limit_mag': 6
+            },
+            {
+                'pos': [0, 0.5, 1, 1.5, 2], 
+                'mag': [0, 0.1, 0.2, 0.3, 0.4], 
+                'fs': [0, 1, 2, 3, 4]
+            },
+            './catalogue/sao6.0_d0.03_12_15.csv',
+        )
+    
