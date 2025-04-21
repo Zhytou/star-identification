@@ -1,4 +1,5 @@
 import os
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn, torch.optim as optim
@@ -7,109 +8,60 @@ from torch.utils.data import DataLoader, random_split
 
 from dataset import create_dataset
 from models import create_model
+from test import predict
 
 
 def check_accuracy(method: str, model: nn.Module, loader: DataLoader, device=torch.device('cpu')):
     '''
-        Evaluate the model's accuracy on the provided data loader. The accuracy is calculated based on the model's ability to correctly identify at least three stars in each star image.
-    Args:
-        method: the method to be checked
-        model: the model to be checked
-        loader: the data loader for validation or testing
-        device: the device to run the model
-    Returns:
-        the accuracy of the model
+        Evaluate the model's accuracy on the provided data loader.
     '''
-    # set the model into evaluation model
-    model.eval()
+    # estimated catalogue index
+    esti_idxs = predict(method, model, loader, device=device)
 
-    # num of correctly predicted samples
-    correct = 0
-    total = 0
+    # real catalogue index
+    real_idxs = []
+    for _, labels in loader:
+        real_idxs.extend(labels.tolist())
 
-    if method == 'rac_1dcnn':
-        # iterate through test dataset
-        for idxs, rings, sectors, labels in loader:
-            idxs, rings, sectors, labels = idxs.to(device), rings.to(device), sectors.to(device), labels.to(device)
-            # forward pass only to get logits/output
-            outputs = model(rings, sectors)
-            # get predictions from the maximum value
-            predicted = torch.argmax(outputs.data, 1)
-            # correctly predicted sample indexes
-            idxs = idxs[predicted == labels].tolist()
-            
-            correct += len(idxs)
-            total += len(labels)
+    cnt = np.sum(np.array(esti_idxs) == np.array(real_idxs))
+    tot = len(loader)
+    acc = round(100.0*cnt/tot, 2)
 
-    elif method == 'daa_1dcnn' or method == 'lpt_nn':
-        for idxs, feats, labels in loader:
-            idxs, feats, labels = idxs.to(device), feats.to(device), labels.to(device)
-            # forward pass only to get logits/output
-            outputs = model(feats)
-            # get predictions from the maximum value
-            predicted = torch.argmax(outputs.data, 1)
-            # correctly predicted sample indexes
-            idxs = idxs[predicted == labels].tolist()
-
-            correct += len(idxs)
-            total += len(labels)
-    else:
-        return 0.0
-    
-    acc = round(100.0*correct/total, 2)
     return acc
 
 
 def train(method: str, model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader: DataLoader, val_loader: DataLoader=None, device=torch.device('cpu')):
     '''
         Train the model.
-    Args:
-        method: the method to be trained
-        model: the model to be trained
-        optimizer: the optimizer
-        num_epochs: the number of epochs
-        loader: the data loader for training
-        test_loader: the data loader for testing
-        device: the device to run the model
-    Returns:
-        ls: the loss of each epoch
-        accs: the accuracy of each epoch
     '''
     ls, accs = [], []
 
-    model.to(device)
-    for epoch in range(num_epochs):
-        # set the model into train model
-        model.train()
+    # set the model into train model
+    model.train()
 
-        if method == 'rac_1dcnn':
-            for _, rings, sectors, labels in loader:
-                rings, sectors, labels = rings.to(device), sectors.to(device), labels.to(device)
-                # forward pass to get output/logits
-                scores = model(rings, sectors)
-                # calculate Loss: softmax --> cross entropy loss
-                loss = F.cross_entropy(scores, labels)
-                # clear gradients w.r.t. parameters
-                optimizer.zero_grad()
-                # getting gradients w.r.t. parameters
-                loss.backward()
-                # updating parameters
-                optimizer.step()
-        elif method == 'daa_1dcnn' or method == 'lpt_nn':
-            for _, feats, labels in loader:
-                feats, labels = feats.to(device), labels.to(device)
-                # forward pass to get output/logits
-                scores = model(feats)
-                # calculate Loss: softmax --> cross entropy loss
-                loss = F.cross_entropy(scores, labels)
-                # clear gradients w.r.t. parameters
-                optimizer.zero_grad()
-                # getting gradients w.r.t. parameters
-                loss.backward()
-                # updating parameters
-                optimizer.step()
-        else:
-            return
+    # move the model to the device
+    model.to(device)
+
+    for epoch in range(num_epochs):
+        for feats, labels in loader:
+            # move the features and labels to the device
+            feats = (feats[0].to(device), feats[1].to(device)) if method == 'rac_1dcnn' else feats.to(device)
+            labels = labels.to(device)
+            
+            # forward pass to get output/logits
+            scores = model(*feats) if method == 'rac_1dcnn' else model(feats)
+            
+            # calculate Loss: softmax --> cross entropy loss
+            loss = F.cross_entropy(scores, labels)
+
+            # clear gradients w.r.t. parameters
+            optimizer.zero_grad()
+            
+            # getting gradients w.r.t. parameters
+            loss.backward()
+            
+            # updating parameters
+            optimizer.step()
 
         val_acc = check_accuracy(method, model, val_loader, device) if val_loader else 0.0
         print(f'Epoch: {epoch+1},  Loss: {loss.item()}, Validation Accuracy: {val_acc}%')
@@ -123,8 +75,6 @@ def train(method: str, model: nn.Module, optimizer: optim.Optimizer, num_epochs:
 def do_train(meth_params: dict, simu_params: dict, gcata_path: str, batch_size: int=256, num_epochs: int=10, learning_rate: float=0.01, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu")):
     '''
         Train the model for different method.
-    Args:
-        meth_params: the parameters for the method
     '''
 
     # simulation config
@@ -151,9 +101,9 @@ def do_train(meth_params: dict, simu_params: dict, gcata_path: str, batch_size: 
         # define model
         model = create_model(method, meth_params[method], num_class)
 
-        # define datasets for train, validate and test
-        dataset_dir = os.path.join('dataset', sim_cfg, method, gen_cfg)
-        dataset = create_dataset(method, dataset_dir, gen_cfg)
+        # define dataset
+        df = pd.read_csv(os.path.join('dataset', sim_cfg, method, gen_cfg, 'labels.csv'))
+        dataset = create_dataset(method, df, gen_cfg)
         dataset_size = len(dataset)
 
         # define data loaders
@@ -172,7 +122,6 @@ def do_train(meth_params: dict, simu_params: dict, gcata_path: str, batch_size: 
         model_path = os.path.join(model_dir, 'best_model.pth')
         if os.path.exists(model_path):
             model.load_state_dict(torch.load(model_path))
-        model.to(device)
             
         # do training
         optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=0.0001)  
@@ -191,7 +140,7 @@ def do_train(meth_params: dict, simu_params: dict, gcata_path: str, batch_size: 
 if __name__ == '__main__':
     do_train(
         {
-            # 'lpt_nn': [6, 50],
+            # 'lpt_nn': [0.1, 6, 25],
             'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
         },
         {

@@ -41,17 +41,9 @@ class StarImageDataset(Dataset):
 class LPTDataset(Dataset):
     '''Log-Polar transform based NN dataset'''
 
-    def __init__(self, root_dir: str, gen_cfg: str):
-        '''
-        Args:
-            root_dir: name of the dataset directory
-            gen_cfg: name of the generator configuration
-        '''
-        label_file = os.path.join(root_dir, 'labels.csv')
-        if not os.path.exists(label_file):
-            raise FileNotFoundError(f'{label_file} does not exist')
+    def __init__(self, label_df: pd.DataFrame, gen_cfg: str):
         self.num_dist = int(gen_cfg.split('_')[-1])
-        self.label_df = pd.read_csv(label_file)
+        self.label_df = label_df
 
     def __len__(self):
         return len(self.label_df)
@@ -64,25 +56,17 @@ class LPTDataset(Dataset):
         dists = self.label_df.loc[idx, cols].to_numpy(float)
         cata_idx = self.label_df.loc[idx, 'cata_idx'].astype(int)
 
-        return idx, torch.from_numpy(dists).float(), cata_idx
+        return torch.from_numpy(dists).float(), cata_idx
 
 
 class RACDataset(Dataset):
     '''Radial and cyclic based NN dataset'''
 
-    def __init__(self, root_dir: str, gen_cfg: str):
-        '''
-        Args:
-            root_dir: name of the dataset directory
-            gen_cfg: name of the generator configuration
-        '''
-        label_file = os.path.join(root_dir, 'labels.csv')
-        if not os.path.exists(label_file):
-            raise FileNotFoundError(f'{label_file} does not exist')
+    def __init__(self, label_df: pd.DataFrame, gen_cfg: str):
         arr_nr, ns, nn = gen_cfg.split('_')[-3:]
         self.num_ring = sum(list(map(int, arr_nr.strip('[]').split(', '))))
         self.num_sector, self.num_neighbor = int(ns), int(nn)
-        self.label_df = pd.read_csv(label_file)
+        self.label_df = label_df
 
     def __len__(self):
         return len(self.label_df)
@@ -97,24 +81,16 @@ class RACDataset(Dataset):
         sectors = self.label_df.loc[idx, cols].to_numpy(float).reshape(self.num_neighbor, -1)
         cata_idx = self.label_df.loc[idx, 'cata_idx'].astype(int)
 
-        return idx, torch.from_numpy(rings).float(), torch.from_numpy(sectors).float(), cata_idx
+        return (torch.from_numpy(rings).float(), torch.from_numpy(sectors).float()), cata_idx
 
 
 class DAADataset(Dataset):
     '''Distance and angular based NN dataset'''
 
-    def __init__(self, root_dir: str, gen_cfg: str):
-        '''
-        Args:
-            root_dir: name of the dataset directory
-            gen_cfg: name of the generator configuration
-        '''
-        label_file = os.path.join(root_dir, 'labels.csv')
-        if not os.path.exists(label_file):
-            raise FileNotFoundError(f'{label_file} does not exist')
+    def __init__(self, label_df: pd.DataFrame, gen_cfg: str):
         arr_n = list(map(int, gen_cfg.split('_')[-1].strip('[]').split(', ')))
         self.tot_n = sum(arr_n)
-        self.label_df = pd.read_csv(label_file)
+        self.label_df = label_df
 
     def __len__(self):
         return len(self.label_df)
@@ -129,15 +105,16 @@ class DAADataset(Dataset):
         # catalog index
         cata_idx = self.label_df.loc[idx, 'cata_idx'].astype(int)
 
-        return idx, torch.from_numpy(features).float(), cata_idx
+        return torch.from_numpy(features).float(), cata_idx
 
 
-def create_dataset(method: str, root_dir: str, gen_cfg: str):
+def create_dataset(method: str, df: pd.DataFrame, gen_cfg: str):
     '''
         Create dataset based on the method
     Args:
         method: the method name
-        root_dir: the directory of the dataset
+        df: the dataframe with the labels
+        
         gen_cfg: the generator configuration
     '''
     method_mapping = {
@@ -148,4 +125,4 @@ def create_dataset(method: str, root_dir: str, gen_cfg: str):
     dataset_class = method_mapping.get(method)
     if dataset_class is None:
         raise ValueError(f"Invalid method: {method}")
-    return dataset_class(root_dir, gen_cfg)
+    return dataset_class(df, gen_cfg)
