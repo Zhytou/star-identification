@@ -7,13 +7,18 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from concurrent.futures import ThreadPoolExecutor
 from sklearn.cluster import DBSCAN
 from sklearn.metrics.pairwise import haversine_distances
 
 from dataset import create_dataset
-from models import create_model
+from model import create_model
+
+# A single image is considered to have been successfully identified only when min_cnt stars are successfully identified within it.
+# minimum count of successfully identified stars
+min_sis_cnt = 3
 
 
 def compress_db_row(row: pd.Series):
@@ -95,8 +100,8 @@ def cluster_by_angle(cata: pd.DataFrame, ids: np.ndarray, r: float):
 
     # get the label of biggest cluster
     ulabels, cnts = np.unique(labels, return_counts=True)
-    # verify failure, if cannot determine the biggest cluster
-    if np.max(cnts) < 3 or np.sum(np.max(cnts) == cnts) > 1:
+    # verify failure, if biggest cluster is smaller than min_sis_cnt or biggest cluster cannot be determined
+    if np.max(cnts) < min_sis_cnt or np.sum(np.max(cnts) == cnts) > 1:
         return np.full_like(ids, -1)
 
     # get the ids of stars not in the biggest cluster
@@ -134,14 +139,14 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
             Identify the image by its patterns.
         '''
         n = len(img_df)
-        if n < 4:
+        if n < min_sis_cnt:
             return False
         
         # real star ids
         real_ids = img_df['star_id'].to_numpy()
 
         # patterns
-        pats = df['pat'].str.split(' ').apply(lambda x: np.array(x, dtype=int)).to_numpy()
+        pats = img_df['pat'].str.split(' ').apply(lambda x: np.array(x, dtype=int)).to_numpy()
 
         #! the identification step
         # estimated star ids
@@ -160,7 +165,7 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
         esti_ids = np.array(esti_ids)
 
         #! the verification step
-        if np.sum(esti_ids != -1) >= 3:
+        if np.sum(esti_ids != -1) >= min_sis_cnt:
             # do fov restriction by clustering and take the biggest cluster as final result
             esti_ids = cluster_by_angle(gcata, esti_ids, Rp)
 
@@ -168,7 +173,7 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
         # count the successfully identified stars
         cnt = np.sum(np.logical_and(esti_ids == real_ids, real_ids != -1))
 
-        return cnt >= 3
+        return cnt >= min_sis_cnt
 
     def identify_pattern(df: pd.DataFrame):
         '''
@@ -203,7 +208,7 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
         res = df.groupby('img_id', as_index=True).apply(identify_image, include_groups=False)
         # calculate the accuracy
         df = df['img_id'].value_counts()
-        tot = np.sum(df >= 4)
+        tot = np.sum(df >= min_sis_cnt)
     else:
         # get the pattern id
         res = identify_pattern(df)
@@ -241,26 +246,26 @@ def predict(method: str, model: nn.Module, loader: DataLoader, T: float=0, devic
 
     with torch.no_grad():
         for feats, _ in loader:
-            if method == 'rac_1dcnn':
-                # move the features to the device
-                feats = feats[0].to(device), feats[1].to(device)
-    
-                # forward pass only to get logits/output
-                outputs = model(*feats)
-            else:
-                # move the features to the device
-                feats = feats.to(device)
+            # move the features and labels to the device
+            feats = (feats[0].to(device), feats[1].to(device)) if method == 'rac_1dcnn' else feats.to(device)
+            
+            # forward pass to get output logits
+            scores = model(*feats) if method == 'rac_1dcnn' else model(feats)  
 
-                # forward pass only to get logits/output
-                outputs = model(feats)        
+            # get the probabilities
+            probs = F.softmax(scores, dim=1)
 
             # get predictions from the maximum value
-            predicted = torch.argmax(outputs.data, 1).tolist()
+            vals, idxs = torch.max(probs, dim=1)
+
+            # filter the predictions by threshold
+            mask = vals < T
+            idxs[mask] = -1
 
             # append the predicted labels
-            res.extend(predicted)
+            res.extend(idxs.tolist())
     
-    return res
+    return np.array(res)
 
 
 def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, gen_cfg: str, Rp: float, gcata: pd.DataFrame, batch_size: int=2048, device=torch.device('cpu')):
@@ -278,8 +283,10 @@ def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, gen_cfg: 
     # get the predicted catalogue index
     esti_idxs = predict(method, model, loader, device=device)
 
-    # get the guide star ids
-    esti_ids = gcata.loc[esti_idxs, 'Star ID'].to_numpy()
+    # get the guide star ids by non -1 idxs
+    esti_ids = np.full_like(esti_idxs, -1)
+    mask = np.array(esti_idxs) != -1    
+    esti_ids[mask] = gcata.loc[esti_idxs[mask], 'Star ID'].to_numpy()
 
     # get the real star ids
     real_ids = df['star_id'].to_numpy()
@@ -291,7 +298,7 @@ def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, gen_cfg: 
     for img_id in np.unique(img_ids):
         mask = img_ids == img_id
 
-        if np.sum(mask) < 3 or np.sum(esti_ids[mask] != -1) < 3:
+        if np.sum(mask) < min_sis_cnt or np.sum(esti_ids[mask] != -1) < min_sis_cnt:
             res.append(False)
             continue
 
@@ -300,14 +307,14 @@ def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, gen_cfg: 
         esti_ids[mask] = cluster_by_angle(gcata, esti_ids[mask], Rp)
 
         #! the check step
-        if np.sum(np.logical_and(esti_ids[mask] == real_ids[mask], real_ids[mask] != -1)) >= 3:
+        if np.sum(np.logical_and(esti_ids[mask] == real_ids[mask], real_ids[mask] != -1)) >= min_sis_cnt:
             res.append(True)
         else:
             res.append(False)
 
     # calculate the accuracy
     df = df['img_id'].value_counts()
-    tot = len(df[df >= 4])
+    tot = len(df[df >= min_sis_cnt])
     acc = round(np.sum(res)/tot*100.0, 2)
 
     return acc
@@ -524,10 +531,10 @@ def do_test(meth_params: dict, simu_params: dict, test_params: dict, gcata_path:
 if __name__ == '__main__':
     res = do_test(
         {
-            'lpt_nn': [0.1, 6, 25],
+            # 'lpt_nn': [0.1, 6, 25],
             'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
-            # 'grid': [0.3, 6, 50], 
-            # 'lpt': [0.3, 6, 25, 36]
+            'grid': [0.3, 6, 50], 
+            'lpt': [0.3, 6, 25, 36]
         },
         {
             'h': 512,
@@ -541,9 +548,9 @@ if __name__ == '__main__':
             'num_ms': 0,
         },
         {
-            'pos': [0, 0.5, 1, 1.5, 2],
-            'mag': [0, 0.1, 0.2, 0.3, 0.4],
-            'fs': [0, 1, 2, 3, 4]
+            'pos': [0]#[0, 0.5, 1, 1.5, 2],
+            # 'mag': [0, 0.1, 0.2, 0.3, 0.4],
+            # 'fs': [0, 1, 2, 3, 4]
         },
         './catalogue/sao6.0_d0.03_12_15.csv',
     )
