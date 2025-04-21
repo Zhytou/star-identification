@@ -10,6 +10,7 @@ from scipy.spatial.distance import cdist
 
 from simulate import create_star_image
 from extract import get_star_centroids
+from utils import get_angdist
 
 
 # minimum number of stars in the region for pattern generation
@@ -66,20 +67,19 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
         coords-np.array([h/2, w/2]),
         np.full((n, 1), f)
     ])
-    norm = np.linalg.norm(points, axis=1)
-    ang_dists = np.dot(points, points.T) / np.outer(norm, norm)
+    angdists = get_angdist(points)
 
     # choose top max_num_samp brightest star as the reference star
     n = min(n, max_num_samp+1) if realshot else n
 
-    for star_id, coord, ds, ags, ads in zip(ids[:n], coords[:n], distances[:n], angles[:n], ang_dists[:n]):
+    for star_id, coord, ds, ags, ads in zip(ids[:n], coords[:n], distances[:n], angles[:n], angdists[:n]):
         # get catalogue index of the guide star
         if not realshot and star_id == -1:
             continue
-        elif star_id in gcata['Star ID'].to_numpy():
-            cata_idx = gcata[gcata['Star ID'] == star_id].index.to_list()[0]
-        else:
+        elif realshot:
             cata_idx = -1
+        else:
+            cata_idx = gcata[gcata['Star ID'] == star_id].index.to_list()[0]
 
         # coords, distance and angles are all sorted by angular distances with descending order
         # ! angle bigger, the angular distance(cos) is smaller
@@ -107,7 +107,9 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
             # exclude stars outside the region
             exc_cs, exc_ds, exc_ags = cs[(ads > Rp) & (ads < Rb)], ds[(ads > Rp) & (ads < Rb)], ags[(ads > Rp) & (ads < Rb)]
             assert len(exc_cs) == len(exc_ds) == len(exc_ags), "The number of stars in the region is not matched."
-            # due to the precision of the float, the assert may fail
+
+            # ?due to the precision of the float, these assertions may fail
+            # assert np.all((exc_cs > -rp) & (exc_cs < rp)), f"The coordinates of stars in the region is not in the range of [-rp, rp]. {exc_cs}"
             # assert np.all((exc_ds > rb) & (exc_ds < rp)), f"The distance of stars in the region is not in the range of [rb, rp]. {exc_ds}"
             if len(exc_cs) < min_num_star:
                 continue
@@ -116,7 +118,9 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
             pat = {
                 'star_id': star_id,
                 'cata_idx': cata_idx,
-                'img_id': img_id
+                'img_id': img_id,
+                'row': coord[0],
+                'col': coord[1],
             }
 
             if method == 'rac_1dcnn':
@@ -185,6 +189,10 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
                 # calculate the pattern
                 grid = np.zeros((Lg, Lg), dtype=int)
                 for c in rot_cs:
+                    # due to the percision of the float, the coords may be out of range
+                    if c[0] < -rp or c[0] >= rp or c[1] < -rp or c[1] >= rp:
+                        continue
+
                     row = int((c[0]/rp+1)/2*Lg)
                     col = int((c[1]/rp+1)/2*Lg)
                     grid[row][col] = 1
@@ -205,7 +213,6 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
                 rot_ags[rot_ags < -np.pi] += 2*np.pi
                 
                 # generate the grid
-                # TODO: fix the grid construction with rb and rp
                 grid = []
                 for d, t in zip(exc_ds, rot_ags):
                     # due to the percision of the float, the distance may be out of range
@@ -384,7 +391,7 @@ def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: i
     rolls = np.arange(0, 2*np.pi, 2*np.pi/num_roll)
 
     # the dict to store the patterns(method -> [patterns])
-    pats_dict = defaultdict(list)
+    df_dict = defaultdict(list)
 
     # focus in pixels used to calculate the buffer and pattern radius
     f1 = simu_params['w'] / (2 * tan(radians(simu_params['fovx'] / 2)))
@@ -438,18 +445,18 @@ def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: i
         for method, pat in pat_dict.items():
             assert len(pat) == 1, f"Error: {len(pat)} patterns generated for method {method}."
             pat = pat[0]
-            pat['roll'] = roll
-            pats_dict[method].append(pat)
+            df_dict[method].append(pat)
 
-    for method in pats_dict:
-        pats_dict[method] = pd.DataFrame(pats_dict[method])
-        if len(pats_dict[method]) == 0:
+    for method in df_dict:
+        if len(df_dict[method]) == 0:
             continue
         # make directory
         ds_path = os.path.join(ds_paths[method], f'{star_id}')
         os.makedirs(ds_path, exist_ok=True)
+
         # save the dataset
-        pats_dict[method].to_csv(os.path.join(ds_path, f'{name}_{num_roll}.csv'), index=False)
+        df_dict[method] = pd.DataFrame(df_dict[method])
+        df_dict[method].to_csv(os.path.join(ds_path, f'{name}_{num_roll}.csv'), index=False)
 
     return
 
@@ -535,7 +542,7 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
         img_id = str(uuid.uuid1())
 
         # patterns for this image
-        img_pats = gen_pattern(
+        pats_dict = gen_pattern(
             meth_params, 
             coords, 
             ids, 
@@ -545,8 +552,8 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
             f=f, 
             gcata=gcata, 
         )
-        for method in img_pats:
-            df_dict[method].extend(img_pats[method])
+        for method in pats_dict:
+            df_dict[method].extend(pats_dict[method])
 
     # convert the results into dataframe
     for method in df_dict:
@@ -555,30 +562,50 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
     return df_dict
 
 
-def gen_real_sample(img_paths: list[str], meth_params: dict):
+def gen_real_sample(img_paths: list[str], meth_params: dict, f: float):
     '''
         Generate pattern match test case using real star image.
     '''
 
-    patterns = defaultdict(list)
+    df_dict = defaultdict(list)
     for img_path in img_paths:
         # read the image
         img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+
+        # get the image size
+        h, w = img.shape
+
         # get the centroids of the stars in the image
         coords = np.array(get_star_centroids(img, 'MEDIAN', 'Liebe', 'CCL', 'CoG', pixel_limit=3))
-        # print(len(coords))
-        # get star ids
+
+        # set all star ids to -1, since unknown for real image
         ids = np.full(len(coords), -1)
-        # generate pattern
-        img_patterns = gen_pattern(meth_params, coords, ids, img_id=os.path.basename(img_path), max_num_samp=20, realshot=True)
-        for method in img_patterns:
-            patterns[method].extend(img_patterns[method])
+
+        print(len(coords), 'stars in the image')
+
+        # generate pattern for each img
+        pats_dict = gen_pattern(
+            meth_params,
+            coords, 
+            ids,
+            img_id=os.path.basename(img_path),
+            h=h,
+            w=w,
+            f=f,
+            gcata=None,
+            max_num_samp=20,
+            realshot=True
+        )
+        
+        # merge the patterns
+        for method in pats_dict:
+            df_dict[method].extend(pats_dict[method])
     
     # convert the results into dataframe
-    for method in patterns:
-        patterns[method] = pd.DataFrame(patterns[method])
+    for method in df_dict:
+        df_dict[method] = pd.DataFrame(df_dict[method])
 
-    return patterns
+    return df_dict
 
 
 if __name__ == '__main__':
