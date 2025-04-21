@@ -42,21 +42,27 @@ class LPTDataset(Dataset):
     '''Log-Polar transform based NN dataset'''
 
     def __init__(self, label_df: pd.DataFrame, gen_cfg: str):
-        self.num_dist = int(gen_cfg.split('_')[-1])
-        self.label_df = label_df
+        # number of distance features
+        nd = int(gen_cfg.split('_')[-1])
+        
+        # set length of dataset
+        self.len = len(label_df)
+
+        # set data of distance features
+        cols = [f'dist{i}' for i in range(nd)]
+        self.dists = label_df[cols].to_numpy(np.float32)
+
+        # set data of catalog index(labels)
+        self.labels = label_df['cata_idx'].astype(int)
 
     def __len__(self):
-        return len(self.label_df)
+        return self.len
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        cols = [f'dist{i}' for i in range(self.num_dist)]
-        dists = self.label_df.loc[idx, cols].to_numpy(float)
-        cata_idx = self.label_df.loc[idx, 'cata_idx'].astype(int)
-
-        return torch.from_numpy(dists).float(), cata_idx
+        return self.dists[idx], self.labels[idx]
 
 
 class RACDataset(Dataset):
@@ -64,48 +70,33 @@ class RACDataset(Dataset):
 
     def __init__(self, label_df: pd.DataFrame, gen_cfg: str):
         arr_nr, ns, nn = gen_cfg.split('_')[-3:]
-        self.num_ring = sum(list(map(int, arr_nr.strip('[]').split(', '))))
-        self.num_sector, self.num_neighbor = int(ns), int(nn)
-        self.label_df = label_df
+        # number of rings
+        nr = sum(list(map(int, arr_nr.strip('[]').split(', '))))
+        # number of sectors and neighbors
+        ns, nn = int(ns), int(nn)
+
+        # set length of dataset
+        self.len = len(label_df)
+
+        # set data of rings
+        cols = [f'ring{i}' for i in range(nr)]
+        self.rings = label_df[cols].to_numpy(np.float32)
+
+        # set data of sectors
+        cols = [f'n{i}_sector{j}' for i in range(nn) for j in range(ns)]
+        self.sectors = label_df[cols].to_numpy(np.float32).reshape(-1, nn, ns)
+
+        # set data of catalog index(labels)
+        self.labels = label_df['cata_idx'].astype(int)
 
     def __len__(self):
-        return len(self.label_df)
+        return self.len
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
-
-        cols = [f'ring{i}' for i in range(self.num_ring)]
-        rings = self.label_df.loc[idx, cols].to_numpy(float)
-        cols = [f'n{i}_sector{j}' for i in range(self.num_neighbor) for j in range(self.num_sector)]
-        sectors = self.label_df.loc[idx, cols].to_numpy(float).reshape(self.num_neighbor, -1)
-        cata_idx = self.label_df.loc[idx, 'cata_idx'].astype(int)
-
-        return (torch.from_numpy(rings).float(), torch.from_numpy(sectors).float()), cata_idx
-
-
-class DAADataset(Dataset):
-    '''Distance and angular based NN dataset'''
-
-    def __init__(self, label_df: pd.DataFrame, gen_cfg: str):
-        arr_n = list(map(int, gen_cfg.split('_')[-1].strip('[]').split(', ')))
-        self.tot_n = sum(arr_n)
-        self.label_df = label_df
-
-    def __len__(self):
-        return len(self.label_df)
-
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-
-        # sequence information: distance/angular feature + stats
-        cols = [f's{i}_feat{j}' for i in range(2) for j in range(self.tot_n+4)]
-        features = self.label_df.loc[idx, cols].to_numpy(float).reshape(2, -1)
-        # catalog index
-        cata_idx = self.label_df.loc[idx, 'cata_idx'].astype(int)
-
-        return torch.from_numpy(features).float(), cata_idx
+        
+        return (self.rings[idx], self.sectors[idx]), self.labels[idx]
 
 
 def create_dataset(method: str, df: pd.DataFrame, gen_cfg: str):
@@ -119,7 +110,6 @@ def create_dataset(method: str, df: pd.DataFrame, gen_cfg: str):
     '''
     method_mapping = {
         'rac_1dcnn': RACDataset,
-        'daa_1dcnn': DAADataset,
         'lpt_nn': LPTDataset
     }
     dataset_class = method_mapping.get(method)
