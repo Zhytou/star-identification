@@ -8,41 +8,60 @@ from torch.utils.data import DataLoader, random_split
 
 from dataset import create_dataset
 from model import create_model
-from test import predict
 
 
 def check_accuracy(method: str, model: nn.Module, loader: DataLoader, device=torch.device('cpu')):
     '''
         Evaluate the model's accuracy on the provided data loader.
     '''
-    # estimated catalogue index
-    esti_idxs = predict(method, model, loader, device=device)
+    # total number of samples
+    tot = 0
+    # count of correct predictions
+    cnt = 0
 
-    # real catalogue index
-    real_idxs = []
-    for _, labels in loader:
-        real_idxs.extend(labels.tolist())
+    # set the model into evaluation mode
+    model.eval()
 
-    cnt = np.sum(np.array(esti_idxs) == np.array(real_idxs))
-    tot = len(loader)
+    # move the model to the device
+    model.to(device)
+
+    with torch.no_grad():
+        for feats, labels in loader:
+            # move the features and labels to the device
+            feats = (feats[0].to(device), feats[1].to(device)) if method == 'rac_1dcnn' else feats.to(device)
+            labels = labels.to(device)
+
+            # forward pass to get output logits
+            scores = model(*feats) if method == 'rac_1dcnn' else model(feats)  
+
+            # get the predicted class
+            preds = torch.argmax(scores, dim=1)
+
+            # accumulate correct and total number of samples
+            cnt += (preds == labels).sum().item()
+            tot += labels.size(0)
+
     acc = round(100.0*cnt/tot, 2)
 
     return acc
 
 
-def train(method: str, model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader: DataLoader, val_loader: DataLoader=None, device=torch.device('cpu')):
+def train(method: str, model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader: DataLoader, val_loader: DataLoader, device=torch.device('cpu')):
     '''
         Train the model.
     '''
     ls, accs = [], []
 
-    # set the model into train model
-    model.train()
-
     # move the model to the device
     model.to(device)
 
     for epoch in range(num_epochs):
+        # set the model into train model, because check_accuracy is called for every epoch
+        model.train()
+
+        # epoch loss
+        epoch_loss = 0.0
+        
         for feats, labels in loader:
             # move the features and labels to the device
             feats = (feats[0].to(device), feats[1].to(device)) if method == 'rac_1dcnn' else feats.to(device)
@@ -63,11 +82,17 @@ def train(method: str, model: nn.Module, optimizer: optim.Optimizer, num_epochs:
             # updating parameters
             optimizer.step()
 
-        val_acc = check_accuracy(method, model, val_loader, device) if val_loader else 0.0
-        print(f'Epoch: {epoch+1},  Loss: {loss.item()}, Validation Accuracy: {val_acc}%')
+            # accumulate loss
+            epoch_loss += loss.item()
+
+        # calculate average loss
+        epoch_loss = epoch_loss / len(loader)
+
+        acc = check_accuracy(method, model, val_loader, device)
+        print(f'Epoch: {epoch+1}, Loss: {epoch_loss}, Validate Accuracy: {acc}%')
         
         ls.append(loss.item())
-        accs.append(val_acc)
+        accs.append(acc)
 
     return ls, accs
 
@@ -141,18 +166,18 @@ if __name__ == '__main__':
     if True:
         do_train(
             {
-                'lpt_nn': [0.1, 6, 25],
+                'lpt_nn': [0.5, 6, 200],
                 # 'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
             },
             {
-                'h': 512,
-                'w': 512,
+                'h': 1024,
+                'w': 1024,
                 'fovx': 12,
                 'fovy': 12,
                 'limit_mag': 6,
             },
             gcata_path='catalogue/sao6.0_d0.03_12_15.csv',
-            num_epochs=100,
+            num_epochs=30,
             batch_size=128,
             learning_rate=0.001
         )
