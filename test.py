@@ -16,21 +16,12 @@ from sklearn.metrics.pairwise import haversine_distances
 from dataset import create_dataset
 from model import create_model
 
+
+DEBUG = True
+
 # A single image is considered to have been successfully identified only when min_cnt stars are successfully identified within it.
 # minimum count of successfully identified stars
 min_sis_cnt = 3
-
-
-def compress_db_row(row: pd.Series):
-    '''
-        Compress the database row.
-    Args:
-        row: the database row
-    Returns:
-        the guide star id
-    '''
-    assert row.dropna().nunique() == 1, 'The row should have only one unique value'
-    return row.dropna().iloc[0]
 
 
 def cal_match_score(db: pd.DataFrame, pat: np.ndarray, size: tuple[int, int]):
@@ -115,7 +106,53 @@ def cluster_by_angle(cata: pd.DataFrame, ids: np.ndarray, r: float):
     return ids
 
 
-def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int], T: float, Rp: float, gcata: pd.DataFrame, by_img: bool=True):
+def identify_pattern(db: pd.DataFrame, pats: list[np.ndarray], size: tuple[int, int], T: float):
+    '''
+        Identify the star by pattern matching.
+    '''
+
+    def compress_db_row(row: pd.Series):
+        '''
+            Compress the database row.
+        '''
+        assert row.dropna().nunique() == 1, 'The row should have only one unique value(guide star id)'
+        return row.dropna().iloc[0]
+
+    # the proportion of unsuccessfully identified stars
+    multi_max = 0 # 多个最大匹配
+    lower_thd = 0 # 低于阈值
+
+    # rename the columns of the database
+    db.columns = db.columns.astype(int)
+    # get the id of guide stars in database
+    gstar_ids = db.apply(compress_db_row, axis=1).to_numpy()
+
+    esti_ids = []
+    for pat in pats:
+        # calculate the match scores
+        scores = cal_match_score(db, pat, size)
+    
+        # max score guide star id
+        ids = gstar_ids[np.logical_and(scores==scores.max(), scores>=T)]
+        if len(ids) == 1:
+            esti_ids.append(ids[0])
+        else:
+            multi_max += 1 if len(ids) > 1 else 0
+            lower_thd += 1 if len(ids) == 0 else 0
+            esti_ids.append(-1)
+
+    if DEBUG:
+        print(
+            '--------------'
+            '\nTotal patterns:', len(pats),
+            '\nMulti max:', multi_max,
+            '\nLower thd:', lower_thd,
+        )
+
+    return np.array(esti_ids)
+
+
+def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int], T: float, Rp: float, gcata: pd.DataFrame):
     '''
         Evaluate the pattern match method's accuracy on the provided patterns. The accuracy is calculated based on the method's ability to correctly identify the closest pattern in the database.
     Args:
@@ -124,110 +161,50 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
         size: the size of 0-1 pattern matrix
         T: the score threshold for pattern matching
         Rp: the radius in degree for pattern region
-        by_img: calculate the accuracy by image or by pattern
     Returns:
         the accuracy of the pattern match method
     '''
+    res = []
 
-    # the proportion of unsuccessfully identified stars
-    multi_max = 0 # 多个最大匹配
-    lower_thd = 0 # 低于阈值
-    error_id = 0 # 错误id
+    #! the identification step
+    # patterns
+    pats = df['pat'].str.split(' ').apply(lambda x: np.array(x, dtype=int)).to_numpy()
 
-    def identify_image(img_df: pd.DataFrame):
-        '''
-            Identify the image by its patterns.
-        '''
-        n = len(img_df)
-        if n < min_sis_cnt:
-            return False
+    # estimated star ids
+    esti_ids = identify_pattern(db, pats, size, T)
+
+    # real star ids
+    real_ids = df['star_id'].to_numpy()
+
+    if DEBUG:
+        print('Correct pattern', np.sum(esti_ids == real_ids))
+
+    # image ids
+    img_ids = df['img_id'].to_numpy()
+
+    # identify each image
+    for img_id in np.unique(img_ids):
+        mask = img_ids == img_id
+
+        # skip if the number of stars in the image is less than min_sis_cnt
+        if np.sum(mask) < min_sis_cnt or np.sum(esti_ids[mask] != -1) < min_sis_cnt:
+            res.append(False)
+            continue
         
-        # real star ids
-        real_ids = img_df['star_id'].to_numpy()
-
-        # patterns
-        pats = img_df['pat'].str.split(' ').apply(lambda x: np.array(x, dtype=int)).to_numpy()
-
-        #! the identification step
-        # estimated star ids
-        esti_ids = []
-        for pat in pats:
-            # calculate the match scores
-            scores = cal_match_score(db, pat, size)
-            
-            # max score guide star id
-            ids = gstar_ids[np.logical_and(scores==scores.max(), scores>=T)].to_numpy()
-            if len(ids) == 1:
-                esti_ids.append(ids[0])
-            else:
-                esti_ids.append(-1)
-
-        esti_ids = np.array(esti_ids)
-
         #! the verification step
-        if np.sum(esti_ids != -1) >= min_sis_cnt:
-            # do fov restriction by clustering and take the biggest cluster as final result
-            esti_ids = cluster_by_angle(gcata, esti_ids, Rp)
-
+        # do fov restriction by clustering and take the biggest cluster as final result for each image
+        esti_ids[mask] = cluster_by_angle(gcata, esti_ids[mask], Rp)
+       
         #! the check step
-        # count the successfully identified stars
-        cnt = np.sum(np.logical_and(esti_ids == real_ids, real_ids != -1))
+        if np.sum(np.logical_and(esti_ids[mask] == real_ids[mask], real_ids[mask] != -1)) >= min_sis_cnt:
+            res.append(True)
+        else:
+            res.append(False)
 
-        return cnt >= min_sis_cnt
-
-    def identify_pattern(df: pd.DataFrame):
-        '''
-            Identify the pattern by its patterns.
-        '''
-        real_ids = df['star_id'].to_numpy()
-        pats = df['pat'].str.split(' ').apply(lambda x: np.array(x, dtype=int)).to_numpy()
-        
-        esti_ids = []
-        for pat in pats:
-            # calculate the match scores
-            scores = cal_match_score(db, pat, size)
-        
-            # max score guide star id
-            ids = gstar_ids[np.logical_and(scores==scores.max(), scores>=T)].to_numpy()
-            if len(ids) == 1:
-                esti_ids.append(ids[0])
-            else:
-                esti_ids.append(-1)
-
-        res = np.logical_and(esti_ids == real_ids, real_ids != -1)
-
-        return res
-
-    # rename the columns of the database
-    db.columns = db.columns.astype(int)
-    # get the id of guide stars in database
-    gstar_ids = db.apply(compress_db_row, axis=1)
-
-    if by_img:
-        # get identify results True or False
-        res = df.groupby('img_id', as_index=True).apply(identify_image, include_groups=False)
-        # calculate the accuracy
-        df = df['img_id'].value_counts()
-        tot = np.sum(df >= min_sis_cnt)
-    else:
-        # get the pattern id
-        res = identify_pattern(df)
-        # calculate the accuracy
-        tot = len(df)
-
+    # calculate the accuracy
+    df = df['img_id'].value_counts()
+    tot = np.sum(df >= min_sis_cnt)
     acc = round(np.sum(res)/tot*100.0, 2)
-
-    if not by_img:
-        print(
-            '--------------'
-            'Total patterns:', tot,
-            '\nSuccessfully identified patterns:', res,
-            '\nError id:', error_id,
-            '\nMulti max:', multi_max,
-            '\nLower thd:', lower_thd,
-            '\nAccuracy:', acc,
-            '--------------'
-        )
 
     return acc
 
@@ -304,7 +281,7 @@ def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, gen_cfg: 
 
         #! the verification step
         # do fov restriction by clustering and take the biggest cluster as final result
-        esti_ids[mask] = cluster_by_angle(gcata, esti_ids[mask], Rp)
+        # esti_ids[mask] = cluster_by_angle(gcata, esti_ids[mask], Rp)
 
         #! the check step
         if np.sum(np.logical_and(esti_ids[mask] == real_ids[mask], real_ids[mask] != -1)) >= min_sis_cnt:
@@ -456,7 +433,10 @@ def do_test(meth_params: dict, simu_params: dict, test_params: dict, gcata_path:
             db_info = np.sum(db.notna().to_numpy(), axis=1)
             max_cnt, min_cnt, avg_cnt = np.max(db_info), np.min(db_info), np.sum(db_info)/len(db)
             print(
-                'Max count of 1 in pattern matrix', max_cnt, 
+                'Database information:',
+                '\nSize of database:', len(db),
+                '\nTheoretical size of database:', len(gcata),
+                '\nMax count of 1 in pattern matrix', max_cnt, 
                 '\nMin count of 1 in pattern matrix', min_cnt, 
                 '\nAvg count of 1 in pattern matrix', avg_cnt
             )
@@ -531,14 +511,14 @@ def do_test(meth_params: dict, simu_params: dict, test_params: dict, gcata_path:
 if __name__ == '__main__':
     res = do_test(
         {
-            # 'lpt_nn': [0.1, 6, 25],
-            'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
-            'grid': [0.3, 6, 50], 
-            'lpt': [0.3, 6, 25, 36]
+            'lpt_nn': [0.5, 6, 200],
+            # 'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
+            # 'grid': [0.5, 6, 100], 
+            # 'lpt': [0.3, 6, 25, 36]
         },
         {
-            'h': 512,
-            'w': 512,
+            'h': 1024,
+            'w': 1024,
             'fovx': 12,
             'fovy': 12,
             'limit_mag': 6,
@@ -548,7 +528,7 @@ if __name__ == '__main__':
             'num_ms': 0,
         },
         {
-            'pos': [0]#[0, 0.5, 1, 1.5, 2],
+            'pos': [0, 0.5, 1, 1.5, 2],
             # 'mag': [0, 0.1, 0.2, 0.3, 0.4],
             # 'fs': [0, 1, 2, 3, 4]
         },
