@@ -30,18 +30,20 @@ def get_rotation_matrix(v: np.ndarray, w: np.ndarray) -> np.ndarray:
     return np.array([[cos_theta, -sin_theta], [sin_theta, cos_theta]])
 
 
-def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: str, h: int, w: int, f: float, gcata: pd.DataFrame, max_num_samp: int=20, realshot: bool=False):
+def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idxs: np.ndarray, img_id: str, h: int, w: int, f: float, ra: float=None, de: float=None, roll: float=None, realshot: bool=False, max_num_samp: int=20):
     '''
         Generate the pattern with the given star coordinates for one star image.
     Args:
         meth_params: the parameters for the method
         coords: the coordinates of the stars
         ids: the ids of the stars
+        cata_idxs: the catalogue index of the stars
         scale: the scale used for region radius calculation
         img_id: the id of the image
         h: the height of the image
         w: the width of the image
         f: the focal length of the camera(in pixel)
+        ra/de/roll: the right ascension, declination and roll angle of the simulated star image
         max_num_samp: the maximum number of stars to be used as reference star
     Return:
         patterns: the pattern generated
@@ -72,14 +74,11 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
     # choose top max_num_samp brightest star as the reference star
     n = min(n, max_num_samp+1) if realshot else n
 
-    for star_id, coord, ds, ags, ads in zip(ids[:n], coords[:n], distances[:n], angles[:n], angdists[:n]):
+    for star_id, cata_idx, coord, ds, ags, ads in zip(ids[:n], cata_idxs[:n], coords[:n], distances[:n], angles[:n], angdists[:n]):
         # get catalogue index of the guide star
-        if not realshot and star_id == -1:
+        if not realshot and cata_idx == -1:
+            # skip the star if it is not in the catalogue
             continue
-        elif realshot:
-            cata_idx = -1
-        else:
-            cata_idx = gcata[gcata['Star ID'] == star_id].index.to_list()[0]
 
         # coords, distance and angles are all sorted by angular distances with descending order
         # ! angle bigger, the angular distance(cos) is smaller
@@ -116,12 +115,18 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, img_id: 
 
             # initialize the pattern
             pat = {
-                'star_id': star_id,
-                'cata_idx': cata_idx,
+                'star_id': int(star_id),
+                'cata_idx': int(cata_idx),
                 'img_id': img_id,
                 'row': coord[0],
                 'col': coord[1],
             }
+
+            # add the right ascension, declination and roll angle if they are given
+            if ra is not None and de is not None and roll is not None:
+                pat['ra'] = ra
+                pat['de'] = de
+                pat['roll'] = roll
 
             if method == 'rac_1dcnn':
                 # parse the rest parameters
@@ -241,15 +246,14 @@ def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd:
         Generate the pattern database for the given star catalogue.
     '''
     
-    def gen_sub_database(idxs: pd.Index):
+    def gen_sub_database(idxs: np.ndarray):
         '''
             Generate the pattern database for the given star catalogue.
         '''
 
         db_dict = defaultdict(list)
-        for star_id, ra, de in gcata.loc[idxs, ['Star ID', 'Ra', 'De']].to_numpy():
-            star_id = int(star_id)
-
+        id_ra_des = gcata.loc[idxs, ['Star ID', 'Ra', 'De']].to_numpy()
+        for cata_idx, (star_id, ra, de) in zip(idxs, id_ra_des):
             _, stars = create_star_image(
                 ra, de, 0, 
                 h=simu_params['h'],
@@ -264,11 +268,13 @@ def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd:
                 coords_only=True
             )
 
-            # get the coordinates and ids of the stars
-            ids = stars[:, 0]
+            # get the coordinates, ids and catalogue indexs of the stars within the image
             coords = stars[:, 1:3]
-
+            ids = stars[:, 0]
+            cata_idxs = np.full_like(ids, cata_idx)
+            
             # generate only the patterns for the given star
+            cata_idxs[ids != star_id] = -1
             ids[ids != star_id] = -1
         
             # generate the patterns
@@ -276,11 +282,11 @@ def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd:
                 meth_params, 
                 coords, 
                 ids, 
+                cata_idxs,
                 img_id=str(uuid.uuid1()),
                 h=simu_params['h'], 
                 w=simu_params['w'], 
                 f=f, 
-                gcata=gcata
             )
             
             for method in pats_dict:
@@ -326,16 +332,15 @@ def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd:
     pool = ThreadPoolExecutor(max_workers=num_thd)
     tasks = []
 
-    # number of round used for this method
-    num_round = num_thd//len(meth_params)
-    len_td = len(gcata)//num_round
+    # length of sub database for each thread
+    len_thd = len(gcata)//(num_thd-1)
     
     # add task
-    for i in range(num_round):
-        beg, end = i*len_td, min((i+1)*len_td, len(gcata))
+    for i in range(num_thd):
+        beg, end = i*len_thd, min((i+1)*len_thd, len(gcata))
         if beg >= end:
-            continue
-        tasks.append(pool.submit(gen_sub_database, gcata.index[beg:end]))
+            break
+        tasks.append(pool.submit(gen_sub_database, np.arange(beg, end, dtype=int)))
     
     dfs_dict = defaultdict(list)
     # wait all tasks to be done and merge all the results
@@ -366,7 +371,7 @@ def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd:
     return 
 
 
-def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: int, star_ra: float, star_de: float, offset :float, num_roll: int, gcata: pd.DataFrame):
+def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: int, cata_idx: int, star_ra: float, star_de: float, offset :float, num_roll: int):
     '''
         Generate dataset for NN model using the given star catalogue.
     '''
@@ -420,7 +425,9 @@ def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: i
         ids = stars[:, 0]
         coords = stars[:, 1:3]
         
-        # set all the star ids to -1 except the given star id in order to make sure only generate the pattern for the given star id
+        # set all the star ids and catalogue indexs to -1 except the given star id in order to make sure only generate the pattern for the given star id
+        cata_idxs = np.full_like(ids, cata_idx)
+        cata_idxs[id != star_id] = -1
         ids[ids != star_id] = -1
         
         if np.all(ids == -1):
@@ -433,12 +440,15 @@ def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: i
         pat_dict = gen_pattern(
             nmeth_params, 
             coords, 
-            ids, 
+            ids,
+            cata_idxs, 
             img_id, 
-            f=f,
             h=simu_params['h'], 
             w=simu_params['w'], 
-            gcata=gcata
+            f=f,
+            ra=ra,
+            de=de,
+            roll=roll,
         )
 
         # store the patterns
@@ -495,10 +505,6 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
     # generate right ascension[-pi, pi] and declination[-pi/2, pi/2]
     ras = np.random.uniform(0, 2*np.pi, num_img)
     des = np.arcsin(np.random.uniform(-1, 1, num_img))
-    # ras, des = gcata[['Ra', 'De']].sample(num_img).to_numpy().T
-    # 183987
-    # ras = np.full(num_img, 4.1837814)
-    # des = np.full(num_img, -0.4557763)
     rolls = np.random.uniform(0, 2*np.pi, num_img)
 
     # focus in pixels used to calculate the buffer and pattern radius
@@ -525,18 +531,28 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
             num_ms=num_ms, 
             coords_only=True
         )
-        # get star ids
-        ids = stars[:, 0]
 
-        # two few guide stars to identify
-        if len(np.intersect1d(ids, gcata['Star ID'].to_numpy())) < min(min_num_star, 3):
-            continue
-        
         # get the centroids of the stars in the image
         if False:
             coords = np.array(get_star_centroids(img))
         else:
             coords = stars[:, 1:3]
+
+        # get star ids
+        ids = stars[:, 0]
+
+        # find the catalogue index of all the guide stars in the image
+        cata_idxs = np.full_like(ids, -1)
+
+        # intersect the ids with the catalogue, and return the common ids and their indexs
+        intersect_ids, ids_idxs, gcata_idxs = np.intersect1d(ids, gcata['Star ID'].to_numpy(), return_indices=True)
+
+        # two few guide stars to identify
+        if len(intersect_ids) < min(min_num_star, 3):
+            continue
+
+        # set the catalogue indexs
+        cata_idxs[ids_idxs] = gcata_idxs
 
         # generate image id
         img_id = str(uuid.uuid1())
@@ -545,12 +561,15 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
         pats_dict = gen_pattern(
             meth_params, 
             coords, 
-            ids, 
+            ids,
+            cata_idxs,
             img_id, 
             h=simu_params['h'], 
             w=simu_params['w'],
             f=f, 
-            gcata=gcata, 
+            ra=ra,
+            de=de,
+            roll=roll,
         )
         for method in pats_dict:
             df_dict[method].extend(pats_dict[method])
@@ -578,8 +597,9 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, f: float):
         # get the centroids of the stars in the image
         coords = np.array(get_star_centroids(img, 'MEDIAN', 'Liebe', 'CCL', 'CoG', pixel_limit=3))
 
-        # set all star ids to -1, since unknown for real image
+        # set all star ids and catalogue indexs to -1, since unknown for real image
         ids = np.full(len(coords), -1)
+        cata_idxs = np.full(len(coords), -1)
 
         print(len(coords), 'stars in the image')
 
@@ -588,11 +608,11 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, f: float):
             meth_params,
             coords, 
             ids,
+            cata_idxs,
             img_id=os.path.basename(img_path),
             h=h,
             w=w,
             f=f,
-            gcata=None,
             max_num_samp=20,
             realshot=True
         )
@@ -609,10 +629,10 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, f: float):
 
 
 if __name__ == '__main__':
-    if False:
+    if True:
         gen_database(
             {
-                'grid': [0.3, 6, 50], 
+                'grid': [0.5, 6, 75], 
                 # 'lpt': [0.3, 6, 25, 36]
             },
             {

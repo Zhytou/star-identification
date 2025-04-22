@@ -2,11 +2,10 @@ import os
 import uuid
 import pandas as pd
 import numpy as np
-from math import radians, tan
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 from generate import gen_sample, gen_dataset
-from collections import defaultdict
 
 
 def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: float=1, num_roll: int=360, num_thd: int=20):
@@ -67,8 +66,8 @@ def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: f
     pool = ThreadPoolExecutor(max_workers=num_thd)
     tasks = []
 
-    star_id_ra_des = gcata[['Star ID', 'Ra', 'De']].to_numpy()
-    for star_id, star_ra, star_de in star_id_ra_des:
+    id_ra_des = gcata[['Star ID', 'Ra', 'De']].to_numpy()
+    for cata_idx, (star_id, star_ra, star_de) in enumerate(id_ra_des):
         # generate the dataset
         tasks.append(pool.submit(
             gen_dataset,
@@ -76,6 +75,7 @@ def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: f
             simu_params,
             ds_paths,
             int(star_id),
+            cata_idx,
             star_ra,
             star_de,
             offset=offset,
@@ -87,7 +87,7 @@ def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: f
         task.result()
 
     # aggregate the dataset
-    for method in meth_params:
+    for method in {}:
         gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
         dir = os.path.join('dataset', sim_cfg, method, gen_cfg)
         dfs = []
@@ -201,11 +201,11 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
 
 
 if __name__ == '__main__':
-    if True:
+    if False:
         agg_dataset(
             meth_params={
-                'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
-                'lpt_nn': [0.1, 6, 25],
+                # 'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
+                'lpt_nn': [0.3, 6, 25],
             },
             simu_params={
                 'h': 512,
@@ -213,7 +213,7 @@ if __name__ == '__main__':
                 'fovx': 12,
                 'fovy': 12,
                 'limit_mag': 6,
-                'sigma_pos': 2,
+                'sigma_pos': 0,
                 'sigma_mag': 0,
                 'num_fs': 0,
                 'num_ms': 0
@@ -235,24 +235,24 @@ if __name__ == '__main__':
                 'fovx': 11.398822251559647,
                 'fovy': 9.129887427521604,
                 'limit_mag': 5.5,
-                'sigma_pos': 2,
+                'sigma_pos': 0,
                 'sigma_mag': 0,
-                'num_fs': 0,
+                'num_fs': 5,
                 'num_ms': 0
             },
             gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
-            offset=3,
+            offset=0,
             num_roll=10,
             num_thd=20
         )
     
     if True:
         agg_sample(
-            400, 
+            10, 
             {
                 # 'grid': [0.3, 6, 50],
                 # 'lpt': [0.3, 6, 25, 36],
-                'lpt_nn': [0.1, 6, 25],
+                'lpt_nn': [0.3, 6, 25],
                 # 'rac_1dcnn': [0.1, 6, [25, 50], 16, 3]
             }, 
             {
@@ -264,9 +264,33 @@ if __name__ == '__main__':
             },
             {
                 'pos': [0, 0.5, 1, 1.5, 2], 
-                'mag': [0, 0.1, 0.2, 0.3, 0.4], 
-                'fs': [0, 1, 2, 3, 4]
+                # 'mag': [0, 0.1, 0.2, 0.3, 0.4], 
+                # 'fs': [0, 1, 2, 3, 4]
             },
             './catalogue/sao6.0_d0.03_12_15.csv',
         )
     
+    if False:
+        # dir = 'dataset/512_512_12_12_6/lpt_nn/sao6.0_d0.03_12_15_0.1_6_25'
+        # dir = 'dataset/512_512_12_12_6/rac_1dcnn/sao6.0_d0.03_12_15_0.1_6_[25, 50]_16_3'
+        dir = 'dataset/1024_1280_11.398822251559647_9.129887427521604_5.5/rac_1dcnn/sao5.5_d0.03_9_10_0.1_4.5_[50, 100]_16_3'
+        dfs = []
+
+        for offset_dir in os.listdir(dir):
+            if offset_dir == 'labels.csv' or offset_dir == '4':
+                continue
+            for noise_dir in os.listdir(os.path.join(dir, offset_dir)):
+                for id_dir in os.listdir(os.path.join(dir, offset_dir, noise_dir)):
+                    for file in os.listdir(os.path.join(dir, offset_dir, noise_dir, id_dir)):
+                        if not file.endswith('_10.csv'):
+                            continue
+                        file_path = os.path.join(dir, offset_dir, noise_dir, id_dir, file)
+                        try:
+                            df = pd.read_csv(file_path)
+                        except:
+                            print('Error in file:', file_path)
+                            continue
+                        dfs.append(df)
+
+        df = pd.concat(dfs, ignore_index=True)
+        df.to_csv(os.path.join(dir, 'labels.csv'), index=False)
