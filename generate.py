@@ -14,7 +14,7 @@ from utils import get_angdist
 
 
 # minimum number of stars in the region for pattern generation
-min_num_star = 5
+min_num_star = -1
 
 
 def get_rotation_matrix(v: np.ndarray, w: np.ndarray) -> np.ndarray:
@@ -427,7 +427,7 @@ def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: i
         
         # set all the star ids and catalogue indexs to -1 except the given star id in order to make sure only generate the pattern for the given star id
         cata_idxs = np.full_like(ids, cata_idx)
-        cata_idxs[id != star_id] = -1
+        cata_idxs[ids != star_id] = -1
         ids[ids != star_id] = -1
         
         if np.all(ids == -1):
@@ -551,7 +551,7 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
         if len(intersect_ids) < min(min_num_star, 3):
             continue
 
-        # set the catalogue indexs
+        # set the guide star catalogue indexs
         cata_idxs[ids_idxs] = gcata_idxs
 
         # generate image id
@@ -629,7 +629,7 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, f: float):
 
 
 if __name__ == '__main__':
-    if True:
+    if False:
         gen_database(
             {
                 'grid': [0.5, 6, 75], 
