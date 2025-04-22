@@ -12,3 +12,11 @@ sao6.0_d0.05_15_20
 the number of dark stars excluded:  10832
 the number of darker star pairs excluded:  57
 the number of uniform stars excluded:  2997
+
+sao6.0_d0.2_12_12
+the number of dark stars excluded:  0
+/home/zhytou/star_identification/catalogue.py:262: RuntimeWarning: invalid value encountered in arccos
+  angular_distance = np.arccos(np.dot(positions, positions.T))
+the number of darker star pairs excluded:  134
+ras (129600,) des (129600,) sensors (129600, 3)
+the number of uniform stars excluded:  2170

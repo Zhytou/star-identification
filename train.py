@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 
 from dataset import create_dataset
-from models import create_model
+from model import create_model
 from test import predict
 
 
@@ -138,20 +138,39 @@ def do_train(meth_params: dict, simu_params: dict, gcata_path: str, batch_size: 
     
 
 if __name__ == '__main__':
-    do_train(
-        {
-            # 'lpt_nn': [0.1, 6, 25],
-            'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
-        },
-        {
-            'h': 512,
-            'w': 512,
-            'fovx': 12,
-            'fovy': 12,
-            'limit_mag': 6,
-        },
-        gcata_path='catalogue/sao6.0_d0.03_12_15.csv',
-        num_epochs=20,
-        batch_size=512,
-        learning_rate=0.001
-    )
+    if True:
+        do_train(
+            {
+                'lpt_nn': [0.1, 6, 25],
+                # 'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
+            },
+            {
+                'h': 512,
+                'w': 512,
+                'fovx': 12,
+                'fovy': 12,
+                'limit_mag': 6,
+            },
+            gcata_path='catalogue/sao6.0_d0.03_12_15.csv',
+            num_epochs=100,
+            batch_size=128,
+            learning_rate=0.001
+        )
+
+    if False:
+        do_train(
+            {
+                'rac_1dcnn': [0.1, 4.5, [50, 100], 16, 3],
+            },
+            {
+                'h': 1024,
+                'w': 1280,
+                'fovx': 11.398822251559647,
+                'fovy': 9.129887427521604,
+                'limit_mag': 5.5,
+            },
+            gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
+            num_epochs=100,
+            batch_size=256,
+            learning_rate=0.001
+        )

@@ -1,9 +1,9 @@
 import cv2
 import bisect as bis
 import numpy as np
-import skimage.feature as skf
 import scipy.ndimage as nd
 from collections import defaultdict
+
 
 def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int=5, gray_diff: int=4) -> int:
     """
@@ -159,6 +159,8 @@ def get_seed_coords(img: np.ndarray, wind_size: int=5, T1: int=0, T2: int=-np.in
 
     # calculate the determinant of the Hessian matrix with offset
     doh_results = doh_operator(neighborhoods[coords[:, 0], coords[:, 1]])
+
+    print(np.sort(doh_results)[::-1][:30])
 
     # get the local maxima values for bright star
     local_max_values = img[coords[:, 0], coords[:, 1]]
