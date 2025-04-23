@@ -14,7 +14,7 @@ from utils import get_angdist
 
 
 # minimum number of stars in the region for pattern generation
-min_num_star = -1
+min_num_star = 0
 
 
 def get_rotation_matrix(v: np.ndarray, w: np.ndarray) -> np.ndarray:
@@ -110,7 +110,7 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
             # ?due to the precision of the float, these assertions may fail
             # assert np.all((exc_cs > -rp) & (exc_cs < rp)), f"The coordinates of stars in the region is not in the range of [-rp, rp]. {exc_cs}"
             # assert np.all((exc_ds > rb) & (exc_ds < rp)), f"The distance of stars in the region is not in the range of [rb, rp]. {exc_ds}"
-            if len(exc_cs) < min_num_star:
+            if len(exc_cs) <= max(min_num_star, 0):
                 continue
 
             # initialize the pattern
@@ -376,16 +376,16 @@ def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: i
         Generate dataset for NN model using the given star catalogue.
     '''
     # skip if the method is already generated
-    nmeth_params = {}
-    for method in meth_params:
-        # only generate the dataset for the given star id
-        ds_path = os.path.join(ds_paths[method], f'{star_id}')
-        if os.path.exists(ds_path) and any(file.endswith(f'{num_roll}.csv') for file in os.listdir(ds_path)):
-            continue
-        nmeth_params[method] = meth_params[method]
+    nmeth_params = meth_params.copy()
+    # for method in meth_params:
+    #     # only generate the dataset for the given star id
+    #     ds_path = os.path.join(ds_paths[method], f'{star_id}')
+    #     if os.path.exists(ds_path) and any(file.endswith(f'{num_roll}.csv') for file in os.listdir(ds_path)):
+    #         continue
+    #     nmeth_params[method] = meth_params[method]
 
-    if nmeth_params == {}:
-        return
+    # if nmeth_params == {}:
+    #     return
 
     # csv file name
     name = uuid.uuid1()
@@ -418,13 +418,13 @@ def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: i
             sigma_mag=simu_params['sigma_mag'],
             num_fs=simu_params['num_fs'],
             num_ms=simu_params['num_ms'], 
-            coords_only=False
+            coords_only=True
         )
 
         # get star ids and coordinates
         ids = stars[:, 0]
         coords = stars[:, 1:3]
-        
+
         # set all the star ids and catalogue indexs to -1 except the given star id in order to make sure only generate the pattern for the given star id
         cata_idxs = np.full_like(ids, cata_idx)
         cata_idxs[ids != star_id] = -1
@@ -518,7 +518,7 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
 
     # generate the star image
     for ra, de, roll in zip(ras, des, rolls):
-        img, stars = create_star_image(ra, de, roll, 
+        _, stars = create_star_image(ra, de, roll, 
             h=simu_params['h'], 
             w=simu_params['w'],
             fovx=simu_params['fovx'],
@@ -533,10 +533,7 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
         )
 
         # get the centroids of the stars in the image
-        if False:
-            coords = np.array(get_star_centroids(img))
-        else:
-            coords = stars[:, 1:3]
+        coords = stars[:, 1:3]
 
         # get star ids
         ids = stars[:, 0]
@@ -595,7 +592,7 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, f: float):
         h, w = img.shape
 
         # get the centroids of the stars in the image
-        coords = np.array(get_star_centroids(img, 'MEDIAN', 'Liebe', 'CCL', 'CoG', pixel_limit=3))
+        coords = np.array(get_star_centroids(img, 'MEDIAN', 'Liebe', 'CCL', 'MCoG', pixel_limit=3))
 
         # set all star ids and catalogue indexs to -1, since unknown for real image
         ids = np.full(len(coords), -1)
@@ -609,7 +606,7 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, f: float):
             coords, 
             ids,
             cata_idxs,
-            img_id=os.path.basename(img_path),
+            img_id=img_path,
             h=h,
             w=w,
             f=f,
@@ -629,15 +626,15 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, f: float):
 
 
 if __name__ == '__main__':
-    if False:
+    if True:
         gen_database(
             {
-                'grid': [0.5, 6, 75], 
+                'grid': [0.5, 6, 100], 
                 # 'lpt': [0.3, 6, 25, 36]
             },
             {
-                'h': 512,
-                'w': 512,
+                'h': 1024,
+                'w': 1024,
                 'fovx': 12,
                 'fovy': 12,
                 'limit_mag': 6,
@@ -646,7 +643,7 @@ if __name__ == '__main__':
                 'num_fs': 0,
                 'num_ms': 0,
             },
-            './catalogue/sao6.0_d0.03_12_15.csv',
+            './catalogue/sao6.0_d0.03_12_20.csv',
         )
 
     

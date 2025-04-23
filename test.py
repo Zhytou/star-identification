@@ -511,9 +511,9 @@ def do_test(meth_params: dict, simu_params: dict, test_params: dict, gcata_path:
 if __name__ == '__main__':
     res = do_test(
         {
-            'lpt_nn': [0.5, 6, 200],
+            # 'lpt_nn': [0.5, 6, 50],
             # 'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
-            # 'grid': [0.5, 6, 100], 
+            'grid': [0.5, 6, 100], 
             # 'lpt': [0.3, 6, 25, 36]
         },
         {
@@ -528,11 +528,11 @@ if __name__ == '__main__':
             'num_ms': 0,
         },
         {
-            'pos': [0, 0.5, 1, 1.5, 2],
-            # 'mag': [0, 0.1, 0.2, 0.3, 0.4],
+            # 'pos': [0, 0.5, 1, 1.5, 2],
+            'mag': [0, 0.1, 0.2, 0.3, 0.4],
             # 'fs': [0, 1, 2, 3, 4]
         },
-        './catalogue/sao6.0_d0.03_12_15.csv',
+        './catalogue/sao6.0_d0.03_12_20.csv',
     )
 
     print(res)

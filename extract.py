@@ -78,7 +78,7 @@ def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, m
     
     # gray
     g = img[rows, cols]
-    # row and column add 0.5 to get the center of the pixel
+    #? row and column add 0.5 to get the center of the pixel
     x, y = rows+0.5, cols+0.5
 
     if method == 'CoG' or method == 'CCoG':

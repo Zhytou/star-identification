@@ -80,7 +80,6 @@ def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: f
             star_de,
             offset=offset,
             num_roll=num_roll,
-            gcata=gcata
         ))
 
     for task in tasks:
@@ -205,11 +204,11 @@ if __name__ == '__main__':
         agg_dataset(
             meth_params={
                 # 'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
-                'lpt_nn': [0.3, 6, 25],
+                'lpt_nn': [0.5, 6, 50],
             },
             simu_params={
-                'h': 512,
-                'w': 512,
+                'h': 1024,
+                'w': 1024,
                 'fovx': 12,
                 'fovy': 12,
                 'limit_mag': 6,
@@ -219,7 +218,7 @@ if __name__ == '__main__':
                 'num_ms': 0
             },
             gcata_path='catalogue/sao6.0_d0.03_12_15.csv',
-            offset=1,
+            offset=0,
             num_roll=10,
             num_thd=20
         )
@@ -237,47 +236,48 @@ if __name__ == '__main__':
                 'limit_mag': 5.5,
                 'sigma_pos': 0,
                 'sigma_mag': 0,
-                'num_fs': 5,
+                'num_fs': 0,
                 'num_ms': 0
             },
             gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
-            offset=0,
+            offset=1,
             num_roll=10,
             num_thd=20
         )
     
-    if True:
+    if False:
         agg_sample(
-            10, 
+            400, 
             {
-                # 'grid': [0.3, 6, 50],
-                # 'lpt': [0.3, 6, 25, 36],
-                'lpt_nn': [0.3, 6, 25],
-                # 'rac_1dcnn': [0.1, 6, [25, 50], 16, 3]
+                # 'grid': [0.5, 6, 100],
+                # 'lpt': [0.5, 6, 25, 36],
+                # 'lpt_nn': [0.5, 6, 50],
+                # 'rac_1dcnn': [0.5, 6, [25, 50], 16, 3]
             }, 
             {
-                'h': 512,
-                'w': 512,
+                'h': 1024,
+                'w': 1024,
                 'fovx': 12,
                 'fovy': 12,
                 'limit_mag': 6
             },
             {
-                'pos': [0, 0.5, 1, 1.5, 2], 
-                # 'mag': [0, 0.1, 0.2, 0.3, 0.4], 
+                # 'pos': [0, 0.5, 1, 1.5, 2], 
+                'mag': [0, 0.1, 0.2, 0.3, 0.4], 
                 # 'fs': [0, 1, 2, 3, 4]
             },
             './catalogue/sao6.0_d0.03_12_15.csv',
         )
     
-    if False:
+    if True:
+        # dir = 'dataset/1024_1024_12_12_6/lpt_nn/sao6.0_d0.03_12_15_0.5_6_50'
         # dir = 'dataset/512_512_12_12_6/lpt_nn/sao6.0_d0.03_12_15_0.1_6_25'
         # dir = 'dataset/512_512_12_12_6/rac_1dcnn/sao6.0_d0.03_12_15_0.1_6_[25, 50]_16_3'
         dir = 'dataset/1024_1280_11.398822251559647_9.129887427521604_5.5/rac_1dcnn/sao5.5_d0.03_9_10_0.1_4.5_[50, 100]_16_3'
         dfs = []
 
         for offset_dir in os.listdir(dir):
-            if offset_dir == 'labels.csv' or offset_dir == '4':
+            if offset_dir == 'labels.csv':
                 continue
             for noise_dir in os.listdir(os.path.join(dir, offset_dir)):
                 for id_dir in os.listdir(os.path.join(dir, offset_dir, noise_dir)):

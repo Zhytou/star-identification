@@ -88,6 +88,7 @@ def train(method: str, model: nn.Module, optimizer: optim.Optimizer, num_epochs:
         # calculate average loss
         epoch_loss = epoch_loss / len(loader)
 
+        # check accuracy on validation set
         acc = check_accuracy(method, model, val_loader, device)
         print(f'Epoch: {epoch+1}, Loss: {epoch_loss}, Validate Accuracy: {acc}%')
         
@@ -163,26 +164,26 @@ def do_train(meth_params: dict, simu_params: dict, gcata_path: str, batch_size: 
     
 
 if __name__ == '__main__':
-    if True:
+    if False:
         do_train(
             {
-                'lpt_nn': [0.5, 6, 200],
-                # 'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
+                # 'lpt_nn': [0.5, 6, 50],
+                'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
             },
             {
-                'h': 1024,
-                'w': 1024,
+                'h': 512,
+                'w': 512,
                 'fovx': 12,
                 'fovy': 12,
                 'limit_mag': 6,
             },
             gcata_path='catalogue/sao6.0_d0.03_12_15.csv',
             num_epochs=30,
-            batch_size=128,
-            learning_rate=0.001
+            batch_size=512,
+            learning_rate=0.01
         )
 
-    if False:
+    if True:
         do_train(
             {
                 'rac_1dcnn': [0.1, 4.5, [50, 100], 16, 3],
@@ -195,7 +196,7 @@ if __name__ == '__main__':
                 'limit_mag': 5.5,
             },
             gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
-            num_epochs=100,
+            num_epochs=200,
             batch_size=256,
             learning_rate=0.001
         )
