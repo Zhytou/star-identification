@@ -84,7 +84,7 @@ class RACDataset(Dataset):
 
         # set data of sectors
         cols = [f'n{i}_sector{j}' for i in range(nn) for j in range(ns)]
-        self.sectors = label_df[cols].to_numpy(np.float32).reshape(-1, nn, ns)
+        self.sectors = label_df[cols].to_numpy(np.float32)
 
         # set data of catalog index(labels)
         self.labels = label_df['cata_idx'].astype(int)
