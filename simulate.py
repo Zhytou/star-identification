@@ -232,7 +232,7 @@ def cal_zxz_euler(R: np.ndarray, method: int=1) -> tuple[float, float, float]:
         Get the ra, de and roll angles from the rotation matrix.
     '''
     assert R.shape == (3, 3), "Rotation matrix should be 3x3."
-    assert np.isclose(np.linalg.det(R), 1), "Rotation matrix is not orthogonal."
+    assert np.allclose(R @ R.T, np.identity(3), atol=1e-3), "Rotation matrix is not orthogonal."
 
     if method == 1:
         # method1    
@@ -254,7 +254,7 @@ def cal_zxz_euler(R: np.ndarray, method: int=1) -> tuple[float, float, float]:
     return ra, de, roll
 
 
-def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0, background: float=np.inf, limit_mag: float=7.0, fovy: float=10, fovx: float=10, h: int=512, w: int=512, pixel: float=67e-6, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False) -> tuple[np.ndarray, list]:
+def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0, background: float=np.inf, limit_mag: float=7.0, fovy: float=10, fovx: float=10, h: int=512, w: int=512, pixel: float=67e-6, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False, rot_meth: int=1) -> tuple[np.ndarray, list]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
@@ -273,20 +273,22 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
         fov: the field of view in degrees
         h: the height of the image
         w: the width of the image
-        f: the focal length of the camera
+        pixel: the length of the pixel
         roi: the region of interest
+        sigma_psf: the standard deviation of the point spread function
         coords_only: whether to return only the coordinates of stars
+        rot_meth: the method used to calculate the rotation matrix
     Returns:
         img: the simulated star image
         stars: stars drawn in the image
     """
 
     # get rotation matrix
-    M = get_rotation_matrix(ra, de, roll, 2)
+    M = get_rotation_matrix(ra, de, roll, rot_meth)
 
     # get field of view
     # ? what happern, when fovx != fovy
-    fov = max(fovx, fovy)
+    fov = max(fovx, fovy) + 1
     # fov = sqrt(fovx**2 + fovy**2)
 
     f1 = pixel * w / (2*tan(radians(fovx/2)))
@@ -336,7 +338,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     
     # convert to image coordinate system
     stars_within_fov['X'] = w/2*(1+stars_within_fov['X']/stars_within_fov['Z']/tan(radians(fovx)/2))
-    stars_within_fov['Y'] = h/2*(1-stars_within_fov['Y']/stars_within_fov['Z']/tan(radians(fovy)/2))
+    stars_within_fov['Y'] = h/2*(1+stars_within_fov['Y']/stars_within_fov['Z']/tan(radians(fovy)/2))
     
     # add positional noise if needed
     if sigma_pos > 0:
@@ -344,7 +346,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
         stars_within_fov['Y'] += np.random.normal(0, sigma_pos, size=len(stars_within_fov['Y']))
 
     # exclude stars beyond range
-    stars_within_fov = stars_within_fov[stars_within_fov['X'].between(roi, w-roi) & stars_within_fov['Y'].between(roi, h-roi)]
+    stars_within_fov = stars_within_fov[stars_within_fov['X'].between(0, w) & stars_within_fov['Y'].between(0, h)]
 
     # print(f"Found {len(stars_within_fov)} stars within the field of view after pos filtering.")
 
@@ -385,23 +387,22 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
 
 if __name__ == '__main__':
     # test 1
-    # ra, de, roll = radians(249.2104), radians(-12.0386), radians(13.3845)
-    # h, w = 512, 512
-    # pixel = 6.7
-    # fovx, fovy = 10, 10
-    # limit_mag = 6
+    ra, de, roll = radians(249.2104), radians(-12.0386), radians(-13.3845)
+    h, w = 1024, 1024
+    fovx, fovy = 12, 12
+    limit_mag = 6
 
     # test 2
     # picdata.mat
-    R = np.array([
-        [-0.4330, 0.8251, -0.3630],
-        [0.8218, 0.1958, -0.5350],
-        [-0.3703, -0.5300, -0.7629]
-    ])
-    h, w = 1024, 1280
-    f = 35269.52
-    pixel = 5.5
-    limit_mag = 5.5
+    # R = np.array([
+    #     [-0.4330, 0.8251, -0.3630],
+    #     [-0.8218, -0.1958, 0.5350],
+    #     [0.3703, 0.5300, 0.7629]
+    # ])
+    # h, w = 1024, 1280
+    # f = 35269.52
+    # pixel = 5.5
+    # limit_mag = 6
 
     # test 3
     # 20161227225347.bmp
@@ -421,16 +422,16 @@ if __name__ == '__main__':
     # pixel = 6.7
     # limit_mag = 5
 
-    fovx = degrees(2 * atan(w * pixel / (2 * f)))
-    fovy = degrees(2 * atan(h * pixel / (2 * f)))
-    ra, de, roll = cal_zxz_euler(R, 2)
-    roll += np.pi
-    # M = get_rotation_matrix(ra, de, roll, 2)
+    # fovx = degrees(2 * atan(w * pixel / (2 * f)))
+    # fovy = degrees(2 * atan(h * pixel / (2 * f)))
+    # ra, de, roll = cal_zxz_euler(R, 1)
+    # print(np.linalg.det(R))
+    # M = get_rotation_matrix(ra, de, roll, 1)
     # assert np.allclose(M, R, 1e-3), f"Rotation matrix is not correct. {M} != {R}"
 
     print(np.degrees(ra), np.degrees(de), np.degrees(roll))
     print(ra, de, fovx, fovy)
-    img, stars = create_star_image(ra, de, roll, h=h, w=w, limit_mag=limit_mag, fovx=fovx, fovy=fovy)
+    img, stars = create_star_image(ra, de, roll, h=h, w=w, limit_mag=limit_mag, fovx=fovx, fovy=fovy, rot_meth=1)
 
     # ids = np.array([38787, 39053, 39336, 24412, 39404, 38980, 38597, 38890, 38872, 24531, 24314, 38849, 38768])
     # coords = stars[np.isin(stars[:, 0], ids), 1:3]
