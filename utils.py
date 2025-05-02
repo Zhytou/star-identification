@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-
+from matplotlib.patches import Circle
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 from skimage.metrics import structural_similarity
@@ -20,15 +20,7 @@ def get_angdist(points: np.ndarray):
 def convert_rade2deg(ra: float, dec: float):
     '''
         Convert the RA and DE from degree to timezone.
-    Args:
-        ra: the right ascension in degree
-        dec: the declination in degree
-    Returns:
-        ra_rad: the right ascension in hour
-        dec_rad: the declination in radians
     '''
-    # convert the RA and DEC from degree to radians
-
     coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg)
 
     return coord.to_string('hmsdms')
@@ -83,27 +75,39 @@ def draw_freq_spectrum(img: np.ndarray):
     plt.show()
 
 
-def draw_img_with_id_label(img: np.ndarray, coords: np.ndarray, ids: np.ndarray, grid_on: bool=False, grid_step: int=10, output_path: str=None):
+def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, circle: bool=False, auto_label: bool=False, axis_on: bool=True, grid_on: bool=False, grid_step: int=10, output_path: str=None):
     '''
-        Draw the image with the id label.
+        Label the stars in the image with id or circle.
     '''
     h, w = img.shape[:2]
 
     _, ax = plt.subplots(figsize=(10, 10))
     ax.imshow(img, cmap='gray', origin='lower')  
-    
-    ax.set_xlim(0, w)
-    ax.set_ylim(0, h)
-    ax.axis('on')
+
+    if axis_on:
+        ax.axis('on')
+        ax.set_xlim(0, w)
+        ax.set_ylim(0, h)
+    else:
+        ax.axis('off')
     ax.invert_yaxis()
+
     if grid_on:
         ax.set_xticks(np.arange(0, w, grid_step))
         ax.set_yticks(np.arange(0, h, grid_step))
         ax.grid(grid_on, color='r', linewidth=2)
 
+    if np.all(ids==None):
+        ids = np.arange(len(coords))+1 if auto_label else np.full(len(coords), -1)
+
     for id, (row, col) in zip(ids, coords):
-        row, col = min(int(row)+5, h-10), min(int(col)+5, w-10)
-        ax.text(col, row, str(id), fontsize=8, color='white', backgroundcolor=(0, 0, 0, 0.5), ha='left', va='top')
+        row, col = int(row), int(col)
+        if circle:
+            circle = Circle((col, row), 10, edgecolor='b', facecolor='none')
+            ax.add_patch(circle)
+        if id != -1:
+            row, col = min(row+5, h-10), min(col+5, w-10)
+            ax.text(col, row, str(id), fontsize=8, color='white', ha='left', va='top')
 
     plt.show()
 
