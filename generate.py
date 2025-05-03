@@ -110,7 +110,7 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
             # ?due to the precision of the float, these assertions may fail
             # assert np.all((exc_cs > -rp) & (exc_cs < rp)), f"The coordinates of stars in the region is not in the range of [-rp, rp]. {exc_cs}"
             # assert np.all((exc_ds > rb) & (exc_ds < rp)), f"The distance of stars in the region is not in the range of [rb, rp]. {exc_ds}"
-            if len(exc_cs) <= max(min_num_star, 0):
+            if len(exc_cs) <= max(min_num_star-1, 1):
                 continue
 
             # initialize the pattern
@@ -178,12 +178,12 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
                 Lg = meth_params[method][2]
 
                 # skip if the distance to nearest star is bigger than the distance of reference star to border
-                border_d = min(
-                    coord[0], coord[1],
-                    h-coord[0], w-coord[1],
-                )
-                if exc_ds[0] > border_d:
-                    continue
+                # border_d = min(
+                #     coord[0], coord[1],
+                #     h-coord[0], w-coord[1],
+                # )
+                # if exc_ds[0] > border_d:
+                #     continue
 
                 # rotate stars
                 v1, v2 = exc_cs[0], np.array([0, 1])
@@ -265,6 +265,7 @@ def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd:
                 sigma_mag=simu_params['sigma_mag'],
                 num_fs=simu_params['num_fs'],
                 num_ms=simu_params['num_ms'],
+                rot_meth=simu_params['rot'],
                 coords_only=True
             )
 
@@ -314,12 +315,12 @@ def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd:
     gcata = pd.read_csv(gcata_path, usecols=['Star ID', 'Ra', 'De', 'Magnitude'])
 
     # simulation config
-    sim_cfg = f'{simu_params["h"]}_{simu_params["w"]}_{simu_params["fovx"]}_{simu_params["fovy"]}_{simu_params["limit_mag"]}'
+    sim_cfg = f'{simu_params["h"]}_{simu_params["w"]}_{simu_params["fovy"]}_{simu_params["fovx"]}_{simu_params["limit_mag"]}_{simu_params["rot"]}'
 
     # focus in pixels used to calculate the buffer and pattern radius
     f1 = simu_params['w'] / (2 * tan(radians(simu_params['fovx'] / 2)))
     f2 = simu_params['h'] / (2 * tan(radians(simu_params['fovy'] / 2)))
-    assert np.isclose(f1, f2), "The focal length in x and y direction are not equal."
+    assert np.isclose(f1, f2, atol=1), f"The focal length {f1} and {f2} should be the same."
     f = (f1 + f2) / 2
 
     print('Database Generation')
@@ -391,9 +392,13 @@ def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: i
     name = uuid.uuid1()
 
     # generate right ascension[-pi, pi] and declination[-pi/2, pi/2]
-    ras = np.clip(np.full(num_roll, star_ra) + np.radians(np.random.normal(0, offset, num_roll)), 0, 2*np.pi)
-    des = np.clip(np.full(num_roll, star_de) + np.radians(np.random.normal(0, offset, num_roll)), -np.pi/2, np.pi/2)
+    ras, des = np.full(num_roll, star_ra), np.full(num_roll, star_de)
     rolls = np.arange(0, 2*np.pi, 2*np.pi/num_roll)
+
+    # add noise to the right ascension and declination
+    if offset > 0:
+        ras = np.clip(ras + np.radians(np.random.normal(0, offset, num_roll)), 0, 2*np.pi)
+        des = np.clip(des + np.radians(np.random.normal(0, offset, num_roll)), -np.pi/2, np.pi/2)
 
     # the dict to store the patterns(method -> [patterns])
     df_dict = defaultdict(list)
@@ -401,7 +406,7 @@ def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: i
     # focus in pixels used to calculate the buffer and pattern radius
     f1 = simu_params['w'] / (2 * tan(radians(simu_params['fovx'] / 2)))
     f2 = simu_params['h'] / (2 * tan(radians(simu_params['fovy'] / 2)))
-    assert np.isclose(f1, f2), f"The focal length in x direction is {f1}, while in y direction is {f2}."
+    assert np.isclose(f1, f2, atol=1), f"The focal length {f1} and {f2} should be the same."
     f = (f1+f2)/2
 
     # generate the star image
@@ -418,6 +423,7 @@ def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: i
             sigma_mag=simu_params['sigma_mag'],
             num_fs=simu_params['num_fs'],
             num_ms=simu_params['num_ms'], 
+            rot_meth=simu_params['rot'], 
             coords_only=True
         )
 
@@ -510,7 +516,7 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
     # focus in pixels used to calculate the buffer and pattern radius
     f1 = simu_params['w'] / (2 * tan(radians(simu_params['fovx'] / 2)))
     f2 = simu_params['h'] / (2 * tan(radians(simu_params['fovy'] / 2)))
-    assert np.isclose(f1, f2), "The focal length in x and y direction are not equal."
+    assert np.isclose(f1, f2, atol=1), f"The focal length {f1} and {f2} should be the same."
     f = (f1+f2)/2
 
     # the dict to store the results
@@ -529,6 +535,7 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
             sigma_mag=sigma_mag,
             num_fs=num_fs,
             num_ms=num_ms, 
+            rot_meth=simu_params['rot'],
             coords_only=True
         )
 
@@ -545,7 +552,7 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
         intersect_ids, ids_idxs, gcata_idxs = np.intersect1d(ids, gcata['Star ID'].to_numpy(), return_indices=True)
 
         # two few guide stars to identify
-        if len(intersect_ids) < min(min_num_star, 3):
+        if len(intersect_ids) <  max(min_num_star, 3):
             continue
 
         # set the guide star catalogue indexs
@@ -629,21 +636,22 @@ if __name__ == '__main__':
     if True:
         gen_database(
             {
-                'grid': [0.5, 6, 100], 
-                # 'lpt': [0.3, 6, 25, 36]
+                # 'grid': [0.5, 6, 100], 
+                'lpt': [0.5, 6, 50, 36]
             },
             {
                 'h': 1024,
-                'w': 1024,
-                'fovx': 12,
+                'w': 1282,
                 'fovy': 12,
+                'fovx': 14.9925,
                 'limit_mag': 6,
                 'sigma_pos': 0,
                 'sigma_mag': 0,
                 'num_fs': 0,
                 'num_ms': 0,
+                'rot': 1
             },
-            './catalogue/sao6.0_d0.03_12_20.csv',
+            './catalogue/sao6.0_d0.03_12_15.csv',
         )
 
     

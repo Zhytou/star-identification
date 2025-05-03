@@ -48,7 +48,7 @@ def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: f
     print('----------------------')
 
     # simulate config
-    sim_cfg = f"{simu_params['h']}_{simu_params['w']}_{simu_params['fovx']}_{simu_params['fovy']}_{simu_params['limit_mag']}"
+    sim_cfg = f"{simu_params['h']}_{simu_params['w']}_{simu_params['fovy']}_{simu_params['fovx']}_{simu_params['limit_mag']}_{simu_params['rot']}"
 
     # guide star catalogue
     gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
@@ -84,27 +84,6 @@ def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: f
 
     for task in tasks:
         task.result()
-
-    # aggregate the dataset
-    for method in {}:
-        gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
-        dir = os.path.join('dataset', sim_cfg, method, gen_cfg)
-        dfs = []
-
-        for offset_dir in os.listdir(dir):
-            if offset_dir == 'labels.csv':
-                continue
-            for noise_dir in os.listdir(os.path.join(dir, offset_dir)):
-                for id_dir in os.listdir(os.path.join(dir, offset_dir, noise_dir)):
-                    for file in os.listdir(os.path.join(dir, offset_dir, noise_dir, id_dir)):
-                        if not file.endswith('_10.csv'):
-                            continue
-                        file_path = os.path.join(dir, offset_dir, noise_dir, id_dir, file)
-                        df = pd.read_csv(file_path)
-                        dfs.append(df)
-
-        df = pd.concat(dfs, ignore_index=True)
-        df.to_csv(os.path.join(dir, 'labels.csv'), index=False)
 
     return
 
@@ -145,7 +124,7 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
     print('----------------------')
 
     # simulation config
-    sim_cfg = f'{simu_params["h"]}_{simu_params["w"]}_{simu_params["fovx"]}_{simu_params["fovy"]}_{simu_params["limit_mag"]}'
+    sim_cfg = f'{simu_params["h"]}_{simu_params["w"]}_{simu_params["fovy"]}_{simu_params["fovx"]}_{simu_params["limit_mag"]}_{simu_params["rot"]}'
 
     # read the guide star catalogue
     gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
@@ -163,7 +142,9 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
         tasks[f'mag{mag}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, sigma_mag=mag))
     for fs in test_params.get('fs', []):
         tasks[f'fs{fs}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, num_fs=fs))
-
+    for ms in test_params.get('ms', []):
+        tasks[f'ms{ms}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, num_ms=ms))
+    
     # sub test name
     for st_name in tasks:
         for task in tasks[st_name]:
@@ -200,25 +181,26 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
 
 
 if __name__ == '__main__':
-    if False:
+    if True:
         agg_dataset(
             meth_params={
-                # 'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
-                'lpt_nn': [0.5, 6, 50],
+                'rac_1dcnn': [0.5, 6, [10, 25, 40, 55], 18, 3],
+                'lpt_nn': [0.5, 6, 55],
             },
             simu_params={
                 'h': 1024,
-                'w': 1024,
-                'fovx': 12,
+                'w': 1282,
                 'fovy': 12,
+                'fovx': 14.9925,
                 'limit_mag': 6,
                 'sigma_pos': 0,
                 'sigma_mag': 0,
                 'num_fs': 0,
-                'num_ms': 0
+                'num_ms': 0,
+                'rot': 1
             },
             gcata_path='catalogue/sao6.0_d0.03_12_15.csv',
-            offset=0,
+            offset=3,
             num_roll=10,
             num_thd=20
         )
@@ -226,7 +208,7 @@ if __name__ == '__main__':
     if False:
         agg_dataset(
             meth_params={
-                'rac_1dcnn': [0.1, 4.5, [50, 100], 16, 3],
+                'rac_1dcnn': [0.1, 4.5, [25, 50, 100, 200], 16, 3],
             },
             simu_params={
                 'h': 1024,
@@ -250,47 +232,59 @@ if __name__ == '__main__':
             400, 
             {
                 # 'grid': [0.5, 6, 100],
-                # 'lpt': [0.5, 6, 25, 36],
-                # 'lpt_nn': [0.5, 6, 50],
-                # 'rac_1dcnn': [0.5, 6, [25, 50], 16, 3]
+                'lpt': [0.5, 6, 50, 36],
+                # 'lpt_nn': [0.5, 6, 55],
+                # 'rac_1dcnn': [0.5, 6, [10, 25, 40, 55], 16, 3]
             }, 
             {
                 'h': 1024,
-                'w': 1024,
-                'fovx': 12,
+                'w': 1282,
                 'fovy': 12,
-                'limit_mag': 6
+                'fovx': 14.9925,
+                'limit_mag': 6,
+                'rot': 1
             },
             {
-                # 'pos': [0, 0.5, 1, 1.5, 2], 
+                'pos': [0, 0.5, 1, 1.5, 2], 
                 'mag': [0, 0.1, 0.2, 0.3, 0.4], 
-                # 'fs': [0, 1, 2, 3, 4]
+                'fs': [0, 1, 2, 3, 4],
+                'ms': [0, 1, 2, 3, 4]
             },
             './catalogue/sao6.0_d0.03_12_15.csv',
         )
     
-    if True:
+    if False:
         # dir = 'dataset/1024_1024_12_12_6/lpt_nn/sao6.0_d0.03_12_15_0.5_6_50'
         # dir = 'dataset/512_512_12_12_6/lpt_nn/sao6.0_d0.03_12_15_0.1_6_25'
         # dir = 'dataset/512_512_12_12_6/rac_1dcnn/sao6.0_d0.03_12_15_0.1_6_[25, 50]_16_3'
-        dir = 'dataset/1024_1280_11.398822251559647_9.129887427521604_5.5/rac_1dcnn/sao5.5_d0.03_9_10_0.1_4.5_[50, 100]_16_3'
+        # dir = 'dataset/1024_1024_12_12_6/rac_1dcnn/sao6.0_d0.03_12_15_0.5_6_[25, 50, 100]_16_3'
+        # dir = 'dataset/1024_1280_11.398822251559647_9.129887427521604_5.5/rac_1dcnn/sao5.5_d0.03_9_10_0.1_4.5_[50, 100]_16_3'
+        # dir = 'dataset/1024_1024_12_12_6_1/rac_1dcnn/sao6.0_d0.03_12_15_0.5_6_[10, 25, 40, 55]_16_3'
+        dir = 'dataset/1024_1024_12_12_6_1/lpt_nn/sao6.0_d0.03_12_15_0.5_6_55'
         dfs = []
 
         for offset_dir in os.listdir(dir):
-            if offset_dir == 'labels.csv':
+            if offset_dir == 'labels.csv' or offset_dir != '0':
                 continue
             for noise_dir in os.listdir(os.path.join(dir, offset_dir)):
-                for id_dir in os.listdir(os.path.join(dir, offset_dir, noise_dir)):
-                    for file in os.listdir(os.path.join(dir, offset_dir, noise_dir, id_dir)):
-                        if not file.endswith('_10.csv'):
-                            continue
-                        file_path = os.path.join(dir, offset_dir, noise_dir, id_dir, file)
-                        try:
-                            df = pd.read_csv(file_path)
-                        except:
-                            print('Error in file:', file_path)
-                            continue
-                        dfs.append(df)
-
+                # sub_dfs = []
+                # for id_dir in os.listdir(os.path.join(dir, offset_dir, noise_dir)):
+                #     if id_dir == 'labels.csv':
+                #         continue
+                #     for file in os.listdir(os.path.join(dir, offset_dir, noise_dir, id_dir)):
+                #         if not file.endswith('_10.csv'):
+                #             continue
+                #         file_path = os.path.join(dir, offset_dir, noise_dir, id_dir, file)
+                #         try:
+                #             df = pd.read_csv(file_path)
+                #         except:
+                #             print('Error in file:', file_path)
+                #             continue
+                #         sub_dfs.append(df)
+                
+                # df = pd.concat(sub_dfs, ignore_index=True)
+                # df.to_csv(os.path.join(dir, offset_dir, noise_dir, 'labels.csv'), index=False)
+                df = pd.read_csv(os.path.join(dir, offset_dir, noise_dir, 'labels.csv'))
+                dfs.append(df)
         df = pd.concat(dfs, ignore_index=True)
         df.to_csv(os.path.join(dir, 'labels.csv'), index=False)
