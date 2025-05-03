@@ -3,7 +3,7 @@ from math import radians, degrees, sin, cos, tan, sqrt, exp, atan
 import numpy as np
 import pandas as pd
 
-from utils import draw_img_with_id_label
+from utils import label_star_image
 
 
 # read star catalogue
@@ -286,6 +286,10 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     # get rotation matrix
     M = get_rotation_matrix(ra, de, roll, rot_meth)
 
+    # calculate fovx if not given
+    if fovx == -1:
+        fovx = degrees(atan(tan(radians(fovy/2)*w/h)))
+
     # get field of view
     # ? what happern, when fovx != fovy
     fov = max(fovx, fovy) + 1
@@ -293,7 +297,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
 
     f1 = pixel * w / (2*tan(radians(fovx/2)))
     f2 = pixel * h / (2*tan(radians(fovy/2)))
-    assert np.isclose(f1, f2), "Focal length should be the same in both directions."
+    assert np.isclose(f1, f2), f"Focal length {f1} and {f2} should be the same in both directions."
 
     # search for image-able stars
     if False:
@@ -359,12 +363,13 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     stars_within_fov.rename(columns={'X': 'Col', 'Y': 'Row'}, inplace=True)
     stars_within_fov = stars_within_fov[['Star ID', 'Row', 'Col', 'Ra', 'De','Magnitude']].reset_index(drop=True)
 
-    # exclude missing stars if needed
-    if num_ms > 0:
-        stars_within_fov = stars_within_fov.sample(n=max(1, len(stars_within_fov)-num_ms), random_state=1).reset_index(drop=True)
-    
     # stars have to be id, row, col, ra, de, mag
     stars = stars_within_fov.to_numpy()
+
+    # exclude missing stars if needed
+    if num_ms > 0 and len(stars) > 0:
+        n = len(stars)
+        stars = stars[np.random.choice(n, max(1, n-num_ms), replace=False)]
 
     # add false stars if needed
     if num_fs > 0:
@@ -402,7 +407,7 @@ if __name__ == '__main__':
     # h, w = 1024, 1280
     # f = 35269.52
     # pixel = 5.5
-    # limit_mag = 6
+    # limit_mag = 5
 
     # test 3
     # 20161227225347.bmp
@@ -440,11 +445,4 @@ if __name__ == '__main__':
     ids = stars[:, 0].astype(int)
     coords = stars[:, 1:3].astype(int)
 
-    draw_img_with_id_label(img, coords, ids)
-
-    # img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    # for row, col in coords:
-    #     cv2.circle(img, (int(col), int(row)), 5, (0, 0, 255), -1)
-    
-    # cv2.imwrite('img.png', img)
-    # cv2.waitKey(-1)
+    label_star_image(img, coords, ids)
