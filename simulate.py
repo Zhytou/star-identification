@@ -292,8 +292,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
 
     # get field of view
     # ? what happern, when fovx != fovy
-    fov = max(fovx, fovy) + 1
-    # fov = sqrt(fovx**2 + fovy**2)
+    fov = sqrt(fovx**2 + fovy**2)
 
     f1 = pixel * w / (2*tan(radians(fovx/2)))
     f2 = pixel * h / (2*tan(radians(fovy/2)))
@@ -394,7 +393,7 @@ if __name__ == '__main__':
     # test 1
     ra, de, roll = radians(249.2104), radians(-12.0386), radians(-13.3845)
     h, w = 1024, 1024
-    fovx, fovy = 12, 12
+    fovx, fovy = 10, 10
     limit_mag = 6
 
     # test 2
@@ -434,7 +433,7 @@ if __name__ == '__main__':
     # M = get_rotation_matrix(ra, de, roll, 1)
     # assert np.allclose(M, R, 1e-3), f"Rotation matrix is not correct. {M} != {R}"
 
-    print(np.degrees(ra), np.degrees(de), np.degrees(roll))
+    print(np.round([np.degrees(ra), np.degrees(de), np.degrees(roll)], 4))
     print(ra, de, fovx, fovy)
     img, stars = create_star_image(ra, de, roll, h=h, w=w, limit_mag=limit_mag, fovx=fovx, fovy=fovy, rot_meth=1)
 
