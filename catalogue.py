@@ -5,6 +5,11 @@ import matplotlib.pyplot as plt, matplotlib.axes._axes as axes
 from math import radians, sqrt, tan, sin, cos, pi
 
 
+# Chinese font setting
+plt.rcParams['font.sans-serif']=['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
+
+
 def draw_distri(cata: pd.DataFrame, title: str = '', ax: axes.Axes = None):
     '''
         Draw the distribution of stars in the celestial sphere.
@@ -19,15 +24,15 @@ def draw_distri(cata: pd.DataFrame, title: str = '', ax: axes.Axes = None):
         plt.title(title)
         plt.xlim(0, 360)
         plt.ylim(-90, 90)
-        plt.xlabel('RA')
-        plt.ylabel('DE')
+        plt.xlabel('赤经(°)')
+        plt.ylabel('赤纬(°)')
     else:
         ax.scatter(ras, des, s=1)
         ax.set_title(title)
         ax.set_xlim(0, 360)
         ax.set_ylim(-90, 90)
-        ax.set_xlabel('RA')
-        ax.set_ylabel('DE')    
+        ax.set_xlabel('赤经(°)')
+        ax.set_ylabel('赤纬(°)')    
     plt.show()
 
 
@@ -78,8 +83,8 @@ def draw_prob(cata: pd.DataFrame, ax: axes.Axes = None, title: str = '', fov: in
         plt.title(title)
         plt.xlim(0, 100)
         plt.ylim(0, 20)
-        plt.xlabel('Number of stars within fov')
-        plt.ylabel('Probability%')
+        plt.xlabel('视场内恒星数量')
+        plt.ylabel('概率(%)')
         plt.grid(True)
     else:
         ax.bar(num_stars, probability)
@@ -87,8 +92,8 @@ def draw_prob(cata: pd.DataFrame, ax: axes.Axes = None, title: str = '', fov: in
         ax.set_xlim(0, 100)
         ax.set_ylim(0, 20)
         ax.set_xticks(np.arange(0, 100, 5))
-        ax.set_xlabel('Number of stars within fov')
-        ax.set_ylabel('Probability%')
+        ax.set_xlabel('视场内恒星数量')
+        ax.set_ylabel('概率(%)')
         ax.grid(True)
     
     plt.show()
@@ -250,7 +255,7 @@ def filter_catalogue(cata: pd.DataFrame, num_limit: int, mag_limit: float=6.0, a
     # get the darker star index by condition
     mags1, mags2 = cata.loc[idxs1, 'Magnitude'].to_numpy(), cata.loc[idxs2, 'Magnitude'].to_numpy()
     darker_idxs = np.where(mags1 > mags2, idxs1, idxs2)
-
+    print()
     # eliminate the darker stars from small angular distance star pairs
     cata = cata[~cata.index.isin(darker_idxs)]
 
@@ -367,18 +372,17 @@ if __name__ == '__main__':
     rni_file = f'catalogue/sao{mag_limit}_d{agd_limit}_{fov}_{max_limit}_r{min_limit}.csv'
 
     df = parse_heasarc_sao(raw_file, sao_file)
+    df = df[df['Magnitude'] < 7.0]
+    draw_distri(df)
+    f_df = filter_catalogue(df, max_limit, mag_limit, agd_limit, fov=fov, uniform=False).reset_index(drop=True)
+    draw_distri(f_df)
+    # draw_prob(f_df, fov=fov, num_vec=3000)
+    
     if os.path.exists(uni_file):
         uf_df = pd.read_csv(uni_file)
     else:
         uf_df = filter_catalogue(df, max_limit, mag_limit, agd_limit, fov=fov, num_vec=360).reset_index(drop=True)
         uf_df.to_csv(uni_file)
     
-    # draw_distri(uf_df)
+    draw_distri(uf_df)
     draw_prob(uf_df, fov=fov, num_vec=3000)
-
-    if os.path.exists(rni_file):
-        rni_df = pd.read_csv(rni_file)
-    else:
-        rni_df = remove_guide_star(uf_df, df, min_limit, mag_limit, fov)
-        rni_df.to_csv(rni_file)
-
