@@ -160,7 +160,7 @@ def get_seed_coords(img: np.ndarray, wind_size: int=5, T1: int=0, T2: int=-np.in
     # calculate the determinant of the Hessian matrix with offset
     doh_results = doh_operator(neighborhoods[coords[:, 0], coords[:, 1]])
 
-    print(np.sort(doh_results)[::-1][:30])
+    # print(np.sort(doh_results)[::-1][:30])
 
     # get the local maxima values for bright star
     local_max_values = img[coords[:, 0], coords[:, 1]]

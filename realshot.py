@@ -12,8 +12,11 @@ from extract import get_star_centroids
 from generate import gen_real_sample
 from dataset import create_dataset
 from model import create_model
-from test import predict
-from utils import get_angdist
+from test import predict, cluster_by_angle
+from utils import get_angdist, label_star_image
+
+
+DEBUG = False
 
 
 # 验证降噪\二值化\连通域等算法和matlab实现一致性
@@ -122,39 +125,119 @@ if False:
     # )
 
 
-# 验证识别算法有效性
+# 使用单张图片验证识别算法有效性，并在原图中标出恒星ID
 if True:
     gcata = pd.read_csv('catalogue/sao5.5_d0.03_9_10.csv', usecols=["Star ID", "Ra", "De", "Magnitude"])
 
+    img_path = './example/xie/cdata/cdata.bmp'
+    img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+
+    meth_params = {
+        'rac_1dcnn': [
+            0.1,            # Rb
+            4.5,            # Rp
+            [10, 25, 40, 55],   # arr_ring
+            16,             # num_sector
+            3,              # num_neighbor
+        ],
+    }
+
+    extr_params = {
+        'den': 'NLM_BLF',   # denoise
+        'thr': 'Liebe',     # threshold
+        'seg': 'RG',        # segmentation
+        'cen': 'MCoG',      # centroid
+        'pixel': 3          # pixel number limit
+    }
+
+    df_dict = gen_real_sample(
+        [img_path],
+        meth_params,
+        extr_params,
+        f=35269.52/5.5,
+    )
+
+    method = 'rac_1dcnn'
+
+    # get the pattern radius for later fov restriction
+    Rp = np.radians(meth_params[method][1])
+
+    # test data
+    df = df_dict[method]
+
+    # device
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+    # dataset
+    dataset = create_dataset(
+        method,
+        df,
+        '[10, 25, 40, 55]_16_3',
+    )
+    loader = DataLoader(dataset, batch_size=20, shuffle=False)
+
+    # best model
+    model = create_model(
+        method,
+        meth_params[method],
+        len(gcata),
+    )
+    model_path = 'model/1024_1280_9.129887427521604_11.398822251559647_5.5_1/rac_1dcnn/sao5.5_d0.03_9_10_0.1_4.5_[10, 25, 40, 55]_18_3/best_model.pth'
+    model.load_state_dict(torch.load(model_path))
+
+    # predict the star id
+    esti_idxs = predict(method, model, loader, 0.3, device)
+    esti_ids = np.full_like(esti_idxs, -1)
+    mask = esti_idxs != -1    
+    esti_ids[mask] = gcata.loc[esti_idxs[mask], 'Star ID'].to_numpy()
+
+    # do fov restriction
+    esti_ids = cluster_by_angle(gcata, esti_ids, Rp)
+
+    # get the star coordinates
+    coords = df[['row', 'col']].to_numpy()
+    
+    # label star image
+    label_star_image(img, coords, auto_label=True)
+    label_star_image(img, coords, esti_ids)
+
+
+# 多张实拍星图验证算法有效性
+if False:
+    gcata = pd.read_csv('catalogue/sao5.5_d0.03_9_10.csv', usecols=["Star ID", "Ra", "De", "Magnitude"])
+
     img_paths = [
-        './example/xie/cdata/cdata.bmp'
     ]
 
     meth_params = {
         'rac_1dcnn': [
             0.1,            # Rb
             4.5,            # Rp
-            [50, 100],   # arr_ring
+            [10, 25, 40, 55],   # arr_ring
             16,             # num_sector
             3,              # num_neighbor
         ],
-        # 'grid': [
-        #     0.1,            # Rb
-        #     4.5,            # Rp
-        #     50,             # Grid Length
-        # ]
     }
 
-    data = np.load(img_paths[0].replace('.bmp', '.npz'), allow_pickle=True)
-
+    extr_params = {
+        'den': 'MEDIAN',    # denoise
+        'thr': 'Liebe',     # threshold
+        'seg': 'CCL',       # segmentation
+        'cen': 'MCoG',      # centroid
+        'pixel': 3          # pixel number limit
+    }
 
     df_dict = gen_real_sample(
         img_paths,
         meth_params,
+        extr_params,
         f=35269.52/5.5,
     )
 
     for method in df_dict:
+        # get the pattern radius for later fov restriction
+        Rp = np.radians(meth_params[method][1])
+
         # test data
         df = df_dict[method]
 
@@ -165,7 +248,7 @@ if True:
         dataset = create_dataset(
             'rac_1dcnn',
             df,
-            '[50, 100]_16_3',
+            '[10, 25, 40, 55]_16_3',
         )
         loader = DataLoader(dataset, batch_size=20, shuffle=False)
 
@@ -175,11 +258,11 @@ if True:
             meth_params[method],
             len(gcata),
         )
-        model_path = 'model/1024_1280_11.398822251559647_9.129887427521604_5.5/rac_1dcnn/sao5.5_d0.03_9_10_0.1_4.5_[50, 100]_16_3/best_model.pth'
+        model_path = 'model/1024_1280_9.129887427521604_11.398822251559647_5.5_1/rac_1dcnn/sao5.5_d0.03_9_10_0.1_4.5_[10, 25, 40, 55]_18_3/best_model.pth'
         model.load_state_dict(torch.load(model_path))
 
         # predict the star id
-        all_esti_idxs = predict(method, model, loader, 0.1, torch.device('cpu'))
+        all_esti_idxs = predict(method, model, loader, 0.3, torch.device('cpu'))
         all_esti_ids = np.full_like(all_esti_idxs, -1)
         mask = all_esti_idxs != -1    
         all_esti_ids[mask] = gcata.loc[all_esti_idxs[mask], 'Star ID'].to_numpy()
@@ -202,6 +285,9 @@ if True:
             esti_ids = all_esti_ids[img_ids == img_path]
             esti_coords = all_coords[img_ids == img_path]
 
+            # do fov restriction
+            esti_ids = cluster_by_angle(gcata, esti_ids, Rp)
+
             # get the real star id and corresponding coordinates
             data = np.load(img_path.replace('.bmp', '.npz'), allow_pickle=True)
             points = data['points'][data['idxs']-1]
@@ -221,17 +307,19 @@ if True:
                 assert np.allclose(esti_coords[idx], real_coord, atol=1e-3)
                 cnt += 1 if esti_ids[idx] == real_id else 0
             
-                print(
-                    '\nCoord', real_coord,
-                    '\nEstimated star id', esti_ids[idx],
-                    '\nReal star id', real_id, 
-                )
+                if DEBUG:
+                    print(
+                        '\nCoord', real_coord,
+                        '\nEstimated star id', esti_ids[idx],
+                        '\nReal star id', real_id, 
+                    )
                 
-            print(
-                '------------------------------',
-                '\nMethod', method,
-                '\nImage', os.path.basename(img_path),
-                '\nNumber of stars', len(esti_ids),
-                '\nMatched stars', cnt,
-            )
+            if DEBUG:
+                print(
+                    '------------------------------',
+                    '\nMethod', method,
+                    '\nImage', os.path.basename(img_path),
+                    '\nNumber of stars', len(esti_ids),
+                    '\nMatched stars', cnt,
+                )
 

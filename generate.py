@@ -585,7 +585,7 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
     return df_dict
 
 
-def gen_real_sample(img_paths: list[str], meth_params: dict, f: float):
+def gen_real_sample(img_paths: list[str], meth_params: dict, extr_params: dict, f: float):
     '''
         Generate pattern match test case using real star image.
     '''
@@ -599,7 +599,14 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, f: float):
         h, w = img.shape
 
         # get the centroids of the stars in the image
-        coords = np.array(get_star_centroids(img, 'MEDIAN', 'Liebe', 'CCL', 'MCoG', pixel_limit=3))
+        coords = np.array(get_star_centroids(
+            img, 
+            den_meth=extr_params['den'],
+            thr_meth=extr_params['thr'],
+            seg_meth=extr_params['seg'],
+            cen_meth=extr_params['cen'],
+            pixel_limit=extr_params['pixel'],
+        ))
 
         # set all star ids and catalogue indexs to -1, since unknown for real image
         ids = np.full(len(coords), -1)
