@@ -1,5 +1,4 @@
-import os
-import uuid
+import os, uuid, json
 import pandas as pd
 import numpy as np
 from collections import defaultdict
@@ -180,12 +179,71 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
     return
 
 
+def merge_dataset(dir: str, num_roll: int, num_thd: int=20):
+    '''
+        Merge all the datasets into labels.csv.
+    '''
+
+    def merge_sub_dataset(sub_dir: str):
+        '''
+            Merge noise sub dir dataset.
+        '''
+        dfs = []
+        for id in os.listdir(sub_dir):
+            for file in os.listdir(os.path.join(sub_dir, id)):
+                if not file.endswith(f'_{num_roll}.csv'):
+                    continue    
+                dfs.append(pd.read_csv(os.path.join(sub_dir, id, file)))
+
+        df = pd.concat(dfs, ignore_index=True)
+        return df
+
+    # get the old labels.csv and already concatenated sub dir names
+    if os.path.exists(os.path.join(dir, 'labels.csv')):
+        dfs = [pd.read_csv(os.path.join(dir, 'labels.csv'))]
+    else:
+        dfs = []
+    if os.path.exists(os.path.join(dir, 'merge.log')):
+        with open(os.path.join(dir, 'merge.log'), 'r') as log_file:
+            names = json.load(log_file)
+    else:
+        names = []
+
+    pool = ThreadPoolExecutor(max_workers=num_thd)
+    tasks = []
+
+    for offset in os.listdir(dir):
+        if offset == 'labels.csv' or offset == 'merge.log':
+            continue
+        for noise_cfg in os.listdir(os.path.join(dir, offset)):
+            name = os.path.join(offset, noise_cfg)
+            if name in names:
+                print(name)
+                continue
+            else:
+                names.append(name)
+        
+            tasks.append(pool.submit(
+                merge_sub_dataset, 
+                os.path.join(dir, name),
+            ))
+    
+    # get all the csv files
+    for task in tasks:
+        dfs.append(task.result())
+
+    # store labels.csv and merge.log
+    df = pd.concat(dfs, ignore_index=True)
+    df.to_csv(os.path.join(dir, 'labels.csv'), index=False)
+    with open(os.path.join(dir, 'merge.log'), 'w') as log_file:
+        json.dump(names, log_file)
+
+
 if __name__ == '__main__':
-    if True:
+    if False:
         agg_dataset(
             meth_params={
-                'rac_1dcnn': [0.5, 6, [10, 25, 40, 55], 18, 3],
-                'lpt_nn': [0.5, 6, 55],
+                'rac_1dcnn': [0.5, 6, [25, 55, 85], 18, 3],
             },
             simu_params={
                 'h': 1024,
@@ -193,14 +251,14 @@ if __name__ == '__main__':
                 'fovy': 12,
                 'fovx': 14.9925,
                 'limit_mag': 6,
-                'sigma_pos': 0,
+                'sigma_pos': 3,
                 'sigma_mag': 0,
                 'num_fs': 0,
                 'num_ms': 0,
                 'rot': 1
             },
             gcata_path='catalogue/sao6.0_d0.03_12_15.csv',
-            offset=3,
+            offset=0,
             num_roll=10,
             num_thd=20
         )
@@ -208,7 +266,7 @@ if __name__ == '__main__':
     if False:
         agg_dataset(
             meth_params={
-                'rac_1dcnn': [0.1, 4.5, [25, 50, 100, 200], 16, 3],
+                'rac_1dcnn': [0.1, 4.5, [10, 25, 40, 55], 18, 3],
             },
             simu_params={
                 'h': 1024,
@@ -217,12 +275,13 @@ if __name__ == '__main__':
                 'fovy': 9.129887427521604,
                 'limit_mag': 5.5,
                 'sigma_pos': 0,
-                'sigma_mag': 0,
+                'sigma_mag': 0.5,
                 'num_fs': 0,
-                'num_ms': 0
+                'num_ms': 0,
+                'rot': 1
             },
             gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
-            offset=1,
+            offset=0,
             num_roll=10,
             num_thd=20
         )
@@ -232,9 +291,9 @@ if __name__ == '__main__':
             400, 
             {
                 # 'grid': [0.5, 6, 100],
-                'lpt': [0.5, 6, 50, 36],
-                # 'lpt_nn': [0.5, 6, 55],
-                # 'rac_1dcnn': [0.5, 6, [10, 25, 40, 55], 16, 3]
+                # 'lpt': [0.5, 6, 50, 36],
+                'lpt_nn': [0.5, 6, 55],
+                'rac_1dcnn': [0.5, 6, [10, 25, 40, 55], 18, 3]
             }, 
             {
                 'h': 1024,
@@ -245,46 +304,17 @@ if __name__ == '__main__':
                 'rot': 1
             },
             {
-                'pos': [0, 0.5, 1, 1.5, 2], 
-                'mag': [0, 0.1, 0.2, 0.3, 0.4], 
-                'fs': [0, 1, 2, 3, 4],
+                # 'pos': [0, 0.5, 1, 1.5, 2], 
+                # 'mag': [0, 0.1, 0.2, 0.3, 0.4], 
+                # 'fs': [0, 1, 2, 3, 4],
                 'ms': [0, 1, 2, 3, 4]
             },
             './catalogue/sao6.0_d0.03_12_15.csv',
         )
     
-    if False:
-        # dir = 'dataset/1024_1024_12_12_6/lpt_nn/sao6.0_d0.03_12_15_0.5_6_50'
-        # dir = 'dataset/512_512_12_12_6/lpt_nn/sao6.0_d0.03_12_15_0.1_6_25'
-        # dir = 'dataset/512_512_12_12_6/rac_1dcnn/sao6.0_d0.03_12_15_0.1_6_[25, 50]_16_3'
-        # dir = 'dataset/1024_1024_12_12_6/rac_1dcnn/sao6.0_d0.03_12_15_0.5_6_[25, 50, 100]_16_3'
+    if True:
         # dir = 'dataset/1024_1280_11.398822251559647_9.129887427521604_5.5/rac_1dcnn/sao5.5_d0.03_9_10_0.1_4.5_[50, 100]_16_3'
-        # dir = 'dataset/1024_1024_12_12_6_1/rac_1dcnn/sao6.0_d0.03_12_15_0.5_6_[10, 25, 40, 55]_16_3'
-        dir = 'dataset/1024_1024_12_12_6_1/lpt_nn/sao6.0_d0.03_12_15_0.5_6_55'
-        dfs = []
-
-        for offset_dir in os.listdir(dir):
-            if offset_dir == 'labels.csv' or offset_dir != '0':
-                continue
-            for noise_dir in os.listdir(os.path.join(dir, offset_dir)):
-                # sub_dfs = []
-                # for id_dir in os.listdir(os.path.join(dir, offset_dir, noise_dir)):
-                #     if id_dir == 'labels.csv':
-                #         continue
-                #     for file in os.listdir(os.path.join(dir, offset_dir, noise_dir, id_dir)):
-                #         if not file.endswith('_10.csv'):
-                #             continue
-                #         file_path = os.path.join(dir, offset_dir, noise_dir, id_dir, file)
-                #         try:
-                #             df = pd.read_csv(file_path)
-                #         except:
-                #             print('Error in file:', file_path)
-                #             continue
-                #         sub_dfs.append(df)
-                
-                # df = pd.concat(sub_dfs, ignore_index=True)
-                # df.to_csv(os.path.join(dir, offset_dir, noise_dir, 'labels.csv'), index=False)
-                df = pd.read_csv(os.path.join(dir, offset_dir, noise_dir, 'labels.csv'))
-                dfs.append(df)
-        df = pd.concat(dfs, ignore_index=True)
-        df.to_csv(os.path.join(dir, 'labels.csv'), index=False)
+        # dir = 'dataset/1024_1282_12_14.9925_6_1/rac_1dcnn/sao6.0_d0.03_12_15_0.5_6_[10, 25, 40, 55]_18_3'
+        # dir = 'dataset/1024_1282_12_14.9925_6_1/lpt_nn/sao6.0_d0.03_12_15_0.5_6_55'
+        dir = 'dataset/1024_1282_12_14.9925_6_1/rac_1dcnn/sao6.0_d0.03_12_15_0.5_6_[25, 55, 85]_18_3'
+        merge_dataset(dir, 10)
