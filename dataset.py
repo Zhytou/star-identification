@@ -50,7 +50,7 @@ class LPTDataset(Dataset):
 
         # set data of distance features
         cols = [f'dist{i}' for i in range(nd)]
-        self.dists = label_df[cols].to_numpy(np.float32)
+        self.feats = label_df[cols].to_numpy(np.float32)
 
         # set data of catalog index(labels)
         self.labels = label_df['cata_idx'].astype(int)
@@ -62,7 +62,7 @@ class LPTDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        return self.dists[idx], self.labels[idx]
+        return self.feats[idx], self.labels[idx]
 
 
 class RACDataset(Dataset):
@@ -78,13 +78,11 @@ class RACDataset(Dataset):
         # set length of dataset
         self.len = len(label_df)
 
-        # set data of rings
-        cols = [f'ring{i}' for i in range(nr)]
-        self.rings = label_df[cols].to_numpy(np.float32)
-
-        # set data of sectors
-        cols = [f'n{i}_sector{j}' for i in range(nn) for j in range(ns)]
-        self.sectors = label_df[cols].to_numpy(np.float32)
+        # set data of rings and sectors
+        cols1 = [f'ring{i}' for i in range(nr)]
+        cols2 = [f'n{i}_sector{j}' for i in range(nn) for j in range(ns)]
+        cols = cols1 + cols2
+        self.feats = label_df[cols].to_numpy(np.float32)
 
         # set data of catalog index(labels)
         self.labels = label_df['cata_idx'].astype(int)
@@ -96,7 +94,7 @@ class RACDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
         
-        return (self.rings[idx], self.sectors[idx]), self.labels[idx]
+        return self.feats[idx], self.labels[idx]
 
 
 def create_dataset(method: str, df: pd.DataFrame, gen_cfg: str):
@@ -109,7 +107,7 @@ def create_dataset(method: str, df: pd.DataFrame, gen_cfg: str):
         gen_cfg: the generator configuration
     '''
     method_mapping = {
-        'rac_1dcnn': RACDataset,
+        'rac_nn': RACDataset,
         'lpt_nn': LPTDataset
     }
     dataset_class = method_mapping.get(method)

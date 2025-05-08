@@ -217,7 +217,7 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
     return acc
 
 
-def predict(method: str, model: nn.Module, loader: DataLoader, T: float=0, device=torch.device('cpu')):
+def predict(model: nn.Module, loader: DataLoader, T: float=0, device=torch.device('cpu')):
     '''
         Predict the labels of the test data.
     '''
@@ -232,10 +232,10 @@ def predict(method: str, model: nn.Module, loader: DataLoader, T: float=0, devic
     with torch.no_grad():
         for feats, _ in loader:
             # move the features and labels to the device
-            feats = (feats[0].to(device), feats[1].to(device)) if method == 'rac_1dcnn' else feats.to(device)
+            feats = feats.to(device)
             
-            # forward pass to get output logits
-            scores = model(*feats) if method == 'rac_1dcnn' else model(feats)  
+            # forward pass to get output/logits
+            scores = model(feats)
 
             # get the probabilities
             probs = F.softmax(scores, dim=1)
@@ -266,7 +266,7 @@ def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, gen_cfg: 
 
     #! the identification step
     # get the predicted catalogue index
-    esti_idxs = predict(method, model, loader, device=device)
+    esti_idxs = predict(model, loader, device=device)
 
     # get the guide star ids by non -1 idxs
     esti_ids = np.full_like(esti_idxs, -1)
@@ -387,7 +387,7 @@ def draw_results(res: dict, save: bool=False):
     plt.show()
 
 
-def do_test(meth_params: dict, simu_params: dict, test_params: dict, gcata_path: str, num_thd: int=20):
+def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params: dict, gcata_path: str, num_thd: int=20):
     '''
         Do test.
     '''
@@ -446,15 +446,15 @@ def do_test(meth_params: dict, simu_params: dict, test_params: dict, gcata_path:
                 '\nMin count of 1 in pattern matrix', min_cnt, 
                 '\nAvg count of 1 in pattern matrix', avg_cnt
             )
-        elif method in ['rac_1dcnn', 'daa_1dcnn', 'lpt_nn']:
+        elif method in ['rac_nn', 'lpt_nn']:
             # device
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
             # initialize a default model
-            model = create_model(method, meth_params[method], num_class)
+            model = create_model(method, model_types[method], meth_params[method], num_class)
 
             # load best model
-            model.load_state_dict(torch.load(os.path.join('model', sim_cfg, method, gen_cfg, 'best_model.pth')))
+            model.load_state_dict(torch.load(os.path.join('model', sim_cfg, method, gen_cfg, model_types[method], 'best_model.pth')))
 
             print('Device:', device)
         else:
@@ -519,8 +519,8 @@ def do_test(meth_params: dict, simu_params: dict, test_params: dict, gcata_path:
 if __name__ == '__main__':
     res = do_test(
         {
-            'lpt_nn': [0.5, 6, 55],
-            'rac_1dcnn': [0.5, 6, [15, 35, 55], 18, 3],
+            # 'lpt_nn': [0.5, 6, 55],
+            'rac_nn': [0.5, 6, [15, 35, 55], 18, 3],
             # 'grid': [0.5, 6, 100], 
             # 'lpt': [0.5, 6, 50, 36]
         },
@@ -535,6 +535,9 @@ if __name__ == '__main__':
             'num_fs': 0,
             'num_ms': 0,
             'rot': 1
+        },
+        {
+            'rac_nn': 'fnn',
         },
         {
             # 'pos': [0, 0.5, 1, 1.5, 2],
