@@ -17,6 +17,10 @@ from dataset import create_dataset
 from model import create_model
 
 
+# Chinese font setting
+plt.rcParams['font.sans-serif']=['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
+
 DEBUG = True
 
 # A single image is considered to have been successfully identified only when min_cnt stars are successfully identified within it.
@@ -143,8 +147,7 @@ def identify_pattern(db: pd.DataFrame, pats: list[np.ndarray], size: tuple[int, 
 
     if DEBUG:
         print(
-            '--------------'
-            '\nTotal patterns:', len(pats),
+            'Total patterns:', len(pats),
             '\nMulti max:', multi_max,
             '\nLower thd:', lower_thd,
         )
@@ -152,7 +155,7 @@ def identify_pattern(db: pd.DataFrame, pats: list[np.ndarray], size: tuple[int, 
     return np.array(esti_ids)
 
 
-def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int], T: float, Rp: float, gcata: pd.DataFrame):
+def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int], T: float, Rp: float, gcata: pd.DataFrame, method: str='', test_name: str=''):
     '''
         Evaluate the pattern match method's accuracy on the provided patterns. The accuracy is calculated based on the method's ability to correctly identify the closest pattern in the database.
     Args:
@@ -177,7 +180,12 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
     real_ids = df['star_id'].to_numpy()
 
     if DEBUG:
-        print('Correct pattern', np.sum(esti_ids == real_ids))
+        print(
+            'Correct pattern', np.sum(esti_ids == real_ids),
+            '\nMethod:', method,
+            '\nTest name:', test_name,
+            '\n--------------'
+        )
 
     # image ids
     img_ids = df['img_id'].to_numpy()
@@ -193,7 +201,7 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
         
         #! the verification step
         # do fov restriction by clustering and take the biggest cluster as final result for each image
-        esti_ids[mask] = cluster_by_angle(gcata, esti_ids[mask], Rp)
+        esti_ids[mask] = cluster_by_angle(gcata, esti_ids[mask], 2*Rp)
        
         #! the check step
         if np.sum(np.logical_and(esti_ids[mask] == real_ids[mask], real_ids[mask] != -1)) >= min_sis_cnt:
@@ -281,7 +289,7 @@ def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, gen_cfg: 
 
         #! the verification step
         # do fov restriction by clustering and take the biggest cluster as final result
-        # esti_ids[mask] = cluster_by_angle(gcata, esti_ids[mask], Rp)
+        esti_ids[mask] = cluster_by_angle(gcata, esti_ids[mask], 2*Rp)
 
         #! the check step
         if np.sum(np.logical_and(esti_ids[mask] == real_ids[mask], real_ids[mask] != -1)) >= min_sis_cnt:
@@ -316,17 +324,17 @@ def draw_results(res: dict, save: bool=False):
 
     # method abbreviation to full name
     abbr_2_name = {
-        'rac_1dcnn': 'Proposed algorithm',
-        'lpt_nn': 'Polestar NN algorithm',
-        'grid': 'Grid algorithm',
-        'lpt': 'Log-polar transform algorithm'
+        'rac_1dcnn': '本文方法',
+        'lpt_nn': '基于Polestar模式的神经网络算法',
+        'grid': '栅格算法',
+        'lpt': '改进的LPT算法'
     }
     # test type abbreviation to full name
     type_2_name = {
-        'pos': 'Position noise',
-        'mag': 'Magnitude noise',
-        'fs': 'Number of false stars',
-        # 'ms': 'Number of missing stars'
+        'pos': '位置噪声',
+        'mag': '亮度噪声',
+        'fs': '伪星噪声',
+        'ms': '缺失星噪声'
     }
 
     # set timestamp as sub directory
@@ -352,17 +360,15 @@ def draw_results(res: dict, save: bool=False):
     for name in type_2_name.values():
         fig, ax = plt.subplots()
         ax.set_xlabel(name)
-        ax.set_ylabel('Accuracy (%)')
+        ax.set_ylabel('识别率')
 
         ymin = 90
         for method in abbr_2_name.values():
             if method not in res or name not in res[method]:
                 continue
 
-            y = res[method]['default']
             res[method][name].sort(key=lambda x: x[0])
             xs, ys = zip(*res[method][name])
-            xs, ys = [0]+list(xs), [y]+list(ys)
             
             # avoid 100% accuracy
             # ys = [y-0.1 for y in ys]
@@ -399,7 +405,7 @@ def do_test(meth_params: dict, simu_params: dict, test_params: dict, gcata_path:
         test_names.extend(f'{test_type}{val}' for val in test_params[test_type])
 
     # simulation config
-    sim_cfg = f'{simu_params["h"]}_{simu_params["w"]}_{simu_params["fovx"]}_{simu_params["fovy"]}_{simu_params["limit_mag"]}'
+    sim_cfg = f'{simu_params["h"]}_{simu_params["w"]}_{simu_params["fovy"]}_{simu_params["fovx"]}_{simu_params["limit_mag"]}_{simu_params["rot"]}'
 
     # noise config
     noise_cfg = f'{simu_params["sigma_pos"]}_{simu_params["sigma_mag"]}_{simu_params["num_fs"]}_{simu_params["num_ms"]}'
@@ -460,7 +466,7 @@ def do_test(meth_params: dict, simu_params: dict, test_params: dict, gcata_path:
             # directory path storing the labels.csv for each test
             test_dir = os.path.join('test', sim_cfg, method, gen_cfg, test_name)
             df = pd.read_csv(os.path.join(test_dir, 'labels.csv'))
-
+                        
             if method in ['grid', 'lpt']:
                 tasks[method][test_name] = pool.submit(
                     check_pm_accuracy, 
@@ -469,7 +475,9 @@ def do_test(meth_params: dict, simu_params: dict, test_params: dict, gcata_path:
                     size, 
                     T=0, 
                     Rp=Rp, 
-                    gcata=gcata
+                    gcata=gcata,
+                    method=method,
+                    test_name=test_name
                 )
             else:
                 tasks[method][test_name] = pool.submit(
@@ -492,7 +500,7 @@ def do_test(meth_params: dict, simu_params: dict, test_params: dict, gcata_path:
             y = tasks[method][test_name].result()
 
             # use regex to parse test parameters
-            match = re.match('(pos|mag|fs)([0-9]+\.?[0-9]*)', test_name)
+            match = re.match('(pos|mag|fs|ms)([0-9]+\.?[0-9]*)', test_name)
             assert match is not None, 'Cannot parse the test name'
             name, x = match.groups()
             x = float(x)
@@ -511,28 +519,30 @@ def do_test(meth_params: dict, simu_params: dict, test_params: dict, gcata_path:
 if __name__ == '__main__':
     res = do_test(
         {
-            # 'lpt_nn': [0.5, 6, 50],
-            # 'rac_1dcnn': [0.1, 6, [25, 50], 16, 3],
-            'grid': [0.5, 6, 100], 
-            # 'lpt': [0.3, 6, 25, 36]
+            'lpt_nn': [0.5, 6, 55],
+            'rac_1dcnn': [0.5, 6, [15, 35, 55], 18, 3],
+            # 'grid': [0.5, 6, 100], 
+            # 'lpt': [0.5, 6, 50, 36]
         },
         {
             'h': 1024,
-            'w': 1024,
-            'fovx': 12,
+            'w': 1282,
             'fovy': 12,
+            'fovx': 14.9925,
             'limit_mag': 6,
             'sigma_pos': 0,
             'sigma_mag': 0,
             'num_fs': 0,
             'num_ms': 0,
+            'rot': 1
         },
         {
             # 'pos': [0, 0.5, 1, 1.5, 2],
             'mag': [0, 0.1, 0.2, 0.3, 0.4],
-            # 'fs': [0, 1, 2, 3, 4]
+            # 'fs': [0, 1, 2, 3, 4],
+            'ms': [0, 1, 2, 3, 4]
         },
-        './catalogue/sao6.0_d0.03_12_20.csv',
+        './catalogue/sao6.0_d0.03_12_15.csv',
     )
 
     print(res)
