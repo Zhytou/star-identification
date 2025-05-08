@@ -12,7 +12,7 @@ def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: f
         Aggregate the training datasets.
     Args:
         meth_params: the parameters of methods, possible methods include:
-            'rac_1dcnn': Rb Rp arr_Nr Ns Nn
+            'rac_nn': Rb Rp arr_Nr Ns Nn
             'lpt_nn': Rb Rp Nd
             'grid': Rb Rp Ng
             'lpt': Rb Rp Nd Nt
@@ -56,12 +56,6 @@ def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: f
     # noise config
     noise_cfg = f"{simu_params['sigma_pos']}_{simu_params['sigma_mag']}_{simu_params['num_fs']}_{simu_params['num_ms']}"
 
-    # dataset path for each method
-    ds_paths = {}
-    for method in meth_params:
-        gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
-        ds_paths[method] = os.path.join('dataset', sim_cfg, method, gen_cfg, str(offset), noise_cfg)
-
     pool = ThreadPoolExecutor(max_workers=num_thd)
     tasks = []
 
@@ -72,7 +66,6 @@ def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: f
             gen_dataset,
             meth_params,
             simu_params,
-            ds_paths,
             int(star_id),
             cata_idx,
             star_ra,
@@ -81,8 +74,26 @@ def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: f
             num_roll=num_roll,
         ))
 
+    mdf_dict = defaultdict(list)
     for task in tasks:
-        task.result()
+        df_dict = task.result()
+        for method in df_dict:
+            mdf_dict[method].append(df_dict[method])
+    
+    # csv file name
+    name = f'{uuid.uuid1()}_{num_roll}'
+    for method in mdf_dict:
+        # dataset path for each method
+        gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
+        ds_path = os.path.join('dataset', sim_cfg, method, gen_cfg, str(offset), noise_cfg)
+        
+        # makedirs and store the dataset
+        os.makedirs(ds_path, exist_ok=True)
+        df = pd.concat(mdf_dict[method], ignore_index=True, copy=False)
+        df.to_csv(
+            os.path.join(ds_path, name),
+            index=False
+        )
 
     return
 
@@ -93,7 +104,7 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
     Args:
         num_img: number of test images expected to be generated
         meth_params: the parameters of methods, possible methods include:
-            'rac_1dcnn': Rb Rp arr_Nr Ns Nn
+            'rac_nn': Rb Rp arr_Nr Ns Nn
             'lpt_nn': Rb Rp Nd
             'grid': Rb Rp Ng
             'lpt': Rb Rp Nd Nt
@@ -169,7 +180,7 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
             p = os.path.join(path, tn)
             dfs = [pd.read_csv(os.path.join(p, f)) for f in os.listdir(p) if f != 'labels.csv']
             if len(dfs) > 0:        
-                df = pd.concat(dfs, ignore_index=True)
+                df = pd.concat(dfs, ignore_index=True, copy=False)
                 df.to_csv(os.path.join(p, 'labels.csv'), index=False)
                 # count the number of samples for each class
                 print('Method and test name:', method, tn, '\nTotal number of images for this sub test', len(df['img_id'].unique()))
@@ -179,39 +190,18 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
     return
 
 
-def merge_dataset(dir: str, num_roll: int, num_thd: int=20):
+def merge_dataset(dir: str, num_roll: int):
     '''
         Merge all the datasets into labels.csv.
     '''
 
-    def merge_sub_dataset(sub_dir: str):
-        '''
-            Merge noise sub dir dataset.
-        '''
-        dfs = []
-        for id in os.listdir(sub_dir):
-            for file in os.listdir(os.path.join(sub_dir, id)):
-                if not file.endswith(f'_{num_roll}.csv'):
-                    continue    
-                dfs.append(pd.read_csv(os.path.join(sub_dir, id, file)))
-
-        df = pd.concat(dfs, ignore_index=True)
-        return df
-
-    # get the old labels.csv and already concatenated sub dir names
-    if os.path.exists(os.path.join(dir, 'labels.csv')):
-        dfs = [pd.read_csv(os.path.join(dir, 'labels.csv'))]
-    else:
-        dfs = []
     if os.path.exists(os.path.join(dir, 'merge.log')):
         with open(os.path.join(dir, 'merge.log'), 'r') as log_file:
             names = json.load(log_file)
     else:
         names = []
 
-    pool = ThreadPoolExecutor(max_workers=num_thd)
-    tasks = []
-
+    dfs = []
     for offset in os.listdir(dir):
         if offset == 'labels.csv' or offset == 'merge.log':
             continue
@@ -222,18 +212,18 @@ def merge_dataset(dir: str, num_roll: int, num_thd: int=20):
                 continue
             else:
                 names.append(name)
-        
-            tasks.append(pool.submit(
-                merge_sub_dataset, 
-                os.path.join(dir, name),
-            ))
+
+            path = os.path.join(dir, name)
+            dfs.extend(
+                [pd.read_csv(os.path.join(path, file)) for file in os.listdir(path) if file.endswith(f'_{num_roll}')]
+            )
     
     # get all the csv files
-    for task in tasks:
-        dfs.append(task.result())
+    if os.path.exists(os.path.join(dir, 'labels.csv')):
+        dfs.append(pd.read_csv(os.path.join(dir, 'labels.csv')))
 
-    # store labels.csv and merge.log
-    df = pd.concat(dfs, ignore_index=True)
+    # store dataset and merge.log
+    df = pd.concat(dfs, ignore_index=True, copy=True)
     df.to_csv(os.path.join(dir, 'labels.csv'), index=False)
     with open(os.path.join(dir, 'merge.log'), 'w') as log_file:
         json.dump(names, log_file)
@@ -243,7 +233,8 @@ if __name__ == '__main__':
     if False:
         agg_dataset(
             meth_params={
-                'rac_1dcnn': [0.5, 6, [25, 55, 85], 18, 3],
+                # 'lpt_nn': [0.5, 6, 55],
+                'rac_nn': [0.5, 6, [15, 35, 55], 18, 3],
             },
             simu_params={
                 'h': 1024,
@@ -251,14 +242,14 @@ if __name__ == '__main__':
                 'fovy': 12,
                 'fovx': 14.9925,
                 'limit_mag': 6,
-                'sigma_pos': 3,
+                'sigma_pos': 0,
                 'sigma_mag': 0,
                 'num_fs': 0,
-                'num_ms': 0,
+                'num_ms': 5,
                 'rot': 1
             },
             gcata_path='catalogue/sao6.0_d0.03_12_15.csv',
-            offset=0,
+            offset=1,
             num_roll=10,
             num_thd=20
         )
@@ -266,7 +257,7 @@ if __name__ == '__main__':
     if False:
         agg_dataset(
             meth_params={
-                'rac_1dcnn': [0.1, 4.5, [10, 25, 40, 55], 18, 3],
+                'rac_nn': [0.1, 4.5, [10, 25, 40, 55], 18, 3],
             },
             simu_params={
                 'h': 1024,
@@ -292,8 +283,8 @@ if __name__ == '__main__':
             {
                 # 'grid': [0.5, 6, 100],
                 # 'lpt': [0.5, 6, 50, 36],
-                'lpt_nn': [0.5, 6, 55],
-                'rac_1dcnn': [0.5, 6, [10, 25, 40, 55], 18, 3]
+                # 'lpt_nn': [0.5, 6, 55],
+                'rac_nn': [0.5, 6, [15, 35, 55], 18, 3]
             }, 
             {
                 'h': 1024,
@@ -306,15 +297,15 @@ if __name__ == '__main__':
             {
                 # 'pos': [0, 0.5, 1, 1.5, 2], 
                 # 'mag': [0, 0.1, 0.2, 0.3, 0.4], 
-                # 'fs': [0, 1, 2, 3, 4],
+                'fs': [0, 1, 2, 3, 4],
                 'ms': [0, 1, 2, 3, 4]
             },
             './catalogue/sao6.0_d0.03_12_15.csv',
         )
     
     if True:
-        # dir = 'dataset/1024_1280_11.398822251559647_9.129887427521604_5.5/rac_1dcnn/sao5.5_d0.03_9_10_0.1_4.5_[50, 100]_16_3'
-        # dir = 'dataset/1024_1282_12_14.9925_6_1/rac_1dcnn/sao6.0_d0.03_12_15_0.5_6_[10, 25, 40, 55]_18_3'
+        # dir = 'dataset/1024_1280_11.398822251559647_9.129887427521604_5.5/rac_nn/sao5.5_d0.03_9_10_0.1_4.5_[50, 100]_16_3'
+        # dir = 'dataset/1024_1282_12_14.9925_6_1/rac_nn/sao6.0_d0.03_12_15_0.5_6_[10, 25, 40, 55]_18_3'
         # dir = 'dataset/1024_1282_12_14.9925_6_1/lpt_nn/sao6.0_d0.03_12_15_0.5_6_55'
-        dir = 'dataset/1024_1282_12_14.9925_6_1/rac_1dcnn/sao6.0_d0.03_12_15_0.5_6_[25, 55, 85]_18_3'
+        dir = 'dataset/1024_1282_12_14.9925_6_1/rac_nn/sao6.0_d0.03_12_15_0.5_6_[15, 35, 55]_18_3'
         merge_dataset(dir, 10)

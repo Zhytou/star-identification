@@ -113,6 +113,9 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
             if len(exc_cs) <= max(min_num_star-1, 1):
                 continue
 
+            # total number of stars in the region
+            tot = len(exc_cs)
+
             # initialize the pattern
             pat = {
                 'star_id': int(star_id),
@@ -128,50 +131,53 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
                 pat['de'] = de
                 pat['roll'] = roll
 
-            if method == 'rac_1dcnn':
+            if method == 'rac_nn':
                 # parse the rest parameters
                 arr_Nr, Ns, Nn = meth_params[method][2:]
                 
                 # construct radial features
                 tot_Nr = 0
                 for Nr in arr_Nr:
-                    r_cnts, _ = np.histogram(exc_ds, bins=Nr, range=(rb, rp))
-                    for i, rc in enumerate(r_cnts):
+                    # calculate the number of stars in each ring
+                    hist, _ = np.histogram(exc_ds, bins=Nr, range=(rb, rp))
+                    
+                    # use the probability of stars in each ring as radial features
+                    for i, cnt in enumerate(hist):
                         i += tot_Nr
-                        pat[f'ring{i}'] = rc
+                        pat[f'ring{i}'] = cnt/tot
+                    
                     tot_Nr += Nr
                 
                 # uses several neighbor stars as the starting angle to obtain the cyclic features
                 for i, ag in enumerate(exc_ags[:Nn]):
                     # rotate stars
                     rot_ags = exc_ags - ag
+
                     # make sure all angles stay in [-pi, pi]
                     rot_ags %= 2*np.pi
-                    rot_ags[rot_ags > np.pi] -= 2*np.pi
-                    rot_ags[rot_ags < -np.pi] += 2*np.pi
-                    assert np.all((rot_ags < np.pi) & (rot_ags > -np.pi))
+                    assert np.all((rot_ags >= 0) & (rot_ags < 2*np.pi))
 
-                    # calculate sectore counts using histogram
-                    s_cnts, _ = np.histogram(rot_ags, bins=Ns, range=(-np.pi, np.pi))
-                    for j, sc in enumerate(s_cnts):
-                        pat[f'n{i}_sector{j}'] = sc
+                    # calculate the number of stars in each sector
+                    hist, _ = np.histogram(rot_ags, bins=Ns, range=(0, 2*np.pi))
+
+                    # use the probability of stars in each sector as cyclic features
+                    for j, cnt in enumerate(hist):
+                        pat[f'n{i}_sector{j}'] = cnt/tot
                 
                 # add trailing zero if there is not enough neighbors
                 if len(exc_ags) < Nn:
-                    for i in range(len(exc_ags), Nn):
-                        for j in range(Ns):
-                            pat[f'n{i}_sector{j}'] = 0
+                    pat.update({f'n{i}_sector{j}': 0 for i in range(len(exc_ags), Nn) for j in range(Ns)})
 
             elif method == 'lpt_nn':
                 # parse the rest parameters
                 Nd = meth_params[method][2]
 
-                # count the number of stars in each distance bin
-                d_cnts, _ = np.histogram(ds, bins=Nd, range=(rb, rp))
+                # calculate the number of stars in each distance bin
+                hist, _ = np.histogram(ds, bins=Nd, range=(rb, rp))
                 
-                # normalize d_cnts
-                for i, dc in enumerate(d_cnts):
-                    pat[f'dist{i}'] = dc
+                # use the probability of stars in each distance bin as features
+                for i, cnt in enumerate(hist):
+                    pat[f'dist{i}'] = cnt/tot
                 
             elif method == 'grid':
                 # parse the rest parameter
@@ -212,10 +218,9 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
                 # !log-polar transform is already done, where exc_ags is the thetas and exc_ds is the distances
                 # rotate the stars, so that the nearest star's theta is 0
                 rot_ags = exc_ags - exc_ags[0]
-                # make sure the thetas are in the range of [-pi, pi]
+                # make sure the thetas are in the range of [0, 2*pi]
                 rot_ags %= 2*np.pi
-                rot_ags[rot_ags >= np.pi] -= 2*np.pi
-                rot_ags[rot_ags < -np.pi] += 2*np.pi
+                assert np.all((rot_ags >= 0) & (rot_ags < 2*np.pi))
                 
                 # generate the grid
                 grid = []
@@ -226,7 +231,7 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
 
                     # get the grid index
                     i = int(d/rp*Nd)
-                    j = int((t+np.pi)/(2*np.pi)*Nt)
+                    j = int(t/(2*np.pi)*Nt)
                     
                     grid.append(i*Nt+j)
                     assert(i < Nd and j < Nt), f"Grid index out of range: {i}, {j}, {Nd}, {Nt}, {exc_ds[-1]}, {ads[-1]}, "
@@ -372,25 +377,10 @@ def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd:
     return 
 
 
-def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: int, cata_idx: int, star_ra: float, star_de: float, offset :float, num_roll: int):
+def gen_dataset(meth_params: dict, simu_params: dict, star_id: int, cata_idx: int, star_ra: float, star_de: float, offset :float, num_roll: int):
     '''
         Generate dataset for NN model using the given star catalogue.
     '''
-    # skip if the method is already generated
-    nmeth_params = meth_params.copy()
-    # for method in meth_params:
-    #     # only generate the dataset for the given star id
-    #     ds_path = os.path.join(ds_paths[method], f'{star_id}')
-    #     if os.path.exists(ds_path) and any(file.endswith(f'{num_roll}.csv') for file in os.listdir(ds_path)):
-    #         continue
-    #     nmeth_params[method] = meth_params[method]
-
-    # if nmeth_params == {}:
-    #     return
-
-    # csv file name
-    name = uuid.uuid1()
-
     # generate right ascension[-pi, pi] and declination[-pi/2, pi/2]
     ras, des = np.full(num_roll, star_ra), np.full(num_roll, star_de)
     rolls = np.arange(0, 2*np.pi, 2*np.pi/num_roll)
@@ -444,7 +434,7 @@ def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: i
 
         # generate the pattern(dict, method->pattern) for the given star id
         pat_dict = gen_pattern(
-            nmeth_params, 
+            meth_params, 
             coords, 
             ids,
             cata_idxs, 
@@ -466,15 +456,9 @@ def gen_dataset(meth_params: dict, simu_params: dict, ds_paths: dict, star_id: i
     for method in df_dict:
         if len(df_dict[method]) == 0:
             continue
-        # make directory
-        ds_path = os.path.join(ds_paths[method], f'{star_id}')
-        os.makedirs(ds_path, exist_ok=True)
-
-        # save the dataset
         df_dict[method] = pd.DataFrame(df_dict[method])
-        df_dict[method].to_csv(os.path.join(ds_path, f'{name}_{num_roll}.csv'), index=False)
 
-    return
+    return df_dict
 
 
 def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.DataFrame, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0):
@@ -483,7 +467,7 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
     Args:
         num_img: number of test images expected to be generated
         meth_params: the parameters for the test sample generation
-            'rac_1dcnn':
+            'rac_nn':
                 r: the radius of the region in degrees
                 arr_Nr: the array of ring number
                 Ns: the number of sectors
@@ -640,7 +624,8 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, extr_params: dict, 
 
 
 if __name__ == '__main__':
-    if True:
+    # database generation
+    if False:
         gen_database(
             {
                 # 'grid': [0.5, 6, 100], 
@@ -661,4 +646,44 @@ if __name__ == '__main__':
             './catalogue/sao6.0_d0.03_12_15.csv',
         )
 
-    
+    # validate pattern generation
+    if False:
+        gcata = pd.read_csv('catalogue/sao6.0_d0.03_12_15.csv', usecols=['Star ID', 'Ra', 'De', 'Magnitude'])
+
+        fov = 10
+        h = w = 1024
+        f = h/(2*np.tan(np.radians(fov/2)))
+        img, stars = create_star_image(
+            radians(249.2104), 
+            radians(-12.0386), 
+            radians(-13.3845), 
+            fovx=fov, 
+            fovy=fov, 
+            h=h, 
+            w=w, 
+            limit_mag=6
+        )
+
+        ids = stars[:, 0].copy()
+        coords = stars[:, 1:3].copy()
+        cata_idxs = np.full_like(ids, -1)
+
+        intersect_ids, ids_idxs, gcata_idxs = np.intersect1d(ids, gcata['Star ID'].to_numpy(), return_indices=True)
+        cata_idxs[ids_idxs] = gcata_idxs
+
+        pats = gen_pattern(
+            {
+                'lpt_nn': [0.1, fov/2, 5]
+            }, 
+            coords, 
+            ids,
+            cata_idxs,
+            'img', 
+            h, 
+            w, 
+            f,
+        )['lpt_nn']
+        
+        print(pats)
+        
+        
