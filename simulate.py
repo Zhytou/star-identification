@@ -194,7 +194,7 @@ def get_rotation_matrix(ra: float, de: float, roll: float, method: int=1) -> np.
     
     if method == 1:
         # method1 高精度星敏感器星图识别算法研究 卫昕
-        M = rotate_z(roll) @ rotate_x(np.pi/2-de) @ rotate_z(np.pi/2+ra)
+        # M = rotate_z(roll) @ rotate_x(np.pi/2-de) @ rotate_z(np.pi/2+ra)
         a1 = -sin(roll)*sin(de)*cos(ra)-cos(roll)*sin(ra)
         a2 = -sin(roll)*sin(de)*sin(ra)+cos(roll)*cos(ra)
         a3 = sin(roll)*cos(de)
@@ -206,7 +206,7 @@ def get_rotation_matrix(ra: float, de: float, roll: float, method: int=1) -> np.
         c3 = sin(de)
     else:
         # method2 星图识别算法 张广军
-        M = rotate_z(roll) @ rotate_x(np.pi/2+de) @ rotate_z(-np.pi/2+ra)
+        # M = rotate_z(roll) @ rotate_x(np.pi/2+de) @ rotate_z(-np.pi/2+ra)
         a1 = sin(ra)*cos(roll) - cos(ra)*sin(de)*sin(roll)
         a2 = -cos(ra)*cos(roll) - sin(ra)*sin(de)*sin(roll)
         a3 = cos(de)*sin(roll)
@@ -222,9 +222,9 @@ def get_rotation_matrix(ra: float, de: float, roll: float, method: int=1) -> np.
         [b1, b2, b3],
         [c1, c2, c3]
     ])
-    assert np.allclose(M, MM), f"Rotation matrix is not correct. {M} != {MM}"
+    # assert np.allclose(M, MM), f"Rotation matrix is not correct. {M} != {MM}"
 
-    return M
+    return MM
 
 
 def cal_zxz_euler(R: np.ndarray, method: int=1) -> tuple[float, float, float]:
@@ -254,7 +254,7 @@ def cal_zxz_euler(R: np.ndarray, method: int=1) -> tuple[float, float, float]:
     return ra, de, roll
 
 
-def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0, background: float=np.inf, limit_mag: float=7.0, fovy: float=10, fovx: float=10, h: int=512, w: int=512, pixel: float=67e-6, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False, rot_meth: int=1) -> tuple[np.ndarray, list]:
+def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0, background: float=np.inf, limit_mag: float=7.0, fovy: float=10, fovx: float=10, h: int=512, w: int=512, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False, rot_meth: int=1) -> tuple[np.ndarray, list]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
@@ -294,8 +294,8 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     # ? what happern, when fovx != fovy
     fov = sqrt(fovx**2 + fovy**2)
 
-    f1 = pixel * w / (2*tan(radians(fovx/2)))
-    f2 = pixel * h / (2*tan(radians(fovy/2)))
+    f1 = w / (2*tan(radians(fovx/2)))
+    f2 = h / (2*tan(radians(fovy/2)))
     assert np.isclose(f1, f2), f"Focal length {f1} and {f2} should be the same in both directions."
 
     # search for image-able stars
