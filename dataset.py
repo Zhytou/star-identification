@@ -41,9 +41,9 @@ class StarImageDataset(Dataset):
 class LPTDataset(Dataset):
     '''Log-Polar transform based NN dataset'''
 
-    def __init__(self, label_df: pd.DataFrame, gen_cfg: str):
+    def __init__(self, label_df: pd.DataFrame, params: list):
         # number of distance features
-        nd = int(gen_cfg.split('_')[-1])
+        nd = params[2]
         
         # set length of dataset
         self.len = len(label_df)
@@ -68,8 +68,8 @@ class LPTDataset(Dataset):
 class RACDataset(Dataset):
     '''Radial and cyclic based NN dataset'''
 
-    def __init__(self, label_df: pd.DataFrame, gen_cfg: str):
-        arr_nr, ns, nn = gen_cfg.split('_')[-3:]
+    def __init__(self, label_df: pd.DataFrame, params: list):
+        arr_nr, ns, nn = params[2:-1]
         # number of rings
         nr = sum(list(map(int, arr_nr.strip('[]').split(', '))))
         # number of sectors and neighbors
@@ -97,20 +97,17 @@ class RACDataset(Dataset):
         return self.feats[idx], self.labels[idx]
 
 
-def create_dataset(method: str, df: pd.DataFrame, gen_cfg: str):
+def create_dataset(method: str, df: pd.DataFrame, params: list):
     '''
         Create dataset based on the method
     Args:
         method: the method name
         df: the dataframe with the labels
-        
-        gen_cfg: the generator configuration
+        params: the method parameters
     '''
     method_mapping = {
         'rac_nn': RACDataset,
         'lpt_nn': LPTDataset
     }
     dataset_class = method_mapping.get(method)
-    if dataset_class is None:
-        raise ValueError(f"Invalid method: {method}")
-    return dataset_class(df, gen_cfg)
+    return dataset_class(df, params)

@@ -6,6 +6,7 @@ import torch.nn as nn, torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 
+from generate import setup
 from dataset import create_dataset
 from model import create_model
 
@@ -101,12 +102,8 @@ def do_train(meth_params: dict, simu_params: dict, model_types: dict, gcata_path
         Train the model for different method.
     '''
 
-    # simulation config
-    sim_cfg = f"{simu_params['h']}_{simu_params['w']}_{simu_params['fovy']}_{simu_params['fovx']}_{simu_params['limit_mag']}_{simu_params['rot']}"
-    
-    # guide star catalogue
-    gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
-    gcata = pd.read_csv(gcata_path, usecols=["Star ID", "Ra", "De", "Magnitude"])
+    # setup
+    sim_cfg, _, gcata_name, gcata = setup(simu_params, gcata_path)
     num_class = len(gcata)
 
     # print the training setting
@@ -120,14 +117,14 @@ def do_train(meth_params: dict, simu_params: dict, model_types: dict, gcata_path
     for method in meth_params:
         # generation config for each method
         gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
-        print('Method:', method, 'Generating config:', gen_cfg)
+        print('Method:', method, '\nGenerating config:', gen_cfg)
 
         # define model
         model = create_model(method, model_types[method], meth_params[method], num_class)
 
         # define dataset
         df = pd.read_csv(os.path.join('dataset', sim_cfg, method, gen_cfg, 'labels.csv'))
-        dataset = create_dataset(method, df, gen_cfg)
+        dataset = create_dataset(method, df, meth_params[method])
 
         # define data loaders
         loader = DataLoader(dataset, batch_size, shuffle=True)
@@ -146,7 +143,7 @@ def do_train(meth_params: dict, simu_params: dict, model_types: dict, gcata_path
             
         # do training
         optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=0.0001)  
-        ls, accs = train(method, model, optimizer, num_epochs, loader, val_loader=None, device=device)
+        ls, accs = train(model, optimizer, num_epochs, loader, device=device)
         
         # save the best model and training log
         torch.save(model.state_dict(), model_path)
@@ -158,8 +155,8 @@ if __name__ == '__main__':
     if True:
         do_train(
             {
-                # 'lpt_nn': [0.5, 6, 55],
-                'rac_nn': [0.5, 6, [15, 35, 55], 18, 3],
+                'lpt_nn': [0.5, 6, 55, 0],
+                # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 0],
             },
             {
                 'h': 1024,
@@ -170,12 +167,13 @@ if __name__ == '__main__':
                 'rot': 1
             },
             {
+                'lpt_nn': 'fnn',
                 'rac_nn': 'cnn',
             },
             gcata_path='catalogue/sao6.0_d0.03_12_15.csv',
-            num_epochs=50,
+            num_epochs=1,
             batch_size=512,
-            learning_rate=0.01
+            learning_rate=0.005
         )
 
     if False:

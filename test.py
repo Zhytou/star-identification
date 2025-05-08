@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from sklearn.cluster import DBSCAN
 from sklearn.metrics.pairwise import haversine_distances
 
+from generate import setup
 from dataset import create_dataset
 from model import create_model
 
@@ -155,7 +156,7 @@ def identify_pattern(db: pd.DataFrame, pats: list[np.ndarray], size: tuple[int, 
     return np.array(esti_ids)
 
 
-def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int], T: float, Rp: float, gcata: pd.DataFrame, method: str='', test_name: str=''):
+def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, method: str, meth_params: list, gcata: pd.DataFrame, T: float=0, test_name: str=''):
     '''
         Evaluate the pattern match method's accuracy on the provided patterns. The accuracy is calculated based on the method's ability to correctly identify the closest pattern in the database.
     Args:
@@ -168,6 +169,10 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
         the accuracy of the pattern match method
     '''
     res = []
+
+    # parse parameters
+    size = meth_params[2:] if method == 'lpt' else (meth_params[2], meth_params[2])
+    rp = np.radians(meth_params[1])
 
     #! the identification step
     # patterns
@@ -201,7 +206,7 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
         
         #! the verification step
         # do fov restriction by clustering and take the biggest cluster as final result for each image
-        esti_ids[mask] = cluster_by_angle(gcata, esti_ids[mask], 2*Rp)
+        esti_ids[mask] = cluster_by_angle(gcata, esti_ids[mask], 2*rp)
        
         #! the check step
         if np.sum(np.logical_and(esti_ids[mask] == real_ids[mask], real_ids[mask] != -1)) >= min_sis_cnt:
@@ -217,7 +222,7 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, size: tuple[int, int],
     return acc
 
 
-def predict(model: nn.Module, loader: DataLoader, T: float=0, device=torch.device('cpu')):
+def predict(model: nn.Module, loader: DataLoader, T: float, device=torch.device('cpu')):
     '''
         Predict the labels of the test data.
     '''
@@ -253,20 +258,23 @@ def predict(model: nn.Module, loader: DataLoader, T: float=0, device=torch.devic
     return np.array(res)
 
 
-def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, gen_cfg: str, Rp: float, gcata: pd.DataFrame, batch_size: int=2048, device=torch.device('cpu')):
+def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, meth_params: list, gcata: pd.DataFrame, T: float=0, batch_size: int=2048, device=torch.device('cpu')):
     '''
         Evaluate the model's accuracy on the provided data loader.
     '''
 
     res = []
 
+    # parse parameters
+    rp = np.radians(meth_params[1])
+
     # create the dataset and loader
-    dataset = create_dataset(method, df, gen_cfg)
+    dataset = create_dataset(method, df, meth_params)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4)
 
     #! the identification step
     # get the predicted catalogue index
-    esti_idxs = predict(model, loader, device=device)
+    esti_idxs = predict(model, loader, T, device=device)
 
     # get the guide star ids by non -1 idxs
     esti_ids = np.full_like(esti_idxs, -1)
@@ -289,7 +297,7 @@ def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, gen_cfg: 
 
         #! the verification step
         # do fov restriction by clustering and take the biggest cluster as final result
-        esti_ids[mask] = cluster_by_angle(gcata, esti_ids[mask], 2*Rp)
+        esti_ids[mask] = cluster_by_angle(gcata, esti_ids[mask], 2*rp)
 
         #! the check step
         if np.sum(np.logical_and(esti_ids[mask] == real_ids[mask], real_ids[mask] != -1)) >= min_sis_cnt:
@@ -394,6 +402,10 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
     if meth_params == {}:
         return
 
+    # setup
+    sim_cfg, noise_cfg, gcata_name, gcata = setup(simu_params, gcata_path)
+    num_class = len(gcata)
+
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thd)
     # tasks for later aggregation
@@ -404,16 +416,6 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
     for test_type in test_params:
         test_names.extend(f'{test_type}{val}' for val in test_params[test_type])
 
-    # simulation config
-    sim_cfg = f'{simu_params["h"]}_{simu_params["w"]}_{simu_params["fovy"]}_{simu_params["fovx"]}_{simu_params["limit_mag"]}_{simu_params["rot"]}'
-
-    # noise config
-    noise_cfg = f'{simu_params["sigma_pos"]}_{simu_params["sigma_mag"]}_{simu_params["num_fs"]}_{simu_params["num_ms"]}'
-    # read the guide star catalogue
-    gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
-    gcata = pd.read_csv(gcata_path, usecols=['Star ID', 'Ra', 'De', 'Magnitude'])
-    num_class = len(gcata)
-
     print('Test')
     print('------------------')
     print('Simulation config:', sim_cfg)
@@ -421,17 +423,12 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
 
     # add each test task to the threadpool
     for method in meth_params:
-        # pattern radius in radians
-        Rp = np.radians(meth_params[method][1])
 
         # generation config for each method
         gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
         print('Method:', method, '\nGeneration config:', gen_cfg)
         
         if method in ['grid', 'lpt']:
-            # parse method parameters
-            size = [meth_params[method][-1]]*2 if method == 'grid' else meth_params[method][-2:]
-
             # load the database
             db = pd.read_csv(os.path.join('database', sim_cfg, method, gen_cfg, noise_cfg, 'db.csv'))
         
@@ -472,11 +469,10 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
                     check_pm_accuracy, 
                     db, 
                     df, 
-                    size, 
-                    T=0, 
-                    Rp=Rp, 
+                    method,
+                    meth_params[method],
                     gcata=gcata,
-                    method=method,
+                    T=0, 
                     test_name=test_name
                 )
             else:
@@ -485,9 +481,9 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
                     model,
                     df, 
                     method,
-                    gen_cfg,
-                    Rp=Rp,
+                    meth_params[method],
                     gcata=gcata,
+                    T=0,
                     device=device,
                 )
     
@@ -519,8 +515,8 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
 if __name__ == '__main__':
     res = do_test(
         {
-            # 'lpt_nn': [0.5, 6, 55],
-            'rac_nn': [0.5, 6, [15, 35, 55], 18, 3],
+            'lpt_nn': [0.5, 6, 55, 0],
+            # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3],
             # 'grid': [0.5, 6, 100], 
             # 'lpt': [0.5, 6, 50, 36]
         },
@@ -537,6 +533,7 @@ if __name__ == '__main__':
             'rot': 1
         },
         {
+            'lpt_nn': 'fnn',
             'rac_nn': 'fnn',
         },
         {
