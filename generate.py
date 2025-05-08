@@ -17,6 +17,32 @@ from utils import get_angdist
 min_num_star = 0
 
 
+def setup(simu_params: dict, gcata_path: str):
+    '''
+        Get guide star catalogue and several configs. Also, validate the focus and add it to simulation parameters.
+    '''
+    # simulate config
+    sim_cfg = f"{simu_params['h']}_{simu_params['w']}_{simu_params['fovy']}_{simu_params['fovx']}_{simu_params['limit_mag']}_{simu_params['rot']}"
+
+    # noise config
+    if 'sigma_pos' in simu_params:
+        noise_cfg = f"{simu_params['sigma_pos']}_{simu_params['sigma_mag']}_{simu_params['num_fs']}_{simu_params['num_ms']}"
+    else:
+        noise_cfg = ''
+
+    # guide star catalogue
+    gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
+    gcata = pd.read_csv(gcata_path, usecols=["Star ID", "Ra", "De", "Magnitude"])
+
+    # focus in pixels used to calculate the buffer and pattern radius
+    f1 = simu_params['w'] / (2 * tan(radians(simu_params['fovx'] / 2)))
+    f2 = simu_params['h'] / (2 * tan(radians(simu_params['fovy'] / 2)))
+    assert np.isclose(f1, f2, atol=1), f"The focal length {f1} and {f2} should be the same."
+    simu_params['f'] = (f1+f2)/2
+
+    return sim_cfg, noise_cfg, gcata_name, gcata
+
+
 def get_rotation_matrix(v: np.ndarray, w: np.ndarray) -> np.ndarray:
     '''
         Get the rotation matrix from v to w.
@@ -121,19 +147,19 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
                 'star_id': int(star_id),
                 'cata_idx': int(cata_idx),
                 'img_id': img_id,
-                'row': coord[0],
-                'col': coord[1],
+                'row': round(coord[0], 2),
+                'col': round(coord[1], 2),
             }
 
             # add the right ascension, declination and roll angle if they are given
             if ra is not None and de is not None and roll is not None:
-                pat['ra'] = ra
-                pat['de'] = de
-                pat['roll'] = roll
+                pat['ra'] = round(ra, 2)
+                pat['de'] = round(de, 2)
+                pat['roll'] = round(roll, 2)
 
             if method == 'rac_nn':
                 # parse the rest parameters
-                arr_Nr, Ns, Nn = meth_params[method][2:]
+                arr_Nr, Ns, Nn, use_prob = meth_params[method][2:]
                 
                 # construct radial features
                 tot_Nr = 0
@@ -141,10 +167,10 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
                     # calculate the number of stars in each ring
                     hist, _ = np.histogram(exc_ds, bins=Nr, range=(rb, rp))
                     
-                    # use the probability of stars in each ring as radial features
+                    # use the number or probability of stars in each ring as radial features
                     for i, cnt in enumerate(hist):
                         i += tot_Nr
-                        pat[f'ring{i}'] = cnt/tot
+                        pat[f'ring{i}'] = round(cnt/tot, 5) if use_prob else cnt
                     
                     tot_Nr += Nr
                 
@@ -160,9 +186,9 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
                     # calculate the number of stars in each sector
                     hist, _ = np.histogram(rot_ags, bins=Ns, range=(0, 2*np.pi))
 
-                    # use the probability of stars in each sector as cyclic features
+                    # use the number of stars in each sector as cyclic features
                     for j, cnt in enumerate(hist):
-                        pat[f'n{i}_sector{j}'] = cnt/tot
+                        pat[f'n{i}_sector{j}'] = round(cnt/tot, 5) if use_prob else cnt
                 
                 # add trailing zero if there is not enough neighbors
                 if len(exc_ags) < Nn:
@@ -170,14 +196,14 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
 
             elif method == 'lpt_nn':
                 # parse the rest parameters
-                Nd = meth_params[method][2]
+                Nd, use_prob = meth_params[method][2:]
 
                 # calculate the number of stars in each distance bin
                 hist, _ = np.histogram(ds, bins=Nd, range=(rb, rp))
                 
-                # use the probability of stars in each distance bin as features
+                # use the number of stars in each distance bin as features
                 for i, cnt in enumerate(hist):
-                    pat[f'dist{i}'] = cnt/tot
+                    pat[f'dist{i}'] = round(cnt/tot, 5) if use_prob else cnt
                 
             elif method == 'grid':
                 # parse the rest parameter
@@ -292,7 +318,7 @@ def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd:
                 img_id=str(uuid.uuid1()),
                 h=simu_params['h'], 
                 w=simu_params['w'], 
-                f=f, 
+                f=simu_params['f'], # added when setup is called
             )
             
             for method in pats_dict:
@@ -315,25 +341,15 @@ def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd:
     if meth_params == {}:
         return
 
-    # read the star catalogue
-    gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
-    gcata = pd.read_csv(gcata_path, usecols=['Star ID', 'Ra', 'De', 'Magnitude'])
-
-    # simulation config
-    sim_cfg = f'{simu_params["h"]}_{simu_params["w"]}_{simu_params["fovy"]}_{simu_params["fovx"]}_{simu_params["limit_mag"]}_{simu_params["rot"]}'
-
-    # focus in pixels used to calculate the buffer and pattern radius
-    f1 = simu_params['w'] / (2 * tan(radians(simu_params['fovx'] / 2)))
-    f2 = simu_params['h'] / (2 * tan(radians(simu_params['fovy'] / 2)))
-    assert np.isclose(f1, f2, atol=1), f"The focal length {f1} and {f2} should be the same."
-    f = (f1 + f2) / 2
-
     print('Database Generation')
     print('-------------------')
     print('Method parameters:', meth_params)
     print('Simulation parameters:', simu_params)
     print('Guide star catalogue:', gcata_path)
     
+    # setup gcata and several configs
+    sim_cfg, noise_cfg, gcata_name, gcata = setup(simu_params, gcata_path)
+
     # use thread pool to generate the database
     pool = ThreadPoolExecutor(max_workers=num_thd)
     tasks = []
@@ -360,9 +376,6 @@ def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd:
     for method in dfs_dict:
         # generation config for each method
         gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
-
-        # default noise config for each method
-        noise_cfg = f'{simu_params["sigma_pos"]}_{simu_params["sigma_mag"]}_{simu_params["num_fs"]}_{simu_params["num_ms"]}'
 
         # make directory to store the database
         db_dir = os.path.join('database', sim_cfg, method, gen_cfg, noise_cfg)
@@ -392,12 +405,6 @@ def gen_dataset(meth_params: dict, simu_params: dict, star_id: int, cata_idx: in
 
     # the dict to store the patterns(method -> [patterns])
     df_dict = defaultdict(list)
-
-    # focus in pixels used to calculate the buffer and pattern radius
-    f1 = simu_params['w'] / (2 * tan(radians(simu_params['fovx'] / 2)))
-    f2 = simu_params['h'] / (2 * tan(radians(simu_params['fovy'] / 2)))
-    assert np.isclose(f1, f2, atol=1), f"The focal length {f1} and {f2} should be the same."
-    f = (f1+f2)/2
 
     # generate the star image
     for ra, de, roll in zip(ras, des, rolls):
@@ -441,7 +448,7 @@ def gen_dataset(meth_params: dict, simu_params: dict, star_id: int, cata_idx: in
             img_id, 
             h=simu_params['h'], 
             w=simu_params['w'], 
-            f=f,
+            f=simu_params['f'], # added when setup is called
             ra=ra,
             de=de,
             roll=roll,
@@ -461,7 +468,7 @@ def gen_dataset(meth_params: dict, simu_params: dict, star_id: int, cata_idx: in
     return df_dict
 
 
-def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.DataFrame, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0):
+def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.DataFrame,sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0):
     '''
         Generate test samples.
     Args:
@@ -496,12 +503,6 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
     ras = np.random.uniform(0, 2*np.pi, num_img)
     des = np.arcsin(np.random.uniform(-1, 1, num_img))
     rolls = np.random.uniform(0, 2*np.pi, num_img)
-
-    # focus in pixels used to calculate the buffer and pattern radius
-    f1 = simu_params['w'] / (2 * tan(radians(simu_params['fovx'] / 2)))
-    f2 = simu_params['h'] / (2 * tan(radians(simu_params['fovy'] / 2)))
-    assert np.isclose(f1, f2, atol=1), f"The focal length {f1} and {f2} should be the same."
-    f = (f1+f2)/2
 
     # the dict to store the results
     df_dict = defaultdict(list)
@@ -554,7 +555,7 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
             img_id, 
             h=simu_params['h'], 
             w=simu_params['w'],
-            f=f, 
+            f=simu_params['f'], # added when setup is called
             ra=ra,
             de=de,
             roll=roll,

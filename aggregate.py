@@ -4,7 +4,7 @@ import numpy as np
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
-from generate import gen_sample, gen_dataset
+from generate import setup, gen_sample, gen_dataset
 
 
 def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: float=1, num_roll: int=360, num_thd: int=20):
@@ -12,8 +12,8 @@ def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: f
         Aggregate the training datasets.
     Args:
         meth_params: the parameters of methods, possible methods include:
-            'rac_nn': Rb Rp arr_Nr Ns Nn
-            'lpt_nn': Rb Rp Nd
+            'rac_nn': Rb Rp arr_Nr Ns Nn use_prob
+            'lpt_nn': Rb Rp Nd use_prob
             'grid': Rb Rp Ng
             'lpt': Rb Rp Nd Nt
         test_params: the parameters for the test sample generation
@@ -46,15 +46,8 @@ def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: f
     print('Number of rolls:', num_roll)
     print('----------------------')
 
-    # simulate config
-    sim_cfg = f"{simu_params['h']}_{simu_params['w']}_{simu_params['fovy']}_{simu_params['fovx']}_{simu_params['limit_mag']}_{simu_params['rot']}"
-
-    # guide star catalogue
-    gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
-    gcata = pd.read_csv(gcata_path, usecols=["Star ID", "Ra", "De", "Magnitude"])
-
-    # noise config
-    noise_cfg = f"{simu_params['sigma_pos']}_{simu_params['sigma_mag']}_{simu_params['num_fs']}_{simu_params['num_ms']}"
+    # setup gcata and several configs
+    sim_cfg, noise_cfg, gcata_name, gcata = setup(simu_params, gcata_path)
 
     pool = ThreadPoolExecutor(max_workers=num_thd)
     tasks = []
@@ -104,8 +97,8 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
     Args:
         num_img: number of test images expected to be generated
         meth_params: the parameters of methods, possible methods include:
-            'rac_nn': Rb Rp arr_Nr Ns Nn
-            'lpt_nn': Rb Rp Nd
+            'rac_nn': Rb Rp arr_Nr Ns Nn use_prob
+            'lpt_nn': Rb Rp Nd use_prob
             'grid': Rb Rp Ng
             'lpt': Rb Rp Nd Nt
         test_params: the parameters for the test sample generation
@@ -133,12 +126,8 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
     print('Number of test images expected to be generated:', num_img)
     print('----------------------')
 
-    # simulation config
-    sim_cfg = f'{simu_params["h"]}_{simu_params["w"]}_{simu_params["fovy"]}_{simu_params["fovx"]}_{simu_params["limit_mag"]}_{simu_params["rot"]}'
-
-    # read the guide star catalogue
-    gcata_name = os.path.basename(gcata_path).rsplit('.', 1)[0]
-    gcata = pd.read_csv(gcata_path, usecols=['Star ID', 'Ra', 'De', 'Magnitude'])
+    # setup gcata and several configs
+    sim_cfg, _, gcata_name, gcata = setup(simu_params, gcata_path)
 
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thd)
@@ -181,7 +170,10 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
             dfs = [pd.read_csv(os.path.join(p, f)) for f in os.listdir(p) if f != 'labels.csv']
             if len(dfs) > 0:        
                 df = pd.concat(dfs, ignore_index=True, copy=False)
-                df.to_csv(os.path.join(p, 'labels.csv'), index=False)
+                df.to_csv(
+                    os.path.join(p, 'labels.csv'),
+                    index=False
+                )
                 # count the number of samples for each class
                 print('Method and test name:', method, tn, '\nTotal number of images for this sub test', len(df['img_id'].unique()))
 
@@ -230,11 +222,11 @@ def merge_dataset(dir: str, num_roll: int):
 
 
 if __name__ == '__main__':
-    if False:
+    if True:
         agg_dataset(
             meth_params={
-                # 'lpt_nn': [0.5, 6, 55],
-                'rac_nn': [0.5, 6, [15, 35, 55], 18, 3],
+                # 'lpt_nn': [0.5, 6, 55, 0],
+                'rac_nn': [0.5, 6, [15, 55], 18, 3, 0],
             },
             simu_params={
                 'h': 1024,
@@ -245,19 +237,19 @@ if __name__ == '__main__':
                 'sigma_pos': 0,
                 'sigma_mag': 0,
                 'num_fs': 0,
-                'num_ms': 5,
+                'num_ms': 0,
                 'rot': 1
             },
             gcata_path='catalogue/sao6.0_d0.03_12_15.csv',
-            offset=1,
-            num_roll=10,
+            offset=0,
+            num_roll=1,
             num_thd=20
         )
 
     if False:
         agg_dataset(
             meth_params={
-                'rac_nn': [0.1, 4.5, [10, 25, 40, 55], 18, 3],
+                'rac_nn': [0.1, 4.5, [10, 25, 40, 55], 18, 3, 0],
             },
             simu_params={
                 'h': 1024,
@@ -283,8 +275,8 @@ if __name__ == '__main__':
             {
                 # 'grid': [0.5, 6, 100],
                 # 'lpt': [0.5, 6, 50, 36],
-                # 'lpt_nn': [0.5, 6, 55],
-                'rac_nn': [0.5, 6, [15, 35, 55], 18, 3]
+                'lpt_nn': [0.5, 6, 55, 0],
+                'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0]
             }, 
             {
                 'h': 1024,
@@ -295,15 +287,15 @@ if __name__ == '__main__':
                 'rot': 1
             },
             {
-                # 'pos': [0, 0.5, 1, 1.5, 2], 
-                # 'mag': [0, 0.1, 0.2, 0.3, 0.4], 
-                'fs': [0, 1, 2, 3, 4],
-                'ms': [0, 1, 2, 3, 4]
+                'pos': [0, 0.5, 1, 1.5, 2], 
+                'mag': [0, 0.1, 0.2, 0.3, 0.4], 
+                # 'fs': [0, 1, 2, 3, 4],
+                # 'ms': [0, 1, 2, 3, 4]
             },
             './catalogue/sao6.0_d0.03_12_15.csv',
         )
     
-    if True:
+    if False:
         # dir = 'dataset/1024_1280_11.398822251559647_9.129887427521604_5.5/rac_nn/sao5.5_d0.03_9_10_0.1_4.5_[50, 100]_16_3'
         # dir = 'dataset/1024_1282_12_14.9925_6_1/rac_nn/sao6.0_d0.03_12_15_0.5_6_[10, 25, 40, 55]_18_3'
         # dir = 'dataset/1024_1282_12_14.9925_6_1/lpt_nn/sao6.0_d0.03_12_15_0.5_6_55'
