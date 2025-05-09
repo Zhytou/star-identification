@@ -119,41 +119,86 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
     if num_img == 0:
         return
 
+    # setup gcata and several configs
+    sim_cfg, noise_cfg, gcata_name, gcata = setup(simu_params, gcata_path)
+
     print('Test Image Generation')
     print('----------------------')
     print('Method Parameters:', meth_params)
     print('Simulation Parameters:', simu_params)
+    print('Default noise config:', noise_cfg)
     print('Number of test images expected to be generated:', num_img)
     print('----------------------')
-
-    # setup gcata and several configs
-    sim_cfg, noise_cfg, gcata_name, gcata = setup(simu_params, gcata_path)
 
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thd)
     # tasks for later aggregation
     tasks = defaultdict(list)
 
+    # parameter mapping
+    param_mappings = {
+        'pos': 'sigma_pos',
+        'mag': 'sigma_mag',
+        'fs': 'num_fs',
+        'ms': 'num_ms',
+    }
+
     # add tasks to the thread pool
-    for pos in test_params.get('pos', []):
-        tasks[f'pos{pos}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, sigma_pos=pos, sigma_mag=simu_params['sigma_mag']))
-    for mag in test_params.get('mag', []):
-        tasks[f'mag{mag}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, sigma_mag=mag, sigma_pos=simu_params['sigma_pos']))
-    for fs in test_params.get('fs', []):
-        tasks[f'fs{fs}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, num_fs=fs, sigma_pos=simu_params['sigma_pos'], sigma_mag=simu_params['sigma_mag']))
-    for ms in test_params.get('ms', []):
-        tasks[f'ms{ms}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, num_ms=ms, sigma_pos=simu_params['sigma_pos'], sigma_mag=simu_params['sigma_mag']))
+    for param_type, kwarg_name in param_mappings.items():
+        for value in test_params.get(param_type, []):
+            # default noise
+            base_kwargs = {
+                'sigma_pos': simu_params['sigma_pos'],
+                'sigma_mag': simu_params['sigma_mag']
+            }
+
+            # add test noise
+            base_kwargs[kwarg_name] = value
+            
+            # sub test name
+            test_name = f"{param_type}{value}"
+
+            # raw data directory
+            raw_dir = os.path.join('test', sim_cfg, 'raw', test_name, noise_cfg)
+
+            # read labels.csv and get the unique ids of generated image for each method
+            img_ids = {}
+            for method in meth_params:
+                gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
+                file = os.path.join('test', sim_cfg, method, gen_cfg, test_name, noise_cfg, 'labels.csv')
+                
+                if os.path.exists(file):
+                    df = pd.read_csv()
+                    img_ids[method] = df['img_id'].unique()
+                else:
+                    img_ids[method] = []
+
+            # add task
+            tasks[test_name].append(
+                pool.submit(
+                    gen_sample, 
+                    num_img, 
+                    meth_params, 
+                    simu_params,
+                    raw_dir,
+                    img_ids,
+                    gcata, 
+                    **base_kwargs
+                )
+            )
     
     # sub test name
-    for st_name in tasks:
-        for task in tasks[st_name]:
+    for test_name in tasks:
+        for task in tasks[test_name]:
             # get the async task result and store the returned dataframe
             df_dict = task.result()
             for method in df_dict:
+                # make the sub test directory
                 gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
-                st_path = os.path.join('test', sim_cfg, method, gen_cfg, st_name, noise_cfg)
-                if not os.path.exists(st_path):
-                    os.makedirs(st_path)
+                st_path = os.path.join('test', sim_cfg, method, gen_cfg, test_name, noise_cfg)
+                os.makedirs(st_path, exist_ok=True)
+
+                # store the sub test samples
                 df = df_dict[method]
                 df.to_csv(os.path.join(st_path, str(uuid.uuid1())), index=False)
 
@@ -163,19 +208,27 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
         path = os.path.join('test', sim_cfg, method, gen_cfg)
         if not os.path.exists(path):
             continue
-        # sub test dir names
+        
         test_names = list(tasks.keys())
-        for tn in test_names:
-            p = os.path.join(path, tn, noise_cfg)
+        for test_name in test_names:
+            # sub test dir names
+            p = os.path.join(path, test_name, noise_cfg)
             dfs = [pd.read_csv(os.path.join(p, f)) for f in os.listdir(p) if f != 'labels.csv']
-            if len(dfs) > 0:        
-                df = pd.concat(dfs, ignore_index=True, copy=False)
-                df.to_csv(
-                    os.path.join(p, 'labels.csv'),
-                    index=False
-                )
-                # count the number of samples for each class
-                print('Method and test name:', method, tn, '\nTotal number of images for this sub test', len(df['img_id'].unique()))
+            if len(dfs) == 0:
+                continue        
+
+            # merge all the sub test samples
+            df = pd.concat(dfs, ignore_index=True, copy=False)
+            df.to_csv(
+                os.path.join(p, 'labels.csv'),
+                index=False
+            )
+
+            # count the number of samples for each class
+            print(
+                'Method and test name:', method, test_name, 
+                '\nTotal number of images for this sub test', len(df['img_id'].unique())
+            )
 
     pool.shutdown()
 
@@ -226,7 +279,7 @@ if __name__ == '__main__':
         agg_dataset(
             meth_params={
                 # 'lpt_nn': [0.5, 6, 55, 0],
-                'rac_nn': [0.5, 6, [15, 55], 18, 3, 0],
+                'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
             },
             simu_params={
                 'h': 1024,
@@ -249,7 +302,7 @@ if __name__ == '__main__':
     if False:
         agg_dataset(
             meth_params={
-                'rac_nn': [0.1, 4.5, [10, 25, 40, 55], 18, 3, 0],
+                'rac_nn': [0.1, 4.5, [25, 55, 85], 18, 3, 0],
             },
             simu_params={
                 'h': 1024,
@@ -258,9 +311,32 @@ if __name__ == '__main__':
                 'fovy': 9.129887427521604,
                 'limit_mag': 5.5,
                 'sigma_pos': 0,
-                'sigma_mag': 0.5,
+                'sigma_mag': 0,
                 'num_fs': 0,
-                'num_ms': 0,
+                'num_ms': 5,
+                'rot': 1
+            },
+            gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
+            offset=0,
+            num_roll=10,
+            num_thd=20
+        )
+
+    if False:
+        agg_dataset(
+            meth_params={
+                'rac_nn': [0.4, 7.5, [25, 55, 85], 18, 3, 0],
+            },
+            simu_params={
+                'h': 1024,
+                'w': 1288,
+                'fovx': 18.97205141393946,
+                'fovy': 15.13410397498426,
+                'limit_mag': 5.5,
+                'sigma_pos': 0,
+                'sigma_mag': 0,
+                'num_fs': 0,
+                'num_ms': 5,
                 'rot': 1
             },
             gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
@@ -269,15 +345,15 @@ if __name__ == '__main__':
             num_thd=20
         )
     
-    if True:
+    if False:
         agg_sample(
-            400, 
+            800, 
             {
                 # 'grid': [0.5, 6, 100],
                 # 'lpt': [0.5, 6, 50, 36],
                 # 'lpt_nn': [0.5, 6, 55, 0],
-                'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 1]
-                # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 1],
+                # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 1]
+                'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
             }, 
             {
                 'h': 1024,
@@ -294,15 +370,15 @@ if __name__ == '__main__':
             {
                 'pos': [0, 0.5, 1, 1.5, 2], 
                 'mag': [0, 0.1, 0.2, 0.3, 0.4], 
-                # 'fs': [0, 1, 2, 3, 4],
-                # 'ms': [0, 1, 2, 3, 4]
+                'fs': [0, 1, 2, 3, 4],
+                'ms': [0, 1, 2, 3, 4]
             },
             './catalogue/sao6.0_d0.03_12_15.csv',
         )
     
     if False:
-        # dir = 'dataset/1024_1280_11.398822251559647_9.129887427521604_5.5/rac_nn/sao5.5_d0.03_9_10_0.1_4.5_[50, 100]_16_3'
+        dir = 'dataset/1024_1280_9.129887427521604_11.398822251559647_5.5_1/rac_nn/sao5.5_d0.03_9_10_0.1_4.5_[25, 55, 85]_18_3_0'
         # dir = 'dataset/1024_1282_12_14.9925_6_1/rac_nn/sao6.0_d0.03_12_15_0.5_6_[10, 25, 40, 55]_18_3'
         # dir = 'dataset/1024_1282_12_14.9925_6_1/lpt_nn/sao6.0_d0.03_12_15_0.5_6_55'
-        dir = 'dataset/1024_1282_12_14.9925_6_1/rac_nn/sao6.0_d0.03_12_15_0.5_6_[15, 35, 55]_18_3'
+        # dir = 'dataset/1024_1282_12_14.9925_6_1/rac_nn/sao6.0_d0.03_12_15_0.5_6_[15, 35, 55]_18_3'
         merge_dataset(dir, 10)

@@ -464,60 +464,65 @@ def gen_dataset(meth_params: dict, simu_params: dict, star_id: int, cata_idx: in
     return df_dict
 
 
-def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.DataFrame, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0):
+def gen_sample(num_img: int, meth_params: dict, simu_params: dict, raw_dir: str, img_ids: dict, gcata: pd.DataFrame, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0):
     '''
         Generate test samples.
-    Args:
-        num_img: number of test images expected to be generated
-        meth_params: the parameters for the test sample generation
-            'rac_nn':
-                r: the radius of the region in degrees
-                arr_Nr: the array of ring number
-                Ns: the number of sectors
-                Nn: the minimum number of neighbor stars in the region
-            'lpt_nn': 
-                r: the radius of the region in degrees
-                Nd: the number of distance bins
-            'grid': grid algorithm
-                rb: the radius of buffer region in degrees
-                rp: the radius of pattern region in degrees
-                Ng: the number of grids
-            'lpt': log-polar transform algorithm
-                rb: the radius of buffer region in degrees
-                rp: the radius of pattern region in degrees
-                Nd: the number of distance bins
-                Nt: the number of theta bins
-        sigma_pos: the standard deviation of the positional noise
-        sigma_mag: the standard deviation of the magnitude noise
-        num_fs: the number of false stars
-        num_ms: the number of missing stars
-    Returns:
-        dict: method->dataframe
     '''
 
-    # generate right ascension[-pi, pi] and declination[-pi/2, pi/2]
-    ras = np.random.uniform(0, 2*np.pi, num_img)
-    des = np.arcsin(np.random.uniform(-1, 1, num_img))
-    rolls = np.random.uniform(0, 2*np.pi, num_img)
+    def gen_raw_data(n :int):
+        '''
+            Genearte raw star image data for test.
+        '''
+        # generate right ascension[-pi, pi] and declination[-pi/2, pi/2]
+        ras = np.random.uniform(0, 2*np.pi, n)
+        des = np.arcsin(np.random.uniform(-1, 1, n))
+        rolls = np.random.uniform(0, 2*np.pi, n)
+        
+        for ra, de, roll in zip(ras, des, rolls):
+            _, stars = create_star_image(ra, de, roll, 
+                h=simu_params['h'], 
+                w=simu_params['w'],
+                fovx=simu_params['fovx'],
+                fovy=simu_params['fovy'],
+                limit_mag=simu_params['limit_mag'],
+                sigma_pos=sigma_pos,
+                sigma_mag=sigma_mag,
+                num_fs=num_fs,
+                num_ms=num_ms, 
+                rot_meth=simu_params['rot'],
+                coords_only=True
+            )
+
+            # generate image id
+            img_id = str(uuid.uuid1())
+
+            # save raw star image data
+            os.makedirs(raw_dir, exist_ok=True)
+            np.save(
+                os.path.join(raw_dir, img_id),
+                stars[:, :3].astype(np.float32)
+            )
+
+    # raw star image data
+    n = len(os.listdir(raw_dir)) if os.path.exists(raw_dir) else 0
+    if n < num_img:
+        gen_raw_data(num_img-n)
 
     # the dict to store the results
     df_dict = defaultdict(list)
 
-    # generate the star image
-    for ra, de, roll in zip(ras, des, rolls):
-        _, stars = create_star_image(ra, de, roll, 
-            h=simu_params['h'], 
-            w=simu_params['w'],
-            fovx=simu_params['fovx'],
-            fovy=simu_params['fovy'],
-            limit_mag=simu_params['limit_mag'],
-            sigma_pos=sigma_pos,
-            sigma_mag=sigma_mag,
-            num_fs=num_fs,
-            num_ms=num_ms, 
-            rot_meth=simu_params['rot'],
-            coords_only=True
-        )
+    for img_id in os.listdir(raw_dir):
+        nmeth_params = {}
+        for method in meth_params:
+            if img_id in img_ids[method]:
+                continue
+            nmeth_params[method] = meth_params[method]
+
+        if nmeth_params == {}:
+            continue
+
+        # load raw star image data
+        stars = np.load(os.path.join(raw_dir, img_id))
 
         # get the centroids of the stars in the image
         coords = stars[:, 1:3]
@@ -538,12 +543,9 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
         # set the guide star catalogue indexs
         cata_idxs[ids_idxs] = gcata_idxs
 
-        # generate image id
-        img_id = str(uuid.uuid1())
-
         # patterns for this image
         pats_dict = gen_pattern(
-            meth_params, 
+            nmeth_params, 
             coords, 
             ids,
             cata_idxs,
@@ -551,9 +553,6 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
             h=simu_params['h'], 
             w=simu_params['w'],
             f=simu_params['f'], # added when setup is called
-            ra=ra,
-            de=de,
-            roll=roll,
         )
         for method in pats_dict:
             df_dict[method].extend(pats_dict[method])
