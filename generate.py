@@ -265,7 +265,7 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
                 pat['pat'] = ' '.join(map(str, grid))
             
             else:
-                print('Invalid method')
+                print('Invalid generation method!')
     
             pats_dict[method].append(pat)
 

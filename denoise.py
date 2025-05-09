@@ -36,6 +36,7 @@ def filter_image(img: np.ndarray, method: str='GAUSSIAN', size: int=3, sigma: fl
         filtered_img = np.fft.ifft2(filtered_f)
         filtered_img = np.abs(filtered_img)
     else:
+        print('Invalid filter method!')
         return None
     
     return filtered_img
@@ -55,7 +56,7 @@ def morph_filter(img: np.ndarray, method: str='max', se=cv2.MORPH_RECT, size: in
         kernel = cv2.getStructuringElement(se, (size, size))
         filtered_img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel)
     else:
-        print('Invalid method')
+        print('Invalid morph method')
         return None
     
     return filtered_img

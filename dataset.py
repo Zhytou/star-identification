@@ -71,7 +71,7 @@ class RACDataset(Dataset):
     def __init__(self, label_df: pd.DataFrame, params: list):
         arr_nr, ns, nn = params[2:-1]
         # number of rings
-        nr = sum(list(map(int, arr_nr.strip('[]').split(', '))))
+        nr = sum(arr_nr)
         # number of sectors and neighbors
         ns, nn = int(ns), int(nn)
 

@@ -108,7 +108,7 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
         #         T = t
         pass
     else:
-        print('wrong threshold method!')
+        print('Invalid threshold method!')
     
     return T
 
@@ -507,7 +507,7 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
                             continue
                         group_coords.append((rows, cols))
     else:
-        print('wrong method!')
+        print('Invalid segmentation method!')
         return []
 
     return group_coords
