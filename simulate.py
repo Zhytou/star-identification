@@ -426,12 +426,37 @@ if __name__ == '__main__':
     # pixel = 6.7
     # limit_mag = 5
 
-    # fovx = degrees(2 * atan(w * pixel / (2 * f)))
-    # fovy = degrees(2 * atan(h * pixel / (2 * f)))
-    # ra, de, roll = cal_zxz_euler(R, 1)
-    # print(np.linalg.det(R))
-    # M = get_rotation_matrix(ra, de, roll, 1)
-    # assert np.allclose(M, R, 1e-3), f"Rotation matrix is not correct. {M} != {R}"
+    # test 4
+    # Tsinghua 3P0/00001051_00000000019D162E.bmp
+    R = np.array([
+        [0.6261, 0.0830, -0.7753],
+        [-0.0305, 0.9962, 0.0821],
+        [0.7791, -0.0277, 0.6263],
+    ])
+    # Tsinghua 3P0/00001052_00000000019D169C.bmp
+    R = np.array([
+        [0.6262, 0.0824, -0.7753],
+        [-0.0300, 0.9962, 0.0816],
+        [0.7791, -0.0278, 0.6263]
+    ])
+    # Tsinghua 0P0/00000001_00000000019880C8.bmp
+    R = np.array([
+        [0.6268, 0.0666, -0.7763],
+        [-0.2633, 0.9558, -0.1306],
+        [0.7333, 0.2863, 0.6167],
+    ])
+
+    h, w = 1024, 1288
+    f = 18500
+    pixel = 4.8
+    limit_mag = 5.5
+
+    fovx = degrees(2 * atan(w * pixel / (2 * f)))
+    fovy = degrees(2 * atan(h * pixel / (2 * f)))
+    ra, de, roll = cal_zxz_euler(R, 1)
+    print(np.linalg.det(R))
+    M = get_rotation_matrix(ra, de, roll, 1)
+    assert np.allclose(M, R, atol=1e-3), f"Rotation matrix is not correct. {M} != {R}"
 
     print(np.round([np.degrees(ra), np.degrees(de), np.degrees(roll)], 4))
     print(ra, de, fovx, fovy)
