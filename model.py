@@ -9,12 +9,12 @@ class FNN(nn.Module):
     '''
         The feedforward neural network model.
     '''
-    def __init__(self, input_dim: int, output_dim: int):
+    def __init__(self, num_feat: int, num_class: int):
         super(FNN, self).__init__()
         self.fc = nn.Sequential(
-            nn.BatchNorm1d(input_dim),
+            nn.BatchNorm1d(num_feat),
             
-            nn.Linear(input_dim, 512),
+            nn.Linear(num_feat, 512),
             nn.ReLU(),
             nn.BatchNorm1d(512),
             nn.Dropout(0.4),
@@ -29,7 +29,7 @@ class FNN(nn.Module):
             nn.BatchNorm1d(2048),
             nn.Dropout(0.4),
 
-            nn.Linear(2048, output_dim),
+            nn.Linear(2048, num_class),
         )
 
     def forward(self, x):
@@ -37,44 +37,152 @@ class FNN(nn.Module):
         return y
 
 
-class RAC_CNN(nn.Module):
+class CNN1(nn.Module):
     '''
         The one dimension convolutional neural network model.
     '''
-    def __init__(self, input_dim: int, output_dim: int):
-        super(RAC_CNN, self).__init__()
+    def __init__(self, num_feat: int, num_class: int):
+
+        super(CNN1, self).__init__()
         
         self.conv = nn.Sequential(
-            # output batch_size*64*input_dim/2
-            ConvBlock(1, 64),
+            # output batch_size*64*num_feat
+            ConvBlock(1, 32),
             
-            # output batch_size*64*input_dim/4
-            ConvBlock(64, 64),
+            # output batch_size*128*num_feat
+            ConvBlock(32, 128),
             
-            # output batch_size*64*input_dim/8
-            ConvBlock(64, 64),
+            # output batch_size*512*num_feat
+            ConvBlock(128, 512),
             
-            # output batch_size*output_dim*input_dim/8
-            nn.Conv1d(64, output_dim, kernel_size=1),
-
-            nn.AvgPool1d(kernel_size=input_dim//8),
+            # global avg pool
+            # output batch_size*512*1
+            nn.AdaptiveAvgPool1d(output_size=1)
         )
 
-    def forward(self, x1, x2):
-        # merge the two input, x.shape is [batch_size, num_ring+num_sector*num_neighbor]
-        x = torch.concat((x1, x2), dim=1)
+        self.fc = nn.Sequential(
+            nn.Linear(512, 1024),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            
+            nn.Linear(1024, num_class)
+        )
+
+    def forward(self, x):
+        # x is composed of two input: raidal features and cyclic features
+        # convert x.shape from [batch_size, num_ring+num_sector*num_neighbor]
+        # into [batch_size, 1, num_ring+num_sector*num_neighbor]
+        x = x.unsqueeze(1)
+
+        # apply the convolutional layers and remove the last dimension
+        y = self.fc(self.conv(x).squeeze(-1))
+
+        if DEBUG:
+            print(
+                'RAC_CNN',
+                '\nX shape', x.shape,
+                '\nY shape', y.shape,
+            )
+
+        return y
+
+
+class CNN2(nn.Module):
+    '''
+        The one dimension convolutional neural network model.
+    '''
+    def __init__(self, num_feat: int, num_class: int):
+        '''
+            input_dim: the dimension of the features
+            output_dim: the number of the class(guide star)
+        '''
+
+        super(CNN2, self).__init__()
         
-        # x.shape convert into [batch_size, 1, num_ring+num_sector*num_neighbor]
+        self.conv = nn.Sequential(
+            # output batch_size*64*num_feat//2
+            ConvBlock(1, 32),
+            
+            # output batch_size*128*num_feat//4
+            ConvBlock(32, 128),
+            
+            # output batch_size*512*num_feat//8
+            ConvBlock(128, 512),
+            
+            nn.Conv1d(512, num_class, kernel_size=1),
+
+            # global avg pool
+            # output batch_size*512*1
+            nn.AdaptiveAvgPool1d(output_size=1)
+        )
+
+    def forward(self, x):
+        # x is composed of two input: raidal features and cyclic features
+        # convert x.shape from [batch_size, num_ring+num_sector*num_neighbor]
+        # into [batch_size, 1, num_ring+num_sector*num_neighbor]
         x = x.unsqueeze(1)
 
         # apply the convolutional layers and remove the last dimension
         y = self.conv(x).squeeze(-1)
 
         if DEBUG:
-            print(x.shape, y.shape)
-        
-        return y
+            print(
+                'RAC_CNN',
+                '\nX shape', x.shape,
+                '\nY shape', y.shape,
+            )
 
+        return y
+    
+
+class CNN3(nn.Module):
+    '''
+        The one dimension convolutional neural network model.
+    '''
+    def __init__(self, num_feat: int, num_class: int):
+        '''
+            input_dim: the dimension of the features
+            output_dim: the number of the class(guide star)
+        '''
+
+        super(CNN3, self).__init__()
+        
+        self.conv = nn.Sequential(
+            ConvBlock(1, 256),
+            
+            ConvBlock(256, 256),
+            
+            ConvBlock(256, 256),
+            
+            ConvBlock(256, 256),
+
+            ConvBlock(256, 256),
+
+            nn.Conv1d(256, num_class, kernel_size=1),
+
+            # global avg pool
+            # output batch_size*256*1
+            nn.AdaptiveAvgPool1d(output_size=1)
+        )
+
+    def forward(self, x):
+        # x is composed of two input: raidal features and cyclic features
+        # convert x.shape from [batch_size, num_ring+num_sector*num_neighbor]
+        # into [batch_size, 1, num_ring+num_sector*num_neighbor]
+        x = x.unsqueeze(1)
+
+        # apply the convolutional layers and remove the last dimension
+        y = self.conv(x).squeeze(-1)
+
+        if DEBUG:
+            print(
+                'RAC_CNN',
+                '\nX shape', x.shape,
+                '\nY shape', y.shape,
+            )
+
+        return y
+        
 
 class ConvBlock(nn.Module):
     '''
@@ -82,10 +190,16 @@ class ConvBlock(nn.Module):
     '''
     def __init__(self, input_dim: int, output_dim: int):
         super(ConvBlock, self).__init__()
-        self.conv_3 = nn.Sequential(
-            nn.Conv1d(input_dim, output_dim//2, kernel_size=3, padding=1),
+        self.conv_5 = nn.Sequential(
+            nn.Conv1d(input_dim, output_dim//4, kernel_size=5, padding=2),
             nn.ReLU(),
-            nn.BatchNorm1d(output_dim//2),
+            nn.BatchNorm1d(output_dim//4),
+        )
+
+        self.conv_3 = nn.Sequential(
+            nn.Conv1d(input_dim, output_dim//4, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.BatchNorm1d(output_dim//4),
         )
 
         self.conv_1 = nn.Sequential(
@@ -98,81 +212,65 @@ class ConvBlock(nn.Module):
 
     def forward(self, x):
         # apply the convolutional layers        
-        y1 = self.conv_3(x)
-        y2 = self.conv_1(x)
-        
+        y1 = self.conv_1(x)
+        y2 = self.conv_3(x)
+        y3 = self.conv_5(x)
+
         # apply the max pooling layer
-        y = self.pool_2(torch.concat((y1, y2), dim=1))
+        y = self.pool_2(torch.concat((y1, y2, y3), dim=1))
 
         if DEBUG:
-            print(x.shape)
-            print(y1.shape, y2.shape, y.shape)
+            print(
+                'ConvBlock',
+                '\nX shape', x.shape,
+                '\nY1 shape', y1.shape,
+                '\nY2 shape', y2.shape,
+                '\nY3 shape', y3.shape,
+                '\nY shape', y.shape
+            )
 
         return y
 
 
-class DAA_CNN(nn.Module):
-    '''
-        The one dimension convolutional neural network model.
-    '''
-    def __init__(self, input_dim: tuple[int, int], output_dim: int):
-        super(DAA_CNN, self).__init__()
-
-        self.conv = nn.Sequential(
-            nn.Conv1d(input_dim[0], 32, kernel_size=3),
-            nn.ReLU(),
-            nn.BatchNorm1d(32),
-            nn.Conv1d(32, 64, kernel_size=5),
-            nn.ReLU(),
-            nn.BatchNorm1d(64),
-            nn.MaxPool1d(kernel_size=2),
-            nn.Flatten(),
-            nn.Linear(((int(input_dim[1]/2))-3)*64, output_dim)
-        )
-
-    def forward(self, x):
-        y = self.conv(x)
-        return y
-
-
-def create_model(method: str, meth_params: list, num_class: int):
+def create_model(method: str, model_type: str, meth_params: list, num_class: int):
     '''
         Create the model for different method.
     Args:
         method: the method name
         meth_params: the parameters for the method
-            rac_1dcnn: [Rb, Rp, [num_ring1, num_ring2, ...], num_sector, num_neighbor]
-            daa_1dcnn: [Rb, Rp, [num_ring1, num_ring2, ...]]
+            rac_nn: [Rb, Rp, [num_ring1, num_ring2, ...], num_sector, num_neighbor]
             lpt_nn: [Rb, Rp, num_dist]
         num_class: the number of classes
     Returns:
         model: the model
     '''
-    method_mapping = {
-        #! carefaul!, rac_1dcnn accept (num_ring, num_neighbor, num_sector)
-        'rac_1dcnn': (RAC_CNN, lambda params: (sum(params[-3])+params[-2]*params[-1], num_class)),
-        'lpt_nn': (FNN, lambda params: (params[-1], num_class))
+    model_mapping = {
+        'fnn': FNN,
+        'cnn1': CNN1,
+        'cnn2': CNN2,
+        'cnn3': CNN3,
     }
 
-    model_info = method_mapping.get(method)
-    if model_info is None:
-        raise ValueError(f"Invalid method: {method}")
+    method_mapping = {
+        #! carefaul!, rac_nn accept (num_ring, num_neighbor, num_sector)
+        # use lambda to change params dynamically(dict is static)
+        'rac_nn': lambda params: (sum(params[-3])+params[-2]*params[-1], num_class),
+        'lpt_nn': lambda params: (params[-1], num_class)
+    }
 
-    model_class, param_extractor = model_info
+    model_class, param_extractor = model_mapping[model_type], method_mapping[method]
     # extract parameters for the model
-    model_params = param_extractor(meth_params)
+    model_params = param_extractor(meth_params[:-1])
 
     return model_class(*model_params)
 
 
 if __name__ == '__main__':
     batch_size = 4
-    seq_length_1 = 100
-    seq_length_2 = 50
+    seq_length = 100
 
-    x1 = torch.randn(batch_size, seq_length_1)
-    x2 = torch.randn(batch_size, seq_length_2)
+    x = torch.randn(batch_size, seq_length)
 
     # conv_block = ConvBlock()
-    model = RAC_CNN(input_dim=seq_length_1+seq_length_2, output_dim=10)
-    output = model(x1, x2)
+    model = CNN3(seq_length, 10)
+    output = model(x)
