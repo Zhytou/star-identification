@@ -511,12 +511,24 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, raw_dir: str,
     # the dict to store the results
     df_dict = defaultdict(list)
 
+    # the test sample count for each method
+    cnts = {k: len(v) for k, v in img_ids.items()}
+
+    # iterate the raw directory to generate test sample
     for img_id in os.listdir(raw_dir):
+        # if all the test data needed is generated, break
+        if all(cnt > num_img for cnt in cnts.values()):
+            break
+        
         nmeth_params = {}
         for method in meth_params:
+            if cnts[method] >= num_img:
+                continue
             if img_id in img_ids[method]:
                 continue
+            
             nmeth_params[method] = meth_params[method]
+            cnts[method] += 1
 
         if nmeth_params == {}:
             continue

@@ -161,24 +161,27 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
             # raw data directory
             raw_dir = os.path.join('test', sim_cfg, 'raw', test_name, noise_cfg)
 
+            # independent method parameters for each sub test, because some of sub test may already meet the requirements
+            nmeth_params = {}
+
             # read labels.csv and get the unique ids of generated image for each method
             img_ids = {}
             for method in meth_params:
                 gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
                 file = os.path.join('test', sim_cfg, method, gen_cfg, test_name, noise_cfg, 'labels.csv')
-                
-                if os.path.exists(file):
-                    df = pd.read_csv()
-                    img_ids[method] = df['img_id'].unique()
-                else:
-                    img_ids[method] = []
+                df = pd.read_csv(file) if os.path.exists(file) else pd.DataFrame()
+
+                # add to nmeth_params only needed
+                if df.empty or len(df['img_id'].unique()) < num_img:
+                    nmeth_params[method] = meth_params[method]
+                    img_ids[method] = [] if df.empty else df['img_id'].unique()
 
             # add task
             tasks[test_name].append(
                 pool.submit(
                     gen_sample, 
                     num_img, 
-                    meth_params, 
+                    nmeth_params, 
                     simu_params,
                     raw_dir,
                     img_ids,
@@ -268,7 +271,7 @@ def merge_dataset(dir: str, num_roll: int):
         dfs.append(pd.read_csv(os.path.join(dir, 'labels.csv')))
 
     # store dataset and merge.log
-    df = pd.concat(dfs, ignore_index=True, copy=True)
+    df = pd.concat(dfs, ignore_index=True, copy=False)
     df.to_csv(os.path.join(dir, 'labels.csv'), index=False)
     with open(os.path.join(dir, 'merge.log'), 'w') as log_file:
         json.dump(names, log_file)
@@ -279,7 +282,10 @@ if __name__ == '__main__':
         agg_dataset(
             meth_params={
                 # 'lpt_nn': [0.5, 6, 55, 0],
-                'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
+                'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 0],
+                # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 1],
+                # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
+                # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 1],
             },
             simu_params={
                 'h': 1024,
@@ -289,13 +295,13 @@ if __name__ == '__main__':
                 'limit_mag': 6,
                 'sigma_pos': 0,
                 'sigma_mag': 0,
-                'num_fs': 0,
+                'num_fs': 5,
                 'num_ms': 0,
                 'rot': 1
             },
             gcata_path='catalogue/sao6.0_d0.03_12_15.csv',
-            offset=0,
-            num_roll=1,
+            offset=3,
+            num_roll=10,
             num_thd=20
         )
 
@@ -310,10 +316,10 @@ if __name__ == '__main__':
                 'fovx': 11.398822251559647,
                 'fovy': 9.129887427521604,
                 'limit_mag': 5.5,
-                'sigma_pos': 0,
+                'sigma_pos': 3,
                 'sigma_mag': 0,
                 'num_fs': 0,
-                'num_ms': 5,
+                'num_ms': 0,
                 'rot': 1
             },
             gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
@@ -345,15 +351,17 @@ if __name__ == '__main__':
             num_thd=20
         )
     
-    if False:
+    if True:
         agg_sample(
             800, 
             {
                 # 'grid': [0.5, 6, 100],
                 # 'lpt': [0.5, 6, 50, 36],
                 # 'lpt_nn': [0.5, 6, 55, 0],
-                # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 1]
-                'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
+                # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 0],
+                # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 1],
+                # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
+                'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 1],
             }, 
             {
                 'h': 1024,
@@ -377,8 +385,9 @@ if __name__ == '__main__':
         )
     
     if False:
-        dir = 'dataset/1024_1280_9.129887427521604_11.398822251559647_5.5_1/rac_nn/sao5.5_d0.03_9_10_0.1_4.5_[25, 55, 85]_18_3_0'
-        # dir = 'dataset/1024_1282_12_14.9925_6_1/rac_nn/sao6.0_d0.03_12_15_0.5_6_[10, 25, 40, 55]_18_3'
+        # dir = 'dataset/1024_1280_9.129887427521604_11.398822251559647_5.5_1/rac_nn/sao5.5_d0.03_9_10_0.1_4.5_[25, 55, 85]_18_3_0'
+        # dir = 'dataset/1024_1280_9.129887427521604_11.398822251559647_5.5_1/rac_nn/sao5.5_d0.03_9_10_0.1_4.5_[15, 35, 55]_18_3_0'
+        
         # dir = 'dataset/1024_1282_12_14.9925_6_1/lpt_nn/sao6.0_d0.03_12_15_0.5_6_55'
-        # dir = 'dataset/1024_1282_12_14.9925_6_1/rac_nn/sao6.0_d0.03_12_15_0.5_6_[15, 35, 55]_18_3'
+        dir = 'dataset/1024_1282_12_14.9925_6_1/rac_nn/sao6.0_d0.03_12_15_0.5_6_[15, 35, 55]_18_3_0'
         merge_dataset(dir, 10)
