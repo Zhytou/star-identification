@@ -170,7 +170,7 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
                     # use the number or probability of stars in each ring as radial features
                     for i, cnt in enumerate(hist):
                         i += tot_Nr
-                        pat[f'ring{i}'] = round(cnt/tot, 5) if use_prob else cnt
+                        pat[f'ring{i}'] = round(cnt/tot, 3) if use_prob else cnt
                     
                     tot_Nr += Nr
                 
@@ -188,7 +188,7 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
 
                     # use the number of stars in each sector as cyclic features
                     for j, cnt in enumerate(hist):
-                        pat[f'n{i}_sector{j}'] = round(cnt/tot, 5) if use_prob else cnt
+                        pat[f'n{i}_sector{j}'] = round(cnt/tot, 3) if use_prob else cnt
                 
                 # add trailing zero if there is not enough neighbors
                 if len(exc_ags) < Nn:
@@ -203,7 +203,7 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
                 
                 # use the number of stars in each distance bin as features
                 for i, cnt in enumerate(hist):
-                    pat[f'dist{i}'] = round(cnt/tot, 5) if use_prob else cnt
+                    pat[f'dist{i}'] = round(cnt/tot, 3) if use_prob else cnt
                 
             elif method == 'grid':
                 # parse the rest parameter
@@ -315,7 +315,7 @@ def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd:
                 coords, 
                 ids, 
                 cata_idxs,
-                img_id=str(uuid.uuid1()),
+                img_id='', # no need to generate img_id
                 h=simu_params['h'], 
                 w=simu_params['w'], 
                 f=simu_params['f'], # added when setup is called
@@ -414,7 +414,6 @@ def gen_dataset(meth_params: dict, simu_params: dict, star_id: int, cata_idx: in
             w=simu_params['w'],
             fovx=simu_params['fovx'],
             fovy=simu_params['fovy'],
-            # pixel=simu_params['pixel'],
             limit_mag=simu_params['limit_mag'],
             sigma_pos=simu_params['sigma_pos'],
             sigma_mag=simu_params['sigma_mag'],
@@ -436,16 +435,13 @@ def gen_dataset(meth_params: dict, simu_params: dict, star_id: int, cata_idx: in
         if np.all(ids == -1):
             continue
 
-        # generate a unique img id for later accuracy calculation
-        img_id = str(uuid.uuid1())
-
         # generate the pattern(dict, method->pattern) for the given star id
         pat_dict = gen_pattern(
             meth_params, 
             coords, 
             ids,
             cata_idxs, 
-            img_id, 
+            img_id='', # no need to generate a random img_id 
             h=simu_params['h'], 
             w=simu_params['w'], 
             f=simu_params['f'], # added when setup is called
@@ -468,7 +464,7 @@ def gen_dataset(meth_params: dict, simu_params: dict, star_id: int, cata_idx: in
     return df_dict
 
 
-def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.DataFrame,sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0):
+def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.DataFrame, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0):
     '''
         Generate test samples.
     Args:
@@ -514,7 +510,6 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, gcata: pd.Dat
             w=simu_params['w'],
             fovx=simu_params['fovx'],
             fovy=simu_params['fovy'],
-            # pixel=simu_params['pixel'],
             limit_mag=simu_params['limit_mag'],
             sigma_pos=sigma_pos,
             sigma_mag=sigma_mag,

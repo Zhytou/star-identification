@@ -127,7 +127,7 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
     print('----------------------')
 
     # setup gcata and several configs
-    sim_cfg, _, gcata_name, gcata = setup(simu_params, gcata_path)
+    sim_cfg, noise_cfg, gcata_name, gcata = setup(simu_params, gcata_path)
 
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thd)
@@ -136,13 +136,13 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
 
     # add tasks to the thread pool
     for pos in test_params.get('pos', []):
-        tasks[f'pos{pos}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, sigma_pos=pos))
+        tasks[f'pos{pos}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, sigma_pos=pos, sigma_mag=simu_params['sigma_mag']))
     for mag in test_params.get('mag', []):
-        tasks[f'mag{mag}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, sigma_mag=mag))
+        tasks[f'mag{mag}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, sigma_mag=mag, sigma_pos=simu_params['sigma_pos']))
     for fs in test_params.get('fs', []):
-        tasks[f'fs{fs}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, num_fs=fs))
+        tasks[f'fs{fs}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, num_fs=fs, sigma_pos=simu_params['sigma_pos'], sigma_mag=simu_params['sigma_mag']))
     for ms in test_params.get('ms', []):
-        tasks[f'ms{ms}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, num_ms=ms))
+        tasks[f'ms{ms}'].append(pool.submit(gen_sample, num_img, meth_params, simu_params, gcata, num_ms=ms, sigma_pos=simu_params['sigma_pos'], sigma_mag=simu_params['sigma_mag']))
     
     # sub test name
     for st_name in tasks:
@@ -151,7 +151,7 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
             df_dict = task.result()
             for method in df_dict:
                 gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
-                st_path = os.path.join('test', sim_cfg, method, gen_cfg, st_name)
+                st_path = os.path.join('test', sim_cfg, method, gen_cfg, st_name, noise_cfg)
                 if not os.path.exists(st_path):
                     os.makedirs(st_path)
                 df = df_dict[method]
@@ -166,7 +166,7 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
         # sub test dir names
         test_names = list(tasks.keys())
         for tn in test_names:
-            p = os.path.join(path, tn)
+            p = os.path.join(path, tn, noise_cfg)
             dfs = [pd.read_csv(os.path.join(p, f)) for f in os.listdir(p) if f != 'labels.csv']
             if len(dfs) > 0:        
                 df = pd.concat(dfs, ignore_index=True, copy=False)
@@ -222,7 +222,7 @@ def merge_dataset(dir: str, num_roll: int):
 
 
 if __name__ == '__main__':
-    if True:
+    if False:
         agg_dataset(
             meth_params={
                 # 'lpt_nn': [0.5, 6, 55, 0],
@@ -269,14 +269,15 @@ if __name__ == '__main__':
             num_thd=20
         )
     
-    if False:
+    if True:
         agg_sample(
             400, 
             {
                 # 'grid': [0.5, 6, 100],
                 # 'lpt': [0.5, 6, 50, 36],
-                'lpt_nn': [0.5, 6, 55, 0],
-                'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0]
+                # 'lpt_nn': [0.5, 6, 55, 0],
+                'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 1]
+                # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 1],
             }, 
             {
                 'h': 1024,
@@ -284,6 +285,10 @@ if __name__ == '__main__':
                 'fovy': 12,
                 'fovx': 14.9925,
                 'limit_mag': 6,
+                'sigma_pos': 0,
+                'sigma_mag': 0,
+                'num_fs': 0,
+                'num_ms': 0,
                 'rot': 1
             },
             {
