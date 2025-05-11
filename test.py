@@ -16,6 +16,7 @@ from sklearn.metrics.pairwise import haversine_distances
 from generate import setup
 from dataset import create_dataset
 from model import create_model
+from utils import get_angdist
 
 
 # Chinese font setting
@@ -111,7 +112,7 @@ def cluster_by_angle(cata: pd.DataFrame, ids: np.ndarray, r: float):
     return ids
 
 
-def identify_pattern(db: pd.DataFrame, pats: list[np.ndarray], size: tuple[int, int], T: float):
+def match_pattern(db: pd.DataFrame, pats: list[np.ndarray], size: tuple[int, int], T: float):
     '''
         Identify the star by pattern matching.
     '''
@@ -179,7 +180,7 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, method: str, meth_para
     pats = df['pat'].str.split(' ').apply(lambda x: np.array(x, dtype=int)).to_numpy()
 
     # estimated star ids
-    esti_ids = identify_pattern(db, pats, size, T)
+    esti_ids = match_pattern(db, pats, size, T)
 
     # real star ids
     real_ids = df['star_id'].to_numpy()
@@ -226,7 +227,8 @@ def predict(model: nn.Module, loader: DataLoader, T: float, device=torch.device(
     '''
         Predict the labels of the test data.
     '''
-    res = []
+    # catalogue indexs and confidence interval
+    labels, cis = [], []
 
     # set the model into evaluation mode
     model.eval()
@@ -250,15 +252,56 @@ def predict(model: nn.Module, loader: DataLoader, T: float, device=torch.device(
 
             # filter the predictions by threshold
             mask = vals < T
+            vals[mask] = 0
             idxs[mask] = -1
 
             # append the predicted labels
-            res.extend(idxs.tolist())
+            labels.extend(idxs.tolist())
+            cis.extend(vals.tolist())
     
-    return np.array(res)
+    return np.array(labels), np.array(cis)
 
 
-def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, meth_params: list, gcata: pd.DataFrame, T: float=0, batch_size: int=2048, device=torch.device('cpu')):
+def verify_angdist(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, h: int, w: int, f: int, eps: float=1e-3):
+    '''
+        Verify the estimated results by angular distances    
+    '''
+    assert len(coords) == len(ids)
+    mask = ids != -1
+    n = np.sum(mask)
+
+    if n == 0:
+        return ids
+
+    # get the view vectors
+    vvs = np.full((n, 3), f)
+    vvs[:, 0] = coords[mask, 1]-w/2
+    vvs[:, 1] = coords[mask, 0]-h/2
+
+    # get the refernce vectors
+    stars = cata[cata['Star ID'].isin(ids)].copy()
+    stars['X'] = np.cos(stars['Ra'])*np.cos(stars['De'])
+    stars['Y'] = np.sin(stars['Ra'])*np.cos(stars['De'])
+    stars['Z'] = np.sin(stars['De'])
+    #! careful! use index to sort the stars, because the output of isin is not sorted by the given list
+    stars = stars.set_index('Star ID').loc[ids[mask]]
+    rvs = stars[['X', 'Y', 'Z']].to_numpy()
+
+    # get the angular distances
+    vagd = get_angdist(vvs)
+    ragd = get_angdist(rvs)
+
+    # compare the angular distnaces
+    res = np.isclose(vagd, ragd, atol=eps)    
+
+    # at least angular distances between three neighbor star are verified, the star is considered to be correctly identified
+    idxs = np.where(mask)[0]
+    ids[idxs[np.sum(res, axis=1) <= 3]] = -1
+
+    return ids
+
+
+def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, meth_params: list, gcata: pd.DataFrame, T: float=0, batch_size: int=512, device=torch.device('cpu')):
     '''
         Evaluate the model's accuracy on the provided data loader.
     '''
@@ -297,7 +340,9 @@ def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, meth_para
 
         #! the verification step
         # do fov restriction by clustering and take the biggest cluster as final result
-        esti_ids[mask] = cluster_by_angle(gcata, esti_ids[mask], 2*rp)
+        # esti_ids[mask] = cluster_by_angle(gcata, esti_ids[mask], 2*rp)
+
+        # do angular distnace validation
 
         #! the check step
         if np.sum(np.logical_and(esti_ids[mask] == real_ids[mask], real_ids[mask] != -1)) >= min_sis_cnt:
@@ -453,7 +498,10 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
             # load best model
             model.load_state_dict(torch.load(os.path.join('model', sim_cfg, method, gen_cfg, model_types[method], 'best_model.pth')))
 
-            print('Device:', device)
+            print(
+                'Model type:', model_types[method],
+                'Device:', device
+            )
         else:
             print('Wrong Method!')
             continue
@@ -461,7 +509,7 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
         tasks[method] = {}
         for test_name in test_names:
             # directory path storing the labels.csv for each test
-            test_dir = os.path.join('test', sim_cfg, method, gen_cfg, test_name)
+            test_dir = os.path.join('test', sim_cfg, method, gen_cfg, test_name, noise_cfg)
             df = pd.read_csv(os.path.join(test_dir, 'labels.csv'))
                         
             if method in ['grid', 'lpt']:
@@ -515,10 +563,14 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
 if __name__ == '__main__':
     res = do_test(
         {
-            'lpt_nn': [0.5, 6, 55, 0],
-            # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3],
-            # 'grid': [0.5, 6, 100], 
-            # 'lpt': [0.5, 6, 50, 36]
+            # 'lpt_nn': [0.5, 6, 55, 0],
+            # 'lpt_nn': [0.5, 6, 55, 1],
+            # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 0],
+            # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 1],
+            # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
+            # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 1],
+            'grid': [0.5, 6, 100], 
+            'lpt': [0.5, 6, 50, 36]
         },
         {
             'h': 1024,
@@ -534,13 +586,13 @@ if __name__ == '__main__':
         },
         {
             'lpt_nn': 'fnn',
-            'rac_nn': 'fnn',
+            'rac_nn': 'cnn2',
         },
         {
             # 'pos': [0, 0.5, 1, 1.5, 2],
             'mag': [0, 0.1, 0.2, 0.3, 0.4],
             # 'fs': [0, 1, 2, 3, 4],
-            'ms': [0, 1, 2, 3, 4]
+            # 'ms': [0, 1, 2, 3, 4]
         },
         './catalogue/sao6.0_d0.03_12_15.csv',
     )
