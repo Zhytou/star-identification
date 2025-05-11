@@ -134,6 +134,10 @@ def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: 
     # rough group star using connectivity
     group_coords = group_star(filtered_img, seg_meth, T, connectivity=4, pixel_limit=pixel_limit)
 
+    # sort group_coords by grayscale sum, so that the returned centrods are sorted from high to low by brightness
+    gray_sum = [np.sum(filtered_img[rows, cols]) for rows, cols in group_coords]
+    group_idxs =np.argsort(gray_sum)[::-1]
+
     # calculate the centroid coordinate with threshold and weight
     centroids = {}
 
@@ -144,8 +148,10 @@ def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: 
 
     for method in cen_methods:
         centroids[method] = []
-        for (rows, cols) in group_coords:
+        for group_idx in group_idxs:
+            rows, cols = group_coords[group_idx]
             vals = filtered_img[rows, cols]
+            
             # get the brightest pixel and use it as the center
             idx = np.argmax(vals)
             # ?maybe use the brightest pixel as the center to construct a window

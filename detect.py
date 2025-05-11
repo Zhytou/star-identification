@@ -35,11 +35,16 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
     if method == 'Otsu':
         # use cv2 threshold function to get otsu threshold
         T, _ = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    elif method == 'Liebe':
+    elif method == 'Liebe3':
         # calculate the threshold using the mean and standard deviation of multiple windows
         mean = np.mean(img)
         std = np.std(img)
         T = mean + 3 * std
+    elif method == 'Liebe5':
+        # calculate the threshold using the mean and standard deviation of multiple windows
+        mean = np.mean(img)
+        std = np.std(img)
+        T = mean + 5 * std
     elif method == 'Abutaleb':
         # average gray level matrix for each pixel's window
         avg_img = cv2.medianBlur(img, wind_size)
@@ -414,7 +419,7 @@ def find_ranges(nums, threshold=0) -> list[tuple[int, int]]:
     return ranges
 
 
-def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-1, pixel_limit: int=5) -> list[list[tuple[int, int]]]:
+def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-1, pixel_limit: int=5) -> list[tuple[np.ndarray, np.ndarray]]:
     """
         Group the facula(potential star) in the image.
     Args:
