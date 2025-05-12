@@ -10,10 +10,10 @@ from simulate import cata
 from denoise import filter_image, denoise_image
 from detect import cal_threshold, get_seed_coords, group_star
 from extract import get_star_centroids
-from generate import gen_real_sample
+from generate import gen_real_sample, setup
 from dataset import create_dataset
 from model import create_model
-from test import predict, cluster_by_angle
+from test import predict, cluster_by_angle, cal_attitude
 from utils import get_angdist, label_star_image
 
 
@@ -22,36 +22,39 @@ DEBUG = True
 
 # 验证降噪\二值化\连通域等算法和matlab实现一致性
 if False:
-    img0 = cv2.imread('./example/xie/20161227225347/20161227225347.bmp', cv2.IMREAD_GRAYSCALE)
+    # dir = './example/xie/20161227225347/'
+    file = './example/3P0/00001010_00000000019CFBA2/'
+
+    img0 = cv2.imread(file+'o.bmp', cv2.IMREAD_GRAYSCALE)
+    print(img0.shape)
+
+    # 验证中值滤波正确性
     img1 = filter_image(img0, 'MEDIAN')
+    img2 = cv2.imread(file+'f.bmp', cv2.IMREAD_GRAYSCALE)
+    assert np.sum(img1!=img2) == 0, 'Wrong median filter!'
 
-    img2 = cv2.imread('./example/xie/20161227225347/20161227225347_f.bmp', cv2.IMREAD_GRAYSCALE)
-    print(np.sum(img1!=img2))
-
-    T = cal_threshold(img1, 'Liebe')
-    print(T)
-
+    # 验证阈值计算以及二值化正确性
+    T = cal_threshold(img1, 'Liebe5')
+    print('Threashold:', T)
     bimg2 = np.zeros_like(img2)
     bimg2[img2 >= T] = 1
+    img3 = cv2.imread(file+'v.bmp', cv2.IMREAD_GRAYSCALE)
+    assert np.sum(bimg2!=img3) == 0, 'Wrong segementation!'
 
-    img3 = cv2.imread('./example/xie/20161227225347/20161227225347_v.bmp', cv2.IMREAD_GRAYSCALE)
-    print(np.sum(bimg2!=img3))
-
+    # 验证连通性标记正确性
     num_label, limg3 = cv2.connectedComponents(img3, connectivity=4)
-    print(num_label)
+    img4 = cv2.imread(file+'bw.bmp', cv2.IMREAD_GRAYSCALE)
+    assert num_label == len(np.unique(img4)), 'Wrong connected compononets labeling!'
 
-    img4 = cv2.imread('./example/xie/20161227225347/20161227225347_bw.bmp', cv2.IMREAD_GRAYSCALE)
-    val = np.unique(img4[img4!=0])
-    print(len(val))
-
-    rows, cols = np.nonzero(limg3)
-    labels = limg3[rows, cols]
-
-    ulabels, ucnts = np.unique(labels, return_counts=True)
-    print(len(ucnts[ucnts>=3]))
-
-    coords = group_star(img1, 'CCL', T, connectivity=4, pixel_limit=3)
-    print(len(coords))
+    coords = np.array(get_star_centroids(
+        img0, 
+        'MEDIAN',
+        'Liebe5',
+        'CCL',
+        'MCoG',
+        5,
+    ))
+    print(coords.shape)
 
 
 # 展示降噪-提取各阶段效果
@@ -66,7 +69,7 @@ if False:
     img1 = denoise_image(img0, 'BLF')
     cv2.imshow('img1', img1)
 
-    T = cal_threshold(img1, 'Liebe')
+    T = cal_threshold(img1, 'Liebe3')
     print('mean+3*std', T)
 
     coords = get_seed_coords(img1, 5, T, 10100, 1.2*T)
@@ -80,16 +83,12 @@ if False:
 
 # 验证提取算法有效性——分别计算恒星在星敏感器坐标系以及天球坐标系下角距，比较对应值大小
 if False:
-    # name = 'cdata'
-    name = '20161227225347'
+    name = 'cdata'
 
     h, w = 1024, 1280
-    if name != 'cdata':
-        # 角距34mm/像元尺寸6.7um
-        f = 34000/6.7
-    else:
-        # 角距35mm/像元尺寸5.5um
-        f = 35269.52/5.5
+
+    # 角距35mm/像元尺寸5.5um
+    f = 35269.52/5.5
 
     data = np.load(f'./example/xie/{name}/{name}.npz', allow_pickle=True)
 
@@ -119,7 +118,7 @@ if False:
     # coords = get_star_centroids(
     #     cv2.imread(f'./example/xie/{name}/{name}.bmp', cv2.IMREAD_GRAYSCALE),
     #     'MEDIAN', 
-    #     'Liebe', 
+    #     'Liebe3', 
     #     'CCL', 
     #     'CoG', 
     #     pixel_limit=3
@@ -137,7 +136,6 @@ if False:
         'rac_nn': [
             0.1,            # Rb
             4.5,            # Rp
-            # [15, 35, 55],   # arr_ring
             [25, 55, 85],   # arr_ring
             18,             # num_sector
             3,              # num_neighbor
@@ -147,7 +145,7 @@ if False:
 
     extr_params = {
         'den': 'NLM_BLF',   # denoise
-        'thr': 'Liebe',     # threshold
+        'thr': 'Liebe3',    # threshold
         'seg': 'RG',        # segmentation
         'cen': 'MCoG',      # centroid
         'pixel': 3          # pixel number limit
@@ -177,7 +175,7 @@ if False:
         df,
         meth_params[method],
     )
-    loader = DataLoader(dataset, batch_size=20, shuffle=False)
+    loader = DataLoader(dataset, batch_size=20, shuffle=False) # shuffle must be set to False
 
     # best model
     model = create_model(
@@ -190,20 +188,28 @@ if False:
     model.load_state_dict(torch.load(model_path))
 
     # predict the star id
-    esti_idxs = predict(model, loader, 0, device)
+    esti_idxs, _ = predict(model, loader, 0, device)
     esti_ids = np.full_like(esti_idxs, -1)
     mask = esti_idxs != -1    
     esti_ids[mask] = gcata.loc[esti_idxs[mask], 'Star ID'].to_numpy()
 
+    # get the star coordinates
+    coords = df[['row', 'col']].to_numpy()
+
     # do fov restriction
     esti_ids = cluster_by_angle(gcata, esti_ids, 2*rp)
 
-    # get the star coordinates
-    coords = df[['row', 'col']].to_numpy()
+    # do angular distance validation
+    esti_ids = verify_angdist(gcata, coords, esti_ids, h=1024, w=1280, f=35269.52/5.5)
+    
+    # sort the coords by row for label
+    esti_ids = esti_ids[np.argsort(coords[:, 0])]
+    coords = coords[np.argsort(coords[:, 0])]
+    mask = esti_ids != -1
     
     # label star image
-    # label_star_image(img, coords, auto_label=True)
-    label_star_image(img, coords, esti_ids, circle=True)
+    # label_star_image(img, coords, auto_label=True, circle=True, axis_on=False)
+    label_star_image(img, coords[mask], esti_ids[mask], circle=True, axis_on=False)
 
 
 def load_h5data(dir: str, name: str):
@@ -233,54 +239,112 @@ def load_h5data(dir: str, name: str):
 
 # 多张实拍星图验证算法有效性
 if True:
-    num_img = 1
-
     # load test data
-    data = load_h5data('example/3P0/', '3P0_std5.h5')[:num_img]
+    data = load_h5data('example/3P0/', '3P0_liebe5_pixel5.h5')
+    # data = load_h5data('example/xie/', 'xie_liebe3_pixel3.h5')
+
+    # test image config
+    h, w, f = 1040, 1288, 18500/4.8
+    # h, w, f = 1024, 1288, 34000/6.7
+
+    # set the number of test image
+    num_img = len(data)
+    data = data[:num_img]
+
+    data = [item for item in data if item['path'] == 'example/3P0/00001051_00000000019D162E.bmp']
+
+    # get the path of test image
     img_paths = [item['path'] for item in data]
 
     # guide star catalogue
-    # gcata = pd.read_csv('catalogue/sao5.5_d0.03_9_10.csv', usecols=["Star ID", "Ra", "De", "Magnitude"])
-    gcata = pd.read_csv('catalogue/sao6.0_d0.03_12_15.csv', usecols=["Star ID", "Ra", "De", "Magnitude"])
+    gcata_path = 'catalogue/sao5.5_d0.03_9_10.csv'
     
+    # generation parameters
+    method = 'rac_nn'
+
     # parameters
+    simu_params = {
+        # Tsinghua test data
+        'h': 1040,
+        'w': 1288,
+        'fovx': 18.97205141393946,
+        'fovy': 15.36777053565561,
+        
+        # xie test data
+        # 'h': 1024,
+        # 'w': 1280,
+        # 'fovx': 14.37611786938476,
+        # 'fovy': 11.522621164995503,
+        
+        'limit_mag': 5.5,
+        'rot': 1
+    }
     meth_params = {
         'rac_nn': [
             0.5,            # Rb
-            7.5,            # Rp
-            [25, 55, 85],   # arr_ring
+            7.7,            # Rp
+            [35, 75, 115],  # arr_ring
             18,             # num_sector
             3,              # num_neighbor
             0,              # use_prob
         ],
+        # 'rac_nn': [
+        #     0.1,            # Rb
+        #     5.7,            # Rp
+        #     [25, 55, 85],   # arr_ring
+        #     18,             # num_sector
+        #     3,              # num_neighbor
+        #     0,              # use_prob
+        # ],
     }
     extr_params = {
         'den': 'MEDIAN',    # denoise
-        'thr': 'Liebe',     # threshold
+        'thr': 'Liebe5',    # threshold
         'seg': 'CCL',       # segmentation
         'cen': 'MCoG',      # centroid
-        'pixel': 3          # pixel number limit
+        'pixel': 5          # pixel number limit
     }
+    # get the pattern radius for later fov restriction
+    rp = np.radians(meth_params[method][1])
+
+    # setup all the configs
+    sim_cfg, _, gcata_name, gcata = setup(simu_params, gcata_path)
+    gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
+    ext_cfg = '_'.join(map(str, extr_params.values()))
+
+    # model parameters
+    model_type = 'cnn3'
+    model_path = os.path.join('model', sim_cfg, method, gen_cfg, model_type, 'best_model.pth')
+    # device
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # print info
+    print(
+        'Realshot Test',
+        '\n-----------------------',
+        '\nMETHOD INFO',
+        '\nMethod:', method,
+        '\nSimulation config:', sim_cfg,
+        '\nGeneration config:', gen_cfg,
+        '\nExtraction config:', ext_cfg,
+        '\n-----------------------',
+        '\nMODEL INFO',
+        '\nModel type:', model_type,
+        '\nDevice:', device,
+        '\n-----------------------',
+    )
 
     # generate test samples for realshot
     df_dict = gen_real_sample(
         img_paths,
         meth_params,
         extr_params,
-        f=185000/4.8,
+        f=f,
     )
-
-    method = 'rac_nn'
-
-    # get the pattern radius for later fov restriction
-    rp = np.radians(meth_params[method][1])
 
     # test data
     df = df_dict[method]
 
-    # device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
     # dataset
     dataset = create_dataset(
         method,
@@ -292,16 +356,14 @@ if True:
     # best model
     model = create_model(
         method,
-        'cnn3',
+        model_type,
         meth_params[method],
         len(gcata),
     )
-    # model_path = 'model/1024_1288_15.13410397498426_18.97205141393946_5.5_1/rac_nn/sao5.5_d0.03_9_10_0.5_7.5_[25, 55, 85]_18_3_0/cnn3/best_model.pth'
-    model_path = 'model/1024_1288_15.13410397498426_18.97205141393946_6_1/rac_nn/sao6.0_d0.03_12_15_0.5_7.5_[25, 55, 85]_18_3_0/cnn3/best_model.pth'
     model.load_state_dict(torch.load(model_path))
 
     # predict the star id
-    all_esti_idxs = predict(model, loader, 0, device)
+    all_esti_idxs, all_probs = predict(model, loader, 0, device)
     all_esti_ids = np.full_like(all_esti_idxs, -1)
     mask = all_esti_idxs != -1    
     all_esti_ids[mask] = gcata.loc[all_esti_idxs[mask], 'Star ID'].to_numpy()
@@ -316,70 +378,54 @@ if True:
     # get the image id(same as image path)
     img_ids = df['img_id'].to_numpy()
 
-    # the result dict(img_path->cnt)
+    # the result dict
     res = {}
 
     # check the results by image
     for item in data:
         img_path, real_coords, real_ids = item['path'], item['coords'], item['ids']
         
+        # get the attitude matrix
+        _, real_atti = cal_attitude(gcata, real_coords, real_ids, h=h, w=w, f=f)
+
         # subtract 1 offset, since row and column of matlab matrixs start with 1
         real_coords -= 1
-
-        # number of successfully identified stars
-        cnt = 0
 
         # get the image predications
         esti_ids = all_esti_ids[img_ids == img_path]
         esti_coords = all_coords[img_ids == img_path]
+        esti_probs = all_probs[img_ids == img_path]
 
         # do fov restriction
         esti_ids = cluster_by_angle(gcata, esti_ids, 2*rp)
 
-        print(
-            'Real coords:\n', real_coords,
-            '\nReal ids:\n', real_ids,
-            '\nEsti coords:\n', esti_coords,
-            '\nEsti ids:\n', esti_ids,
-        )
+        # do angular distances verification and calculate the attitude matrix
+        esti_ids, esti_atti = cal_attitude(gcata, esti_coords, esti_ids, probs=esti_probs, h=h, w=w, f=f)
 
-        # search for matched coordinates
-        for real_coord, real_id in zip(real_coords, real_ids):
-            mask = np.isclose(esti_coords, real_coord, atol=1e-1).all(axis=1)
-            idx = np.where(mask)[0]
-            if len(idx) == 0:
-                continue
-            idx = idx[0]
+        print(real_atti)
+        print(esti_atti)
 
-            assert np.allclose(esti_coords[idx], real_coord, atol=1e-1)
-            cnt += 1 if esti_ids[idx] == real_id else 0
-        
-            if DEBUG:
-                print(
-                    '\nCoord', real_coord,
-                    '\nEstimated star id', esti_ids[idx],
-                    '\nReal star id', real_id, 
-                )
-        
-        res[img_path] = cnt
+        # compare the attitude matrix to validate the identification results
+        res[img_path] = np.allclose(real_atti, esti_atti)
 
-        if False:
+        if DEBUG:
             print(
-                '------------------------------',
-                '\nMethod', method,
-                '\nImage', os.path.basename(img_path),
-                '\nNumber of stars', len(esti_ids),
-                '\nMatched stars', cnt,
+                'Image', os.path.basename(img_path),
+                '\nReal coords:\n', real_coords,
+                '\nReal ids:\n', real_ids,
+                '\nEsti coords:\n', esti_coords,
+                '\nEsti ids:\n', esti_ids,
             )
+        
+
     # number of successfully identified star image
-    cnt = sum([v >= 3 for v in res.values()])
+    cnt = sum(res.values())
     # accuracy
     acc = cnt / len(res) * 100
-    
-    # for k, v in res.items():
-    #     print(k, v)
 
     print(
-        'Number of successfully identified star image:', cnt, 
+        '----------------------'
+        '\nTEST RESULTS'
+        '\nNumber of successfully identified star image:', cnt, 
         '\nAccuracy of successfully identified star image:', acc, '%'  
     )

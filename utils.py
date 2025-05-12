@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from itertools import combinations
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from astropy import units as u
@@ -7,10 +8,71 @@ from astropy.coordinates import SkyCoord
 from skimage.metrics import structural_similarity
 
 
+def are_collinear(a: np.ndarray, b: np.ndarray, eps: float=1e-5):
+    '''
+        Determine whether vectors are collinear.
+    '''
+    assert a.shape == (3,) and b.shape == (3,)
+
+    if np.allclose(a, 0) or np.allclose(b, 0):
+        return True
+    
+    return np.linalg.norm(np.cross(a, b)) < eps
+
+
+def con_orthogonal_basis(a: np.ndarray, b: np.ndarray):
+    '''
+        Construct orthogonal basis for vector a and b.
+    '''
+    assert a.shape == (3,) and b.shape == (3,)
+    assert np.any(a != 0) and np.any(b != 0)
+    
+    x = a/np.linalg.norm(a)
+    y = np.cross(a, b)/np.linalg.norm(np.cross(a, b))
+    z = np.cross(x, y)/np.linalg.norm(np.cross(x, y))
+
+    m = np.vstack([x, y, z]).T
+    assert np.allclose(m @ m.T, np.identity(3), atol=1e-2)
+
+    return m
+    
+
+def get_attitude_matrix(v: np.ndarray, w: np.ndarray):
+    '''
+        Get the three-dimensional attitude matrix of the star sensor using Triad algorithm. Each column in v is a unit vector representing the direction of a star as measured by the star sensor, while column vector in w is expressed in celestial coordinate system. 
+    Args:
+        w: reference vectors(3*n)
+        v: view vectors(3*n)
+    Returns:
+        r: the rotation matrix(v = r*w)
+    '''
+    assert v.shape[0] == 3 and w.shape[0] == 3 and v.shape[1] == w.shape[1]
+    
+    n = v.shape[1]
+    result = [
+        (i, j) for i, j in combinations(range(n), 2) 
+        if not (are_collinear(v[:, i], v[:, j]) or 
+                are_collinear(w[:, i], w[:, j]) )
+    ]
+
+    if len(result) == 0:
+        return np.eye(3)
+
+    i, j = result[0]
+    vm = con_orthogonal_basis(v[:, i], v[:, j])
+    wm = con_orthogonal_basis(w[:, i], w[:, j])
+    r = vm @ np.linalg.inv(wm) 
+
+    assert np.allclose(vm, r@wm, rtol=0.1)
+
+    return r
+
+
 def get_angdist(points: np.ndarray):
     '''
         Get the angular distance of the points.
     '''
+    assert points.shape[1] == 3
     norm = np.linalg.norm(points, axis=1)
     angd = np.dot(points, points.T) / np.outer(norm, norm)
 
@@ -107,7 +169,7 @@ def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, 
             ax.add_patch(circle)
         if id != -1:
             row, col = min(row+5, h-10), min(col+5, w-10)
-            ax.text(col, row, str(id), fontsize=8, color='white', ha='left', va='top')
+            ax.text(col, row, str(id), fontsize=10, color='white', ha='left', va='top')
 
     plt.show()
 
