@@ -43,15 +43,15 @@ def setup(simu_params: dict, gcata_path: str):
     return sim_cfg, noise_cfg, gcata_name, gcata
 
 
-def get_rotation_matrix(v: np.ndarray, w: np.ndarray) -> np.ndarray:
+def get_rotation_matrix(w: np.ndarray, v: np.ndarray) -> np.ndarray:
     '''
-        Get the rotation matrix from v to w.
+        Get the two-dimensional rotation matrix from v to w.
     '''
-    norm_v = np.linalg.norm(v)
     norm_w = np.linalg.norm(w)
+    norm_v = np.linalg.norm(v)
 
-    cos_theta = np.dot(v, w) / (norm_v * norm_w)
-    sin_theta = np.cross(v, w) / (norm_v * norm_w)
+    cos_theta = np.dot(w, v) / (norm_v * norm_w)
+    sin_theta = np.cross(w, v) / (norm_v * norm_w)
 
     return np.array([[cos_theta, -sin_theta], [sin_theta, cos_theta]])
 
@@ -136,7 +136,7 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
             # ?due to the precision of the float, these assertions may fail
             # assert np.all((exc_cs > -rp) & (exc_cs < rp)), f"The coordinates of stars in the region is not in the range of [-rp, rp]. {exc_cs}"
             # assert np.all((exc_ds > rb) & (exc_ds < rp)), f"The distance of stars in the region is not in the range of [rb, rp]. {exc_ds}"
-            if len(exc_cs) <= max(min_num_star-1, 1):
+            if len(exc_cs) <= max(min_num_star-1, 3):
                 continue
 
             # total number of stars in the region
@@ -179,9 +179,9 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
                     # rotate stars
                     rot_ags = exc_ags - ag
 
-                    # make sure all angles stay in [-pi, pi]
+                    # make sure all angles stay in [0, 2*pi]
                     rot_ags %= 2*np.pi
-                    assert np.all((rot_ags >= 0) & (rot_ags < 2*np.pi))
+                    assert np.all((rot_ags >= 0) & (rot_ags < 2*np.pi+1e-3))
 
                     # calculate the number of stars in each sector
                     hist, _ = np.histogram(rot_ags, bins=Ns, range=(0, 2*np.pi))
@@ -234,6 +234,9 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
                     col = int((c[1]/rp+1)/2*Lg)
                     grid[row][col] = 1
                 
+                if np.sum(grid) == 0:
+                    continue
+
                 # store the 1's position of grid
                 pat['pat'] = ' '.join(map(str, np.flatnonzero(grid)))
 
@@ -249,7 +252,7 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
                 assert np.all((rot_ags >= 0) & (rot_ags < 2*np.pi))
                 
                 # generate the grid
-                grid = []
+                grid = np.zeros((Nd, Nt))
                 for d, t in zip(exc_ds, rot_ags):
                     # due to the percision of the float, the distance may be out of range
                     if d < rb or d > rp:
@@ -259,10 +262,13 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
                     i = int(d/rp*Nd)
                     j = int(t/(2*np.pi)*Nt)
                     
-                    grid.append(i*Nt+j)
                     assert(i < Nd and j < Nt), f"Grid index out of range: {i}, {j}, {Nd}, {Nt}, {exc_ds[-1]}, {ads[-1]}, "
+                    grid[i][j] = 1
                 
-                pat['pat'] = ' '.join(map(str, grid))
+                if np.sum(grid) == 0:
+                    continue
+
+                pat['pat'] = ' '.join(map(str, np.flatnonzero(grid)))
             
             else:
                 print('Invalid generation method!')
@@ -576,7 +582,7 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, raw_dir: str,
     return df_dict
 
 
-def gen_real_sample(img_paths: list[str], meth_params: dict, extr_params: dict, f: float):
+def gen_real_sample(img_paths: list[str], meth_params: dict, extr_params: dict, f: float) -> dict[str, pd.DataFrame]:
     '''
         Generate pattern match test case using real star image.
     '''
@@ -603,7 +609,7 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, extr_params: dict, 
         ids = np.full(len(coords), -1)
         cata_idxs = np.full(len(coords), -1)
 
-        print(len(coords), 'stars in the image')
+        # print(len(coords), 'stars in the image')
 
         # generate pattern for each img
         pats_dict = gen_pattern(
@@ -632,11 +638,11 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, extr_params: dict, 
 
 if __name__ == '__main__':
     # database generation
-    if False:
+    if True:
         gen_database(
             {
                 # 'grid': [0.5, 6, 100], 
-                'lpt': [0.5, 6, 50, 36]
+                'lpt': [0.5, 6, 50, 50]
             },
             {
                 'h': 1024,
