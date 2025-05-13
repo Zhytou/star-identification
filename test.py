@@ -16,14 +16,14 @@ from sklearn.metrics.pairwise import haversine_distances
 from generate import setup
 from dataset import create_dataset
 from model import create_model
-from utils import get_angdist
+from utils import get_angdist, get_attitude_matrix
 
 
 # Chinese font setting
 plt.rcParams['font.sans-serif']=['SimHei']
 plt.rcParams['axes.unicode_minus'] = False
 
-DEBUG = True
+DEBUG = False
 
 # A single image is considered to have been successfully identified only when min_cnt stars are successfully identified within it.
 # minimum count of successfully identified stars
@@ -157,7 +157,7 @@ def match_pattern(db: pd.DataFrame, pats: list[np.ndarray], size: tuple[int, int
     return np.array(esti_ids)
 
 
-def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, method: str, meth_params: list, gcata: pd.DataFrame, T: float=0, test_name: str=''):
+def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, method: str, meth_params: list, gcata: pd.DataFrame, h: int, w: int, f: float, T: float=0, test_name: str=''):
     '''
         Evaluate the pattern match method's accuracy on the provided patterns. The accuracy is calculated based on the method's ability to correctly identify the closest pattern in the database.
     Args:
@@ -177,6 +177,7 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, method: str, meth_para
 
     #! the identification step
     # patterns
+    df = df.dropna(axis=0)
     pats = df['pat'].str.split(' ').apply(lambda x: np.array(x, dtype=int)).to_numpy()
 
     # estimated star ids
@@ -190,7 +191,6 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, method: str, meth_para
             'Correct pattern', np.sum(esti_ids == real_ids),
             '\nMethod:', method,
             '\nTest name:', test_name,
-            '\n--------------'
         )
 
     # image ids
@@ -200,14 +200,36 @@ def check_pm_accuracy(db: pd.DataFrame, df: pd.DataFrame, method: str, meth_para
     for img_id in np.unique(img_ids):
         mask = img_ids == img_id
 
-        # skip if the number of stars in the image is less than min_sis_cnt
-        if np.sum(mask) < min_sis_cnt or np.sum(esti_ids[mask] != -1) < min_sis_cnt:
+        #! the early check step
+        if np.sum(np.logical_and(esti_ids[mask] == real_ids[mask], real_ids[mask] != -1)) >= min_sis_cnt:
+            res.append(True)
+            continue
+        elif np.sum(np.logical_and(esti_ids[mask] == real_ids[mask], real_ids[mask] != -1)) <= 1:
             res.append(False)
             continue
         
-        #! the verification step
-        # do fov restriction by clustering and take the biggest cluster as final result for each image
-        esti_ids[mask] = cluster_by_angle(gcata, esti_ids[mask], 2*rp)
+        #! the verification and postprocess step
+        # esti_ids[mask], att_mat = verify(
+        #     gcata, 
+        #     coords[mask], 
+        #     esti_ids[mask], 
+        #     probs=probs[mask],
+        #     fov=2*rp,
+        #     h=h,
+        #     w=w,
+        #     f=f,
+        # )
+
+        # esti_ids[mask] = postprocess(
+        #     gcata, 
+        #     coords[mask], 
+        #     esti_ids[mask], 
+        #     att_mat=att_mat,
+        #     fov=2*rp,
+        #     h=h,
+        #     w=w,
+        #     f=f,
+        # )
        
         #! the check step
         if np.sum(np.logical_and(esti_ids[mask] == real_ids[mask], real_ids[mask] != -1)) >= min_sis_cnt:
@@ -262,16 +284,20 @@ def predict(model: nn.Module, loader: DataLoader, T: float, device=torch.device(
     return np.array(labels), np.array(cis)
 
 
-def verify_angdist(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, h: int, w: int, f: int, eps: float=1e-3):
+def verify(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, fov: float, h: int, w: int, f: int, probs: np.ndarray=None, eps: float=1e-4):
     '''
-        Verify the estimated results by angular distances    
+        Verify the estimated results by angular distances and calculate the attitude matrix with the highest confidence star.  
     '''
     assert len(coords) == len(ids)
+
+    ### 1.do fov restriction by clustering and take the biggest cluster as output
+    ids = cluster_by_angle(cata, ids, fov)
+
+    ### 2.do angular distnace validation
     mask = ids != -1
     n = np.sum(mask)
-
     if n == 0:
-        return ids
+        return ids, np.eye(3)
 
     # get the view vectors
     vvs = np.full((n, 3), f)
@@ -288,20 +314,74 @@ def verify_angdist(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, h: i
     rvs = stars[['X', 'Y', 'Z']].to_numpy()
 
     # get the angular distances
-    vagd = get_angdist(vvs)
-    ragd = get_angdist(rvs)
+    vagd, ragd = get_angdist(vvs), get_angdist(rvs)
 
     # compare the angular distnaces
-    res = np.isclose(vagd, ragd, atol=eps)    
+    match = np.isclose(vagd, ragd, atol=eps)
+    scores = np.sum(match, axis=1)
 
-    # at least angular distances between three neighbor star are verified, the star is considered to be correctly identified
-    idxs = np.where(mask)[0]
-    ids[idxs[np.sum(res, axis=1) <= 3]] = -1
+    # at least the angular distance between one pair of stars is verified, the image can be considered as correctly identification    
+    # !careful! minus one to exclude itself
+    if np.max(scores)-1 < 1:
+        return np.full_like(ids, -1), np.eye(3)
+    
+    # get the star pair with the highest match
+    if probs is None:
+        idx1, idx2 = np.argsort(scores)[-2:]
+    else:
+        # if more than one maximum pair, use probability to determine
+        # in other words, sort by scores first, if same score, then use probs to sort
+        idx1, idx2 = np.lexsort((probs[mask], scores))[-2:]    
+
+    # keep results that satisfy both the idx1-th and idx2-th angular distance constraints
+    cstr = match[idx1] & match[idx2]
+    idxs = np.where(mask)[0] 
+    ids[idxs[~cstr]] = -1
+
+    ### 3.calculate the attitude matrix
+    att_mat = get_attitude_matrix(vvs[cstr].T, rvs[cstr].T)
+
+    return ids, att_mat
+
+
+def postprocess(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, att_mat: np.ndarray, fov: float, h: int, w: int, f: int, eps: float=1e-3):
+    '''
+        Use the estimated and verified ids(attitude info) to predict unidentified ids.
+    '''
+    assert len(coords) == len(ids)
+    n = len(ids)
+
+    # get the view vectors
+    vvs = np.full((n, 3), f)
+    vvs[:, 0] = coords[:, 1]-w/2
+    vvs[:, 1] = coords[:, 0]-h/2
+
+    # normalize
+    vvs = vvs/np.linalg.norm(vvs, axis=1, keepdims=True)
+
+    # get the ideal reference vectors
+    rvs = vvs @ att_mat
+    
+    # calaculate the ra and de
+    ras = np.mod(np.arctan2(rvs[:, 1], rvs[:, 0]), 2*np.pi)
+    des = np.arcsin(rvs[:, 2])
+
+    # find the most similar points
+    query = np.column_stack((ras, des))
+    refer = cata[['Ra', 'De']].to_numpy()
+    dists = haversine_distances(query, refer) # n * m
+
+    min_dists = np.min(dists, axis=1) # n
+    idxs = np.argmin(dists, axis=1) # n, each element is in [0, m-1]
+
+    # keep the outputs, if similarity is higher than threshold.
+    mask = (ids == -1) & (min_dists < eps)
+    ids[mask] = cata.loc[idxs, 'Star ID'][mask]
 
     return ids
 
 
-def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, meth_params: list, gcata: pd.DataFrame, T: float=0, batch_size: int=512, device=torch.device('cpu')):
+def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, meth_params: list, gcata: pd.DataFrame, h: int, w: int, f:float, T: float=0, batch_size: int=512, device=torch.device('cpu')):
     '''
         Evaluate the model's accuracy on the provided data loader.
     '''
@@ -317,7 +397,7 @@ def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, meth_para
 
     #! the identification step
     # get the predicted catalogue index
-    esti_idxs = predict(model, loader, T, device=device)
+    esti_idxs, probs = predict(model, loader, T, device=device)
 
     # get the guide star ids by non -1 idxs
     esti_ids = np.full_like(esti_idxs, -1)
@@ -330,19 +410,43 @@ def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, meth_para
     # get the image ids
     img_ids = df['img_id'].to_numpy()
 
+    # get the coordinates of each star
+    coords = df[['row', 'col']].to_numpy()
+
     # identify each image
     for img_id in np.unique(img_ids):
         mask = img_ids == img_id
 
-        if np.sum(mask) < min_sis_cnt or np.sum(esti_ids[mask] != -1) < min_sis_cnt:
+        # ! the early check step
+        if np.sum(np.logical_and(esti_ids[mask] == real_ids[mask], real_ids[mask] != -1)) >= min_sis_cnt:
+            res.append(True)
+            continue
+        elif np.sum(np.logical_and(esti_ids[mask] == real_ids[mask], real_ids[mask] != -1)) <= 1:
             res.append(False)
             continue
 
-        #! the verification step
-        # do fov restriction by clustering and take the biggest cluster as final result
-        # esti_ids[mask] = cluster_by_angle(gcata, esti_ids[mask], 2*rp)
+        #! the verification and postprocess step
+        # esti_ids[mask], att_mat = verify(
+        #     gcata, 
+        #     coords[mask], 
+        #     esti_ids[mask], 
+        #     probs=probs[mask],
+        #     fov=2*rp,
+        #     h=h,
+        #     w=w,
+        #     f=f,
+        # )
 
-        # do angular distnace validation
+        # esti_ids[mask] = postprocess(
+        #     gcata, 
+        #     coords[mask], 
+        #     esti_ids[mask], 
+        #     att_mat=att_mat,
+        #     fov=2*rp,
+        #     h=h,
+        #     w=w,
+        #     f=f,
+        # )
 
         #! the check step
         if np.sum(np.logical_and(esti_ids[mask] == real_ids[mask], real_ids[mask] != -1)) >= min_sis_cnt:
@@ -447,6 +551,14 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
     if meth_params == {}:
         return
 
+    # set threshold
+    Ts = {
+        'grid': 3.2,
+        'lpt': 2.2,
+        'lpt_nn': 0.5,
+        'rac_nn': 0.5,
+    }
+
     # setup
     sim_cfg, noise_cfg, gcata_name, gcata = setup(simu_params, gcata_path)
     num_class = len(gcata)
@@ -461,32 +573,48 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
     for test_type in test_params:
         test_names.extend(f'{test_type}{val}' for val in test_params[test_type])
 
-    print('Test')
-    print('------------------')
-    print('Simulation config:', sim_cfg)
-    print('Test names:', test_names)
+    print(
+        'Test',
+        '\n------------------------------',
+        '\nTEST INFO',
+        '\nNoise config:', noise_cfg,
+        '\nTest name:', test_names,
+        '\n------------------------------',
+    )
 
     # add each test task to the threadpool
     for method in meth_params:
 
         # generation config for each method
         gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
-        print('Method:', method, '\nGeneration config:', gen_cfg)
+        
+        # print info
+        print(
+            'METHOD INFO',
+            '\nMethod:', method, 
+            '\nSimulation config:', sim_cfg,
+            '\nGeneration config:', gen_cfg,
+            '\n------------------------------',
+        )
         
         if method in ['grid', 'lpt']:
             # load the database
-            db = pd.read_csv(os.path.join('database', sim_cfg, method, gen_cfg, noise_cfg, 'db.csv'))
-        
+            #? always use 0_0_0_0 db to test
+            db = pd.read_csv(os.path.join('database', sim_cfg, method, gen_cfg, '0_0_0_0', 'db.csv'))
+                                    
             # database information
             db_info = np.sum(db.notna().to_numpy(), axis=1)
             max_cnt, min_cnt, avg_cnt = np.max(db_info), np.min(db_info), np.sum(db_info)/len(db)
+
             print(
-                'Database information:',
+                'DATABASE INFO',
+                '\nThreshold:', Ts[method],
                 '\nSize of database:', len(db),
                 '\nTheoretical size of database:', len(gcata),
                 '\nMax count of 1 in pattern matrix', max_cnt, 
                 '\nMin count of 1 in pattern matrix', min_cnt, 
-                '\nAvg count of 1 in pattern matrix', avg_cnt
+                '\nAvg count of 1 in pattern matrix', avg_cnt,
+                '\n------------------------------',
             )
         elif method in ['rac_nn', 'lpt_nn']:
             # device
@@ -499,8 +627,11 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
             model.load_state_dict(torch.load(os.path.join('model', sim_cfg, method, gen_cfg, model_types[method], 'best_model.pth')))
 
             print(
-                'Model type:', model_types[method],
-                'Device:', device
+                'MODEL INFO'
+                '\nThreshold:', Ts[method],
+                '\nModel type:', model_types[method],
+                '\nDevice:', device,
+                '\n------------------------------',
             )
         else:
             print('Wrong Method!')
@@ -520,7 +651,10 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
                     method,
                     meth_params[method],
                     gcata=gcata,
-                    T=0, 
+                    h=simu_params['h'],
+                    w=simu_params['w'],
+                    f=simu_params['f'],
+                    T=Ts[method], 
                     test_name=test_name
                 )
             else:
@@ -531,7 +665,10 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
                     method,
                     meth_params[method],
                     gcata=gcata,
-                    T=0,
+                    h=simu_params['h'],
+                    w=simu_params['w'],
+                    f=simu_params['f'],
+                    T=Ts[method],
                     device=device,
                 )
     
@@ -561,41 +698,66 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
 
 
 if __name__ == '__main__':
-    res = do_test(
-        {
-            # 'lpt_nn': [0.5, 6, 55, 0],
-            # 'lpt_nn': [0.5, 6, 55, 1],
-            # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 0],
-            # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 1],
-            # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
-            # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 1],
-            'grid': [0.5, 6, 100], 
-            'lpt': [0.5, 6, 50, 36]
-        },
-        {
-            'h': 1024,
-            'w': 1282,
-            'fovy': 12,
-            'fovx': 14.9925,
-            'limit_mag': 6,
-            'sigma_pos': 0,
-            'sigma_mag': 0,
-            'num_fs': 0,
-            'num_ms': 0,
-            'rot': 1
-        },
-        {
-            'lpt_nn': 'fnn',
-            'rac_nn': 'cnn2',
-        },
-        {
-            # 'pos': [0, 0.5, 1, 1.5, 2],
-            'mag': [0, 0.1, 0.2, 0.3, 0.4],
-            # 'fs': [0, 1, 2, 3, 4],
-            # 'ms': [0, 1, 2, 3, 4]
-        },
-        './catalogue/sao6.0_d0.03_12_15.csv',
-    )
+    if True:
+        res = do_test(
+            {
+                'lpt_nn': [0.5, 6, 55, 0],
+                # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
+                # 'grid': [0.5, 6, 100], 
+                # 'lpt': [0.5, 6, 50, 36]
+            },
+            {
+                'h': 1024,
+                'w': 1282,
+                'fovy': 12,
+                'fovx': 14.9925,
+                'limit_mag': 6,
+                'sigma_pos': 0.5,
+                'sigma_mag': 0,
+                'num_fs': 0,
+                'num_ms': 0,
+                'rot': 1
+            },
+            {
+                'lpt_nn': 'fnn',
+                'rac_nn': 'cnn2',
+            },
+            {
+                # 'pos': [0, 0.5, 1, 1.5, 2],
+                'mag': [0, 0.1, 0.2, 0.3, 0.4],
+                # 'fs': [0, 1, 2, 3, 4],
+                # 'ms': [0, 1, 2, 3, 4]
+            },
+            './catalogue/sao6.0_d0.03_12_15.csv',
+        )
+
+    if False:
+        res = do_test(
+            {
+                'rac_nn': [0.5, 7.7, [35, 75, 115], 18, 3, 0],
+            },
+            {
+                'h': 1040,
+                'w': 1288,
+                'fovx': 18.97205141393946,
+                'fovy': 15.36777053565561,
+                'limit_mag': 5.5,
+                'sigma_pos': 3,
+                'sigma_mag': 0,
+                'num_fs': 0,
+                'num_ms': 0,
+                'rot': 1
+            },
+            {
+                'rac_nn': 'cnn2',
+            },
+            {
+                'pos': [0, 0.5, 1, 1.5, 2], 
+                'mag': [0, 0.1, 0.2, 0.3, 0.4], 
+                'fs': [0, 1, 2, 3, 4],
+            },
+            gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
+        )
 
     print(res)
     # draw_results(res)
