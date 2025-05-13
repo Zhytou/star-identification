@@ -37,17 +37,19 @@ def agg_dataset(meth_params: dict, simu_params: dict, gcata_path: str, offset: f
     if meth_params == {}:
         return 
 
-    print('Dataset Generation')
-    print('------------------')
-    print('Method parameters:', meth_params)
-    print('Simulation parameters:', simu_params)
-    print('Guide star catalogue:', gcata_path)
-    print('Offset:', offset)
-    print('Number of rolls:', num_roll)
-    print('----------------------')
-
     # setup gcata and several configs
     sim_cfg, noise_cfg, gcata_name, gcata = setup(simu_params, gcata_path)
+
+    print(
+        'Dataset Generation',
+        '\n------------------',
+        '\nMethod parameters:', meth_params,
+        '\nSimulation config:', sim_cfg,
+        '\nSimulation config:', noise_cfg,
+        '\nGuide star catalogue:', gcata_name,
+        '\nOffset:', offset,
+        '\nNumber of rolls:', num_roll
+    )
 
     pool = ThreadPoolExecutor(max_workers=num_thd)
     tasks = []
@@ -122,13 +124,15 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
     # setup gcata and several configs
     sim_cfg, noise_cfg, gcata_name, gcata = setup(simu_params, gcata_path)
 
-    print('Test Image Generation')
-    print('----------------------')
-    print('Method Parameters:', meth_params)
-    print('Simulation Parameters:', simu_params)
-    print('Default noise config:', noise_cfg)
-    print('Number of test images expected to be generated:', num_img)
-    print('----------------------')
+    print(
+        'Test Image Generation',
+        '\n----------------------',
+        '\nMethod Parameters:', meth_params,
+        '\nSimulation config:', sim_cfg,
+        '\nNoise config:', noise_cfg,
+        '\nGuide star catalogue:', gcata_name,
+        '\nNumber of test images expected to be generated:', num_img,
+    )
 
     # use thread pool
     pool = ThreadPoolExecutor(max_workers=num_thd)
@@ -281,11 +285,8 @@ if __name__ == '__main__':
     if False:
         agg_dataset(
             meth_params={
-                # 'lpt_nn': [0.5, 6, 55, 0],
-                'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 0],
-                # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 1],
+                'lpt_nn': [0.5, 6, 55, 0],
                 # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
-                # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 1],
             },
             simu_params={
                 'h': 1024,
@@ -294,18 +295,19 @@ if __name__ == '__main__':
                 'fovx': 14.9925,
                 'limit_mag': 6,
                 'sigma_pos': 0,
-                'sigma_mag': 0,
-                'num_fs': 5,
+                'sigma_mag': 0.5,
+                'num_fs': 0,
                 'num_ms': 0,
                 'rot': 1
             },
             gcata_path='catalogue/sao6.0_d0.03_12_15.csv',
-            offset=3,
+            offset=4,
             num_roll=10,
             num_thd=20
         )
 
     if False:
+        # model for picdata
         agg_dataset(
             meth_params={
                 'rac_nn': [0.1, 4.5, [25, 55, 85], 18, 3, 0],
@@ -329,20 +331,21 @@ if __name__ == '__main__':
         )
 
     if False:
+        # model for xie
         agg_dataset(
             meth_params={
-                'rac_nn': [0.4, 7.5, [25, 55, 85], 18, 3, 0],
+                'rac_nn': [0.1, 5.7, [25, 55, 85], 18, 3, 0],
             },
             simu_params={
                 'h': 1024,
-                'w': 1288,
-                'fovx': 18.97205141393946,
-                'fovy': 15.13410397498426,
+                'w': 1280,
+                'fovx': 14.37611786938476,
+                'fovy': 11.522621164995503,
                 'limit_mag': 5.5,
                 'sigma_pos': 0,
                 'sigma_mag': 0,
-                'num_fs': 0,
-                'num_ms': 5,
+                'num_fs': 5,
+                'num_ms': 0,
                 'rot': 1
             },
             gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
@@ -353,15 +356,15 @@ if __name__ == '__main__':
     
     if True:
         agg_sample(
-            800, 
+            1000, 
             {
                 # 'grid': [0.5, 6, 100],
-                # 'lpt': [0.5, 6, 50, 36],
+                'lpt': [0.5, 6, 50, 50],
                 # 'lpt_nn': [0.5, 6, 55, 0],
                 # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 0],
                 # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 1],
                 # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
-                'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 1],
+                # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 1],
             }, 
             {
                 'h': 1024,
@@ -370,16 +373,16 @@ if __name__ == '__main__':
                 'fovx': 14.9925,
                 'limit_mag': 6,
                 'sigma_pos': 0,
-                'sigma_mag': 0,
+                'sigma_mag': 0.1,
                 'num_fs': 0,
                 'num_ms': 0,
                 'rot': 1
             },
             {
                 'pos': [0, 0.5, 1, 1.5, 2], 
-                'mag': [0, 0.1, 0.2, 0.3, 0.4], 
-                'fs': [0, 1, 2, 3, 4],
-                'ms': [0, 1, 2, 3, 4]
+                # 'mag': [0, 0.1, 0.2, 0.3, 0.4], 
+                # 'fs': [0, 1, 2, 3, 4],
+                # 'ms': [0, 1, 2, 3, 4]
             },
             './catalogue/sao6.0_d0.03_12_15.csv',
         )
@@ -387,7 +390,9 @@ if __name__ == '__main__':
     if False:
         # dir = 'dataset/1024_1280_9.129887427521604_11.398822251559647_5.5_1/rac_nn/sao5.5_d0.03_9_10_0.1_4.5_[25, 55, 85]_18_3_0'
         # dir = 'dataset/1024_1280_9.129887427521604_11.398822251559647_5.5_1/rac_nn/sao5.5_d0.03_9_10_0.1_4.5_[15, 35, 55]_18_3_0'
-        
-        # dir = 'dataset/1024_1282_12_14.9925_6_1/lpt_nn/sao6.0_d0.03_12_15_0.5_6_55'
-        dir = 'dataset/1024_1282_12_14.9925_6_1/rac_nn/sao6.0_d0.03_12_15_0.5_6_[15, 35, 55]_18_3_0'
+        # dir = 'dataset/1024_1280_11.522621164995503_14.37611786938476_5.5_1/rac_nn/sao5.5_d0.03_9_10_0.1_5.7_[25, 55, 85]_18_3_0'
+        dir = 'dataset/1024_1282_12_14.9925_6_1/lpt_nn/sao6.0_d0.03_12_15_0.5_6_55_0'
+        # dir = 'dataset/1024_1282_12_14.9925_6_1/rac_nn/sao6.0_d0.03_12_15_0.5_6_[15, 35, 55]_18_3_0'
+        # dir = 'dataset/1024_1282_12_14.9925_6_1/rac_nn/sao6.0_d0.03_12_15_0.5_6_[25, 55, 85]_18_3_0'
+        # dir = 'dataset/1040_1288_15.36777053565561_18.97205141393946_5.5_1/rac_nn/sao5.5_d0.03_9_10_0.5_7.7_[35, 75, 115]_18_3_0'
         merge_dataset(dir, 10)
