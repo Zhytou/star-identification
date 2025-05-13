@@ -100,20 +100,32 @@ class CNN2(nn.Module):
         super(CNN2, self).__init__()
         
         self.conv = nn.Sequential(
-            # output batch_size*64*num_feat//2
-            ConvBlock(1, 32),
+            ConvBlock(1, 256),
             
-            # output batch_size*128*num_feat//4
-            ConvBlock(32, 128),
+            ConvBlock(256, 256),
             
-            # output batch_size*512*num_feat//8
-            ConvBlock(128, 512),
+            ConvBlock(256, 256),
+
+            ConvBlock(256, 256),
             
-            nn.Conv1d(512, num_class, kernel_size=1),
+            nn.Conv1d(256, 512, kernel_size=1),
 
             # global avg pool
-            # output batch_size*512*1
-            nn.AdaptiveAvgPool1d(output_size=1)
+            nn.AdaptiveAvgPool1d(output_size=1),
+        )
+
+        self.fc = nn.Sequential(
+            nn.Linear(512, 1024),
+            nn.ReLU(),
+            nn.BatchNorm1d(1024),
+            nn.Dropout(0.4),
+
+            nn.Linear(1024, 2048),
+            nn.ReLU(),
+            nn.BatchNorm1d(2048),
+            nn.Dropout(0.4),
+
+            nn.Linear(2048, num_class),
         )
 
     def forward(self, x):
@@ -123,7 +135,8 @@ class CNN2(nn.Module):
         x = x.unsqueeze(1)
 
         # apply the convolutional layers and remove the last dimension
-        y = self.conv(x).squeeze(-1)
+        # then apply the fully-connected layers
+        y = self.fc(self.conv(x).squeeze(-1))
 
         if DEBUG:
             print(
@@ -184,6 +197,55 @@ class CNN3(nn.Module):
         return y
         
 
+class CNN4(nn.Module):
+    '''
+        The one dimension convolutional neural network model.
+    '''
+    def __init__(self, num_feat: int, num_class: int):
+        '''
+            input_dim: the dimension of the features
+            output_dim: the number of the class(guide star)
+        '''
+
+        super(CNN4, self).__init__()
+        
+        self.conv = nn.Sequential(
+            ConvBlock(1, 64),
+            
+            ConvBlock(64, 64),
+            
+            ConvBlock(64, 64),
+            
+            ConvBlock(64, 64),
+
+            ConvBlock(64, 64),
+
+            nn.Conv1d(64, num_class, kernel_size=1),
+
+            # global avg pool
+            # output batch_size*256*1
+            nn.AdaptiveAvgPool1d(output_size=1)
+        )
+
+    def forward(self, x):
+        # x is composed of two input: raidal features and cyclic features
+        # convert x.shape from [batch_size, num_ring+num_sector*num_neighbor]
+        # into [batch_size, 1, num_ring+num_sector*num_neighbor]
+        x = x.unsqueeze(1)
+
+        # apply the convolutional layers and remove the last dimension
+        y = self.conv(x).squeeze(-1)
+
+        if DEBUG:
+            print(
+                'RAC_CNN',
+                '\nX shape', x.shape,
+                '\nY shape', y.shape,
+            )
+
+        return y
+
+
 class ConvBlock(nn.Module):
     '''
         The block for rac 1dcnn.
@@ -232,14 +294,14 @@ class ConvBlock(nn.Module):
         return y
 
 
-def create_model(method: str, model_type: str, meth_params: list, num_class: int):
+def create_model(method: str, model_type: str, meth_params: list, num_class: int) -> nn.Module:
     '''
         Create the model for different method.
     Args:
         method: the method name
         meth_params: the parameters for the method
-            rac_nn: [Rb, Rp, [num_ring1, num_ring2, ...], num_sector, num_neighbor]
-            lpt_nn: [Rb, Rp, num_dist]
+            rac_nn: [Rb, Rp, [num_ring1, num_ring2, ...], num_sector, num_neighbor, use_prob]
+            lpt_nn: [Rb, Rp, num_dist, use_prob]
         num_class: the number of classes
     Returns:
         model: the model
@@ -249,6 +311,7 @@ def create_model(method: str, model_type: str, meth_params: list, num_class: int
         'cnn1': CNN1,
         'cnn2': CNN2,
         'cnn3': CNN3,
+        'cnn4': CNN4,
     }
 
     method_mapping = {
@@ -272,5 +335,5 @@ if __name__ == '__main__':
     x = torch.randn(batch_size, seq_length)
 
     # conv_block = ConvBlock()
-    model = CNN3(seq_length, 10)
+    model = CNN2(seq_length, 10)
     output = model(x)
