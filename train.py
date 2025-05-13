@@ -4,7 +4,7 @@ import pandas as pd
 import torch
 import torch.nn as nn, torch.optim as optim
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 
 from generate import setup
 from dataset import create_dataset
@@ -91,7 +91,7 @@ def train(model: nn.Module, optimizer: optim.Optimizer, num_epochs: int, loader:
         acc = check_accuracy(model, loader, device)
         print(f'Epoch: {epoch+1}, Loss: {epoch_loss}, Train Accuracy: {acc}%')
         
-        ls.append(loss.item())
+        ls.append(epoch_loss)
         accs.append(acc)
 
     return ls, accs
@@ -106,30 +106,41 @@ def do_train(meth_params: dict, simu_params: dict, model_types: dict, gcata_path
     sim_cfg, _, gcata_name, gcata = setup(simu_params, gcata_path)
     num_class = len(gcata)
 
-    # print the training setting
-    print('Train')
-    print('-----------')
-    print('Batch size:', batch_size, 'Num epochs:', num_epochs, 'Learning rate:', learning_rate)
-    print('Using device:', device)
-    print('Number of class', num_class)
-    print('Simulation config:', sim_cfg)
-
     for method in meth_params:
         # generation config for each method
         gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
-        print('Method:', method, '\nGenerating config:', gen_cfg)
+
+        # load train data
+        df = pd.read_csv(os.path.join('dataset', sim_cfg, method, gen_cfg, 'labels.csv'))
+
+        # print the training setting
+        print(
+            'Train',
+            '\n------------------------------',
+            '\nMETHOD INFO',
+            '\nMethod:', method, 
+            '\nSimulation config:', sim_cfg,
+            '\nGeneration config:', gen_cfg,
+            '\n------------------------------',
+            '\nTRAIN INFO',
+            '\nModel type:', model_types[method],
+            '\nDataset size:', len(df),
+            '\nNumber of class', num_class,
+            '\nBatch size:', batch_size, 
+            '\nNum epochs:', num_epochs, 
+            '\nLearning rate:', learning_rate,
+            '\nUsing device:', device,
+            '\n------------------------------',
+        )
 
         # define model
         model = create_model(method, model_types[method], meth_params[method], num_class)
 
         # define dataset
-        df = pd.read_csv(os.path.join('dataset', sim_cfg, method, gen_cfg, 'labels.csv'))
         dataset = create_dataset(method, df, meth_params[method])
 
         # define data loaders
         loader = DataLoader(dataset, batch_size, shuffle=True)
-        # print datasets' sizes
-        print('Dataset size:', len(df))
 
         # check model directory exsitence
         model_dir = os.path.join('model', sim_cfg, method, gen_cfg, model_types[method])
@@ -148,7 +159,7 @@ def do_train(meth_params: dict, simu_params: dict, model_types: dict, gcata_path
         # save the best model and training log
         torch.save(model.state_dict(), model_path)
         with open(os.path.join(model_dir, 'train.log'), 'a+') as f:
-            f.write(f'Loss: {ls}\nAccuracy: {accs}\n')
+            f.write(f'Batch size: {batch_size}\nNumber of epochs: {num_epochs}\nLearning rate: {learning_rate}\nLoss: {ls}\nAccuracy: {accs}\n')
     
 
 if __name__ == '__main__':
@@ -156,7 +167,11 @@ if __name__ == '__main__':
         do_train(
             {
                 'lpt_nn': [0.5, 6, 55, 0],
+                # 'lpt_nn': [0.5, 6, 55, 1],
                 # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 0],
+                # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 1],
+                # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
+                # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 1],
             },
             {
                 'h': 1024,
@@ -168,18 +183,18 @@ if __name__ == '__main__':
             },
             {
                 'lpt_nn': 'fnn',
-                'rac_nn': 'cnn',
+                'rac_nn': 'cnn2',
             },
             gcata_path='catalogue/sao6.0_d0.03_12_15.csv',
-            num_epochs=1,
+            num_epochs=30,
             batch_size=512,
-            learning_rate=0.005
+            learning_rate=0.01
         )
 
     if False:
         do_train(
             {
-                'rac_1dcnn': [0.1, 4.5, [10, 25, 40, 55], 18, 3],
+                'rac_nn': [0.1, 4.5, [25, 55, 85], 18, 3, 0],
             },
             {
                 'h': 1024,
@@ -189,8 +204,55 @@ if __name__ == '__main__':
                 'limit_mag': 5.5,
                 'rot': 1
             },
+            {
+                'rac_nn': 'cnn3'
+            },
             gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
-            num_epochs=100,
+            num_epochs=10,
+            batch_size=512,
+            learning_rate=0.00001
+        )
+    
+    if False:
+        do_train(
+            {
+                'rac_nn': [0.1, 5.7, [25, 55, 85], 18, 3, 0],
+            },
+            {
+                'h': 1024,
+                'w': 1280,
+                'fovy': 11.522621164995503,
+                'fovx': 14.37611786938476,
+                'limit_mag': 5.5,
+                'rot': 1
+            },
+            {
+                'rac_nn': 'cnn3'
+            },
+            gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
+            num_epochs=30,
             batch_size=512,
             learning_rate=0.01
+        )
+
+    if False:
+        do_train(
+            {
+                'rac_nn': [0.5, 7.7, [35, 75, 115], 18, 3, 0],
+            },
+            {
+                'h': 1040,
+                'w': 1288,
+                'fovx': 18.97205141393946,
+                'fovy': 15.36777053565561,
+                'limit_mag': 5.5,
+                'rot': 1
+            },
+            {
+                'rac_nn': 'cnn3',
+            },
+            gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
+            num_epochs=10,
+            batch_size=512,
+            learning_rate=0.005
         )
