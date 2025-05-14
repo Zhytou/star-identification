@@ -603,6 +603,9 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, extr_params: dict, 
             seg_meth=extr_params['seg'],
             cen_meth=extr_params['cen'],
             pixel_limit=extr_params['pixel'],
+            T1=extr_params.get('T1', None),
+            T2=extr_params.get('T2', None),
+            T3=extr_params.get('T3', None),
         ))
 
         # set all star ids and catalogue indexs to -1, since unknown for real image

@@ -165,7 +165,7 @@ def get_seed_coords(img: np.ndarray, wind_size: int=5, T1: int=0, T2: int=-np.in
     # calculate the determinant of the Hessian matrix with offset
     doh_results = doh_operator(neighborhoods[coords[:, 0], coords[:, 1]])
 
-    # print(np.sort(doh_results)[::-1][:30])
+    # print(np.sort(doh_results)[::-1][:20])
 
     # get the local maxima values for bright star
     local_max_values = img[coords[:, 0], coords[:, 1]]
@@ -419,7 +419,7 @@ def find_ranges(nums, threshold=0) -> list[tuple[int, int]]:
     return ranges
 
 
-def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-1, pixel_limit: int=5) -> list[tuple[np.ndarray, np.ndarray]]:
+def group_star(img: np.ndarray, method: str, T0: int, T1: float=None, T2: float=None, T3: float=None, connectivity: int=-1, pixel_limit: int=5) -> list[tuple[np.ndarray, np.ndarray]]:
     """
         Group the facula(potential star) in the image.
     Args:
@@ -429,21 +429,26 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=-
             CCL Connected Components Label
             RLC Run Length Code Connected Components Label
             CPL Cross Project Label(https://www.sciengine.com/CJSS/doi/10.11728/cjss2006.03.209)
-        threshold: the threshold used to segment the image
+        T0: the threshold used to segment the image
+        T1/T2/T3: optional threshold used in RG segmentation method
         connectivity: method of connectivity
-        pixel_limit: the minimum number of pixels for a group
+        pixel_limit: the minimum number of connected pixels in the group
     Returns:
         group_coords: the coordinates of the grouped pixels(which are the potential stars)
         num_group: the number of the grouped
     """
     binary_img = np.zeros_like(img)
-    binary_img[img >= threshold] = 1
+    binary_img[img >= T0] = 1
 
     group_coords = []
 
     # label connected regions of the same value in the binary image
     if method == 'RG':
-        seeds = get_seed_coords(img, 3, T1=threshold, T2=0.0, T3=threshold*1.2)
+        T1 = T0 if T1 is None else T1
+        T2 = 2*T0**2 if T2 is None else T2
+        T3 = T0*1.2 if T3 is None else T3
+        # print(T0, T1, T2, T3)
+        seeds = get_seed_coords(img, 3, T1=T1, T2=T2, T3=T3)
         for seed in seeds:
             rows, cols = region_grow(binary_img, seed, connectivity)
             if len(rows) < pixel_limit and len(cols) < pixel_limit:

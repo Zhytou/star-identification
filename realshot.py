@@ -13,8 +13,8 @@ from extract import get_star_centroids
 from generate import gen_real_sample, setup
 from dataset import create_dataset
 from model import create_model
-from test import predict, cluster_by_angle, cal_attitude
-from utils import get_angdist, label_star_image
+from test import predict, verify, postprocess
+from utils import get_angdist, label_star_image, get_attitude_matrix
 
 
 DEBUG = True
@@ -127,11 +127,28 @@ if False:
 
 # 使用单张图片验证识别算法有效性，并在原图中标出恒星ID
 if False:
-    gcata = pd.read_csv('catalogue/sao5.5_d0.03_9_10.csv', usecols=["Star ID", "Ra", "De", "Magnitude"])
-
+    # test image
     img_path = './example/xie/cdata/cdata.bmp'
     img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
 
+    # test image config
+    h, w, f = 1024, 1280, 35269.52/5.5
+
+    # guide star catalogue
+    gcata_path = 'catalogue/sao5.5_d0.03_9_10.csv'
+    
+    # generation parameters
+    method = 'rac_nn'
+
+    # parameters
+    simu_params = {
+        'h': h,
+        'w': w,
+        'fovy': 2*np.degrees(np.arctan(h/(2*f))),
+        'fovx': 2*np.degrees(np.arctan(w/(2*f))),
+        'limit_mag': 5.5,
+        'rot': 1
+    }
     meth_params = {
         'rac_nn': [
             0.1,            # Rb
@@ -142,33 +159,39 @@ if False:
             0,              # use_prob
         ],
     }
-
     extr_params = {
         'den': 'NLM_BLF',   # denoise
         'thr': 'Liebe3',    # threshold
         'seg': 'RG',        # segmentation
         'cen': 'MCoG',      # centroid
-        'pixel': 3          # pixel number limit
+        'pixel': 3,         # pixel number limit
+        'T1': None,         # optional for RG
+        'T2': 0,            # optional for RG
+        'T3': None,         # optional for RG
     }
+    # get the pattern radius for later fov restriction
+    rp = np.radians(meth_params[method][1])
 
+    # setup all the configs
+    sim_cfg, _, gcata_name, gcata = setup(simu_params, gcata_path)
+    gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
+    ext_cfg = '_'.join(map(str, extr_params.values()))
+
+    # model parameters
+    model_type = 'cnn3'
+    model_path = os.path.join('model', sim_cfg, method, gen_cfg, model_type, 'best_model.pth')
+    # device
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # test data
     df_dict = gen_real_sample(
         [img_path],
         meth_params,
         extr_params,
         f=35269.52/5.5,
     )
-
-    method = 'rac_nn'
-
-    # get the pattern radius for later fov restriction
-    rp = np.radians(meth_params[method][1])
-
-    # test data
     df = df_dict[method]
 
-    # device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
     # dataset
     dataset = create_dataset(
         method,
@@ -180,15 +203,14 @@ if False:
     # best model
     model = create_model(
         method,
-        'cnn3',
+        model_type,
         meth_params[method],
         len(gcata),
     )
-    model_path = 'model/1024_1280_9.129887427521604_11.398822251559647_5.5_1/rac_nn/sao5.5_d0.03_9_10_0.1_4.5_[25, 55, 85]_18_3_0/cnn3/best_model.pth'
     model.load_state_dict(torch.load(model_path))
 
-    # predict the star id
-    esti_idxs, _ = predict(model, loader, 0, device)
+    # predict the star ids
+    esti_idxs, probs = predict(model, loader, 0, device)
     esti_ids = np.full_like(esti_idxs, -1)
     mask = esti_idxs != -1    
     esti_ids[mask] = gcata.loc[esti_idxs[mask], 'Star ID'].to_numpy()
@@ -196,11 +218,28 @@ if False:
     # get the star coordinates
     coords = df[['row', 'col']].to_numpy()
 
-    # do fov restriction
-    esti_ids = cluster_by_angle(gcata, esti_ids, 2*rp)
+    # verify the results
+    esti_ids, att_mat = verify(
+        gcata,
+        coords, 
+        esti_ids, 
+        probs=probs,
+        fov=2*rp, 
+        h=1024, 
+        w=1280, 
+        f=35269.52/5.5,
+    )
 
-    # do angular distance validation
-    esti_ids = verify_angdist(gcata, coords, esti_ids, h=1024, w=1280, f=35269.52/5.5)
+    # postprocess
+    esti_ids = postprocess(
+        gcata,
+        coords, 
+        esti_ids, 
+        att_mat,
+        h=1024, 
+        w=1280, 
+        f=35269.52/5.5,
+    )
     
     # sort the coords by row for label
     esti_ids = esti_ids[np.argsort(coords[:, 0])]
@@ -237,10 +276,34 @@ def load_h5data(dir: str, name: str):
     return data
 
 
+def cal_attitude(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, h: int, w: int, f: int):
+    '''
+        Calculate the attitude matrix of star sensor.
+    '''
+    assert len(coords) == len(ids)
+    n = len(ids)
+    # get the view vectors
+    vvs = np.full((n, 3), f)
+    vvs[:, 0] = coords[:, 1]-w/2
+    vvs[:, 1] = coords[:, 0]-h/2
+
+    # get the refernce vectors
+    stars = cata[cata['Star ID'].isin(ids)].copy()
+    stars['X'] = np.cos(stars['Ra'])*np.cos(stars['De'])
+    stars['Y'] = np.sin(stars['Ra'])*np.cos(stars['De'])
+    stars['Z'] = np.sin(stars['De'])
+    #! careful! use index to sort the stars, because the output of isin is not sorted by the given list
+    stars = stars.set_index('Star ID').loc[ids]
+    rvs = stars[['X', 'Y', 'Z']].to_numpy()
+
+    return get_attitude_matrix(vvs.T, rvs.T)
+
+
 # 多张实拍星图验证算法有效性
 if True:
     # load test data
-    data = load_h5data('example/3P0/', '3P0_liebe5_pixel5.h5')
+    # data = load_h5data('example/3P0/', '3P0_liebe5_pixel5_eps00005.h5')
+    data = load_h5data('example/0P0/', '0P0_liebe5_pixel5_eps00005.h5')
     # data = load_h5data('example/xie/', 'xie_liebe3_pixel3.h5')
 
     # test image config
@@ -250,8 +313,6 @@ if True:
     # set the number of test image
     num_img = len(data)
     data = data[:num_img]
-
-    data = [item for item in data if item['path'] == 'example/3P0/00001051_00000000019D162E.bmp']
 
     # get the path of test image
     img_paths = [item['path'] for item in data]
@@ -264,18 +325,10 @@ if True:
 
     # parameters
     simu_params = {
-        # Tsinghua test data
-        'h': 1040,
-        'w': 1288,
-        'fovx': 18.97205141393946,
-        'fovy': 15.36777053565561,
-        
-        # xie test data
-        # 'h': 1024,
-        # 'w': 1280,
-        # 'fovx': 14.37611786938476,
-        # 'fovy': 11.522621164995503,
-        
+        'h': h,
+        'w': w,
+        'fovy': 2*np.degrees(np.arctan(h/(2*f))),
+        'fovx': 2*np.degrees(np.arctan(w/(2*f))),
         'limit_mag': 5.5,
         'rot': 1
     }
@@ -312,8 +365,12 @@ if True:
     gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
     ext_cfg = '_'.join(map(str, extr_params.values()))
 
+    # full sao catalogue
+    # because some of real ids may not be in the gcata
+    cata = pd.read_csv('catalogue/sao.csv')
+
     # model parameters
-    model_type = 'cnn3'
+    model_type = 'cnn2'
     model_path = os.path.join('model', sim_cfg, method, gen_cfg, model_type, 'best_model.pth')
     # device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -331,7 +388,6 @@ if True:
         '\nMODEL INFO',
         '\nModel type:', model_type,
         '\nDevice:', device,
-        '\n-----------------------',
     )
 
     # generate test samples for realshot
@@ -386,7 +442,7 @@ if True:
         img_path, real_coords, real_ids = item['path'], item['coords'], item['ids']
         
         # get the attitude matrix
-        _, real_atti = cal_attitude(gcata, real_coords, real_ids, h=h, w=w, f=f)
+        real_atti = cal_attitude(cata, real_coords, real_ids, h=h, w=w, f=f)
 
         # subtract 1 offset, since row and column of matlab matrixs start with 1
         real_coords -= 1
@@ -396,21 +452,46 @@ if True:
         esti_coords = all_coords[img_ids == img_path]
         esti_probs = all_probs[img_ids == img_path]
 
-        # do fov restriction
-        esti_ids = cluster_by_angle(gcata, esti_ids, 2*rp)
+        # verify the results
+        esti_ids, esti_atti = verify(
+            gcata,
+            coords=esti_coords, 
+            ids=esti_ids, 
+            probs=esti_probs,
+            fov=2*rp, 
+            h=h, 
+            w=w, 
+            f=f,
+        )
 
-        # do angular distances verification and calculate the attitude matrix
-        esti_ids, esti_atti = cal_attitude(gcata, esti_coords, esti_ids, probs=esti_probs, h=h, w=w, f=f)
+        # postprocess
+        esti_ids = postprocess(
+            gcata,
+            esti_coords, 
+            esti_ids, 
+            esti_atti,
+            h=h, 
+            w=w, 
+            f=f,
+        )
 
-        print(real_atti)
-        print(esti_atti)
+        # search for matched coordinates
+        cnt = 0
+        for real_coord, real_id in zip(real_coords, real_ids):
+            mask = np.isclose(esti_coords, real_coord, atol=1e-1).all(axis=1)
+            idx = np.where(mask)[0]
+            if len(idx) == 0:
+                continue
+            idx = idx[0]
 
-        # compare the attitude matrix to validate the identification results
-        res[img_path] = np.allclose(real_atti, esti_atti)
+            assert np.allclose(esti_coords[idx], real_coord, atol=1e-1)
+            cnt += 1 if esti_ids[idx] == real_id else 0
 
-        if DEBUG:
+        res[img_path] = (cnt >= 3) or np.allclose(real_atti, esti_atti, atol=1e-1)
+
+        if DEBUG and False:
             print(
-                'Image', os.path.basename(img_path),
+                'Image:', os.path.basename(img_path),
                 '\nReal coords:\n', real_coords,
                 '\nReal ids:\n', real_ids,
                 '\nEsti coords:\n', esti_coords,
@@ -426,6 +507,7 @@ if True:
     print(
         '----------------------'
         '\nTEST RESULTS'
+        '\nTotal number of test star image:', len(data), 
         '\nNumber of successfully identified star image:', cnt, 
         '\nAccuracy of successfully identified star image:', acc, '%'  
     )

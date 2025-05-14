@@ -111,7 +111,7 @@ def cal_compensate(esti_x):
     return -2.4194299127361094*np.sin(0.014439263775565864*esti_x-0.007147436746119124)
 
 
-def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: str, cen_meth: str | list[str], pixel_limit: int=5, num_esti: int=1) -> list[tuple[float, float]] | dict[str, list[tuple[float, float]]]:
+def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: str, cen_meth: str | list[str], pixel_limit: int=5, T1: float=None, T2: float=None, T3: float=None, num_esti: int=1) -> list[tuple[float, float]] | dict[str, list[tuple[float, float]]]:
     '''
         Get the centroids of the stars in the image.
     Args:
@@ -120,6 +120,8 @@ def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: 
         thr_method: threshold calculation method
         seg_method: segmentation method
         cen_method: centroid algorithm
+        pixel_limit: the minimum number of connected pixels
+        T1/T2/T3: optional threshold used in RG segmentation method
         num_esti: the number of estimation using centroid algorithm
     Returns:
         centroids: the centroids of the stars in the image
@@ -132,7 +134,7 @@ def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: 
     T =  cal_threshold(filtered_img, thr_meth)
 
     # rough group star using connectivity
-    group_coords = group_star(filtered_img, seg_meth, T, connectivity=4, pixel_limit=pixel_limit)
+    group_coords = group_star(filtered_img, seg_meth, T, T1=T1, T2=T2, T3=T3, connectivity=4, pixel_limit=pixel_limit)
 
     # sort group_coords by grayscale sum, so that the returned centrods are sorted from high to low by brightness
     gray_sum = [np.sum(filtered_img[rows, cols]) for rows, cols in group_coords]
