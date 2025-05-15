@@ -2,7 +2,7 @@ import cv2
 import bisect as bis
 import numpy as np
 import scipy.ndimage as nd
-from collections import defaultdict
+from collections import defaultdict, deque
 
 
 def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int=5, gray_diff: int=4) -> int:
@@ -182,18 +182,18 @@ def get_seed_coords(img: np.ndarray, wind_size: int=5, T1: int=0, T2: int=-np.in
 
 def region_grow(img: np.ndarray, seed: tuple[int, int], connectivity: int=4) -> np.ndarray:
     '''
-        Region grow the image.
+        Region grow the image.(Careful, image will change)
     '''
     h, w = img.shape
 
-    # initialize the segmented image
-    queue = [seed]
+    # initialize the waiting queue
+    queue = deque([seed])
 
     # offsets
     if connectivity == 4:
-        ds = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+        ds = np.array([[0, 1], [0, -1], [1, 0], [-1, 0]])
     elif connectivity == 8:
-        ds = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+        ds = np.array([[0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [1, -1], [-1, 1], [-1, -1]])
     else:
         print('wrong connectivity!')
         return np.array([]), np.array([])
@@ -201,17 +201,29 @@ def region_grow(img: np.ndarray, seed: tuple[int, int], connectivity: int=4) -> 
     # coords
     xs, ys = [], []
 
-    while len(queue) > 0:
-        x, y = queue.pop(0)
-        if img[x, y] == 0:
+    while queue:
+        x, y = queue.popleft()
+        # use img as visited flag matrix
+        if img[x, y]:
             continue
         img[x, y] = 0
+
+        # add to result
         xs.append(x)
         ys.append(y)
-        for dx, dy in ds:
-            if x + dx < 0 or x + dx >= h or y + dy < 0 or y + dy >= w:
-                continue
-            queue.append((x + dx, y + dy))
+        
+        # get neighbors
+        neighbors = ds + (x, y)
+        # boundary check
+        mask = (neighbors[:,0] >= 0) & (neighbors[:,0] < h) & (neighbors[:,1] >= 0) & (neighbors[:,1] < w)
+        neighbors = neighbors[mask]
+        
+        # find candiates
+        mask = img[neighbors[:,0], neighbors[:,1]] == 1
+        candidates = neighbors[mask]
+        
+        # add to queue
+        queue.extend(map(tuple, candidates))
 
     return np.array(xs), np.array(ys)
 
@@ -254,7 +266,8 @@ def connected_components_label(img: np.ndarray, connectivity: int=4) -> tuple[in
     h, w = img.shape
 
     # initialize the label image
-    label_img = np.zeros_like(img)
+    # avoid using int8(overflow)
+    label_img = np.zeros_like(img, dtype=np.int32)
     label_cnt = 0
     label_tab = UnionSet()
 
@@ -287,12 +300,12 @@ def connected_components_label(img: np.ndarray, connectivity: int=4) -> tuple[in
                 label_tab.union(min_label, label)
             label_img[x, y] = min_label
     
+
     # second pass
-    xs, ys = np.nonzero(label_img)
     labels = label_img[xs, ys]
     for xi, yi, labeli in zip(xs, ys, labels):
         # find the root label
-        label_img[xi, yi,] = label_tab.find(labeli)
+        label_img[xi, yi] = label_tab.find(labeli)
     
     return label_img
 
@@ -353,20 +366,16 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
         
         return run
 
-    # get the coordinates of the non-zero elements
-    coords = np.transpose(np.nonzero(img))
-    rc_dict = defaultdict(list)
-    for row, col in coords:
-        rc_dict[row].append(col)
-    
+    h, w = img.shape
+
     # row, beg, end, label
     runs = []
 
     # preverse row runs
     prev_runs = []
 
-    # generate runs
-    for row in rc_dict:
+    # iterate on axis 0 of img to generate runs
+    for row in range(h):
         if len(prev_runs) > 0 and prev_runs[0]['row'] != row-1:
             prev_runs = []
         
@@ -374,14 +383,11 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
         curr_runs = []
 
         # generate current row runs
-        beg_col = end_col = rc_dict[row][0]
-        for col in rc_dict[row]:
-            if col - end_col > 1:            
-                curr_runs.append(gen_curr_run(row, beg_col, end_col))    
-                beg_col = col
-            end_col = col
-                
-        curr_runs.append(gen_curr_run(row, beg_col, end_col))
+        col_ranges = find_ranges(img[row])
+        if col_ranges is None:
+            continue
+
+        curr_runs.extend([gen_curr_run(row, beg, end) for (beg, end) in col_ranges])
         prev_runs = curr_runs
         runs.extend(curr_runs)
 
@@ -391,32 +397,26 @@ def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
     return runs
 
 
-def find_ranges(nums, threshold=0) -> list[tuple[int, int]]:
+def find_ranges(nums: np.ndarray, threshold: int=0) -> list[tuple[int, int]]:
     '''
         Find the ranges of the continuous values in the list.
-    Args:
-        nums: the list of values
-        threshold: the threshold to segment the values
-    Returns:
-        ranges: the ranges of the continuous values
     '''
+    # get the ranges that meet the requirement
+    mask = nums > threshold
+    
+    # add False on both ends of array to deal with boundary
+    mask = np.concatenate(([False], mask, [False])).astype(np.int8)
 
-    ranges = []
-    beg = -1
-    end = -1
-    for i, value in enumerate(nums):
-        if value > threshold:
-            if beg == -1:
-                beg = i
-            end = i
-        else:
-            if beg != -1:
-                ranges.append((beg, end))
-                beg = -1
-                end = -1
-    if beg != -1:
-        ranges.append((beg, end))
-    return ranges
+    # compute the discrete difference between consecutive elements
+    # transitions from False to True (start of a range) yield 1
+    # transitions from True to False (end of a range) yield -1
+    begs = np.where(np.diff(mask) > 0)[0]
+    ends = np.where(np.diff(mask) < 0)[0] - 1
+
+    if begs.size == 0 or ends.size == 0:
+        return None
+
+    return np.vstack([begs, ends]).transpose()
 
 
 def group_star(img: np.ndarray, method: str, T0: int, T1: float=None, T2: float=None, T3: float=None, connectivity: int=-1, pixel_limit: int=5) -> list[tuple[np.ndarray, np.ndarray]]:
@@ -455,8 +455,8 @@ def group_star(img: np.ndarray, method: str, T0: int, T1: float=None, T2: float=
                 continue
             group_coords.append((rows, cols))
     elif method == 'CCL':
-        # label_img = connected_components_label(binary_img, connectivity)
-        _, label_img = cv2.connectedComponents(binary_img, connectivity=connectivity)
+        label_img = connected_components_label(binary_img, connectivity)
+        # _, label_img = cv2.connectedComponents(binary_img, connectivity=connectivity)
         rows, cols = np.nonzero(label_img)
         labels = label_img[rows, cols]
 
@@ -486,36 +486,35 @@ def group_star(img: np.ndarray, method: str, T0: int, T1: float=None, T2: float=
         if len(curr_rows) > pixel_limit and len(curr_cols) > pixel_limit:
             group_coords.append((np.array(curr_rows), np.array(curr_cols)))
     elif method == 'CPL':
-        vertical_project = np.sum(binary_img, axis=0)
-        # vertical_project = np.zeros(w)
-        # for i in range(w):
-        #     for j in range(h):
-        #         vertical_project[i] += binary_img[j, i]
-        vranges = find_ranges(vertical_project)
+        # vertical projection
+        vproj = np.sum(binary_img, axis=0)
+        vranges = find_ranges(vproj)
+        if vranges is None:
+            return []
 
         for (y1, y2) in vranges:
-            if y1 == y2:
-                continue
-
-            horizontal_project = np.sum(binary_img[:, y1:y2], axis=1)
-            # horizontal_project = np.zeros(h)
-            # for i in range(h):
-            #     for j in range(y1, y2+1):
-            #         horizontal_project[i] += binary_img[i, j]
-            hranges = find_ranges(horizontal_project)
+            # horizontal projection
+            hproj = np.sum(binary_img[:, y1:y2+1], axis=1)
+            hranges = find_ranges(hproj)
 
             for (x1, x2) in hranges:
-                if x1 == x2:
-                    continue
-                for x in range(x1, x2+1):
-                    for y in range(y1, y2+1):
-                        if binary_img[x, y] == 0:
-                            continue
+                # get the region of interest
+                roi = binary_img[x1:x2+1, y1:y2+1]
+                _, label_roi = cv2.connectedComponents(roi, connectivity=connectivity)
+                rows, cols = np.nonzero(label_roi)
+                labels = label_roi[rows, cols]
 
-                        rows, cols = region_grow(binary_img, (x, y), connectivity)
-                        if len(rows) < pixel_limit and len(cols) < pixel_limit:
-                            continue
-                        group_coords.append((rows, cols))
+                # labels pixel > pixel_limit
+                ulabels, ucnts = np.unique(labels, return_counts=True)
+                ulabels = ulabels[ucnts >= pixel_limit]
+
+                # add offset
+                rows, cols = rows+x1, cols+y1
+
+                # add to group coords
+                for label in ulabels:
+                    coords = rows[labels == label], cols[labels == label]
+                    group_coords.append(coords)
     else:
         print('Invalid segmentation method!')
         return []
