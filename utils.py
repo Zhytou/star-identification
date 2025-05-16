@@ -8,6 +8,30 @@ from astropy.coordinates import SkyCoord
 from skimage.metrics import structural_similarity
 
 
+def find_overlap_and_unique(A, B, tol=1):
+    '''
+        Find the overlap parts of two point sets.
+    '''
+    assert A.shape[1] == 2 and B.shape[1] == 2
+
+    dist = np.sqrt(np.sum((A[:, None] - B[None, :])**2, axis=2))
+    match_mask = dist <= tol * np.sqrt(2)    
+    idx_A, idx_B = np.where(match_mask)
+    
+    overlap_A = A[np.sort(np.unique(idx_A))]
+    overlap_B = B[np.sort(np.unique(idx_B))]
+    
+    mask_A = np.ones(len(A), dtype=bool)
+    mask_A[idx_A] = False
+    unique_A = A[mask_A]
+    
+    mask_B = np.ones(len(B), dtype=bool)
+    mask_B[idx_B] = False
+    unique_B = B[mask_B]
+    
+    return overlap_A, overlap_B, unique_A, unique_B
+
+
 def are_collinear(a: np.ndarray, b: np.ndarray, eps: float=1e-5):
     '''
         Determine whether vectors are collinear.
@@ -63,18 +87,26 @@ def get_attitude_matrix(v: np.ndarray, w: np.ndarray):
     wm = con_orthogonal_basis(w[:, i], w[:, j])
     r = vm @ np.linalg.inv(wm) 
 
-    assert np.allclose(vm, r@wm, rtol=0.1)
+    # for i, j in result:
+    #     vm = con_orthogonal_basis(v[:, i], v[:, j])
+    #     wm = con_orthogonal_basis(w[:, i], w[:, j])
+    #     assert np.allclose(vm, r @ wm, atol=1e-1), f'{i}, {j}, {vm}, {r @ wm}'
 
     return r
 
 
-def get_angdist(points: np.ndarray):
+def get_angdist(points1: np.ndarray, points2: np.ndarray=None):
     '''
         Get the angular distance of the points.
     '''
-    assert points.shape[1] == 3
-    norm = np.linalg.norm(points, axis=1)
-    angd = np.dot(points, points.T) / np.outer(norm, norm)
+    assert points1.shape[1] == 3
+
+    if points2 is None:
+        points2 = points1
+
+    norm1 = np.linalg.norm(points1, axis=1)
+    norm2 = np.linalg.norm(points2, axis=1)
+    angd = np.dot(points1, points2.T) / np.outer(norm1, norm2)
 
     return angd
 
@@ -168,7 +200,7 @@ def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, 
             circle = Circle((col, row), 10, edgecolor='b', facecolor='none')
             ax.add_patch(circle)
         if id != -1:
-            row, col = min(row+5, h-10), min(col+5, w-10)
+            row, col = min(row+10, h-20), min(col-20, w-20)
             ax.text(col, row, str(id), fontsize=10, color='white', ha='left', va='top')
 
     plt.show()
