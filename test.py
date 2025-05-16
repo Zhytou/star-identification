@@ -1,7 +1,5 @@
-import os
-import re
-import time
-import json
+import os, re, json
+from datetime import datetime
 import numpy as np
 import pandas as pd
 import torch
@@ -71,20 +69,19 @@ def cal_match_score(db: pd.DataFrame, pat: np.ndarray, size: tuple[int, int]):
     return scores
 
 
-def cluster_by_angle(cata: pd.DataFrame, ids: np.ndarray, r: float):
+def cluster_by_angle(ra_des: np.ndarray, ids: np.ndarray, probs: np.ndarray, r: float):
     '''
         Cluster the stars by angle distance.
     Args:
-        cata: the catalogue of stars
+        ra_des: right ascension and declination of valid ids(non -1)
         ids: the ids of the star(center of circle fov)
         r: the angle distance threshold in radians
     Returns:
         the ids of stars in the biggest cluster
     '''
+    # some of ids may be -1, because of its low probability
+    mask = ids != -1
 
-    stars = cata[cata['Star ID'].isin(ids)]
-    # right ascension and declination
-    ra_des = stars[['Ra', 'De']].to_numpy()
     # distance matrix
     dis_mat = haversine_distances(ra_des, ra_des)
     
@@ -95,19 +92,36 @@ def cluster_by_angle(cata: pd.DataFrame, ids: np.ndarray, r: float):
         metric='precomputed',
     ).fit_predict(dis_mat)
 
-    # get the label of biggest cluster
-    ulabels, cnts = np.unique(labels, return_counts=True)
-    # verify failure, if biggest cluster is smaller than min_sis_cnt or biggest cluster cannot be determined
-    if np.max(cnts) < min_sis_cnt or np.sum(np.max(cnts) == cnts) > 1:
+    # get the unique label and counts of each cluster
+    clabels, cnts = np.unique(labels, return_counts=True)
+    
+    # get each cluster probabiliy sum
+    cprobs = np.zeros_like(clabels, dtype=np.float32)
+    for i, label in enumerate(clabels):
+        cprobs[i] = np.sum(probs[mask][labels == label])
+    
+    # get the the cluster labels with the maximum count
+    mc_labels = clabels[cnts == cnts.max()]
+    # get the the cluster labels with the maximum probability sum
+    mp_labels = clabels[cprobs == cprobs.max()]
+
+    # intersect mc_labels with mp_labels
+    mcp_labels = np.intersect1d(mc_labels, mp_labels)
+
+    # get the label id of the biggest cluster
+    if len(mc_labels) == 1:
+        max_label = mc_labels[0]
+    elif len(mcp_labels) == 1:
+        max_label = mcp_labels[0]
+    else:
+        # verify failure, biggest cluster cannot be determined by both counts and probabilities
         return np.full_like(ids, -1)
 
     # get the ids of stars not in the biggest cluster
-    max_label = ulabels[np.argmax(cnts)]
-    suprious_ids = stars['Star ID'][labels != max_label]
+    suprious_ids = ids[labels != max_label]
 
     # set all the suprious ids to -1
-    mask = np.isin(ids, suprious_ids)
-    ids[mask] = -1
+    ids[np.isin(ids, suprious_ids)] = -1
 
     return ids
 
@@ -284,52 +298,62 @@ def predict(model: nn.Module, loader: DataLoader, T: float, device=torch.device(
     return np.array(labels), np.array(cis)
 
 
-def verify(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, fov: float, h: int, w: int, f: int, probs: np.ndarray=None, eps: float=1e-4):
+def verify(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, probs: np.ndarray, fov: float, h: int, w: int, f: int, eps: float=1e-4):
     '''
         Verify the estimated results by angular distances and calculate the attitude matrix with the highest confidence star.  
     '''
     assert len(coords) == len(ids)
+    mask = ids != -1
+
+    if not np.any(mask):
+        return ids, None
+
+    # get the concerning stars
+    #! careful! use index to sort the stars, because the output of isin is not sorted by the given list
+    stars = cata[cata['Star ID'].isin(ids)].copy()
+    stars = stars.set_index('Star ID').loc[ids[mask]].reset_index()
 
     ### 1.do fov restriction by clustering and take the biggest cluster as output
-    ids = cluster_by_angle(cata, ids, fov)
+    #! careful! fov is in radians
+    ids = cluster_by_angle(stars[['Ra', 'De']].to_numpy(), ids, probs, fov)
 
-    ### 2.do angular distnace validation
+    # update mask
     mask = ids != -1
     n = np.sum(mask)
-    if n == 0:
-        return ids, np.eye(3)
+    if n <= 1:
+        return ids, None
 
+    ### 2.do angular distnace validation
     # get the view vectors
     vvs = np.full((n, 3), f)
     vvs[:, 0] = coords[mask, 1]-w/2
     vvs[:, 1] = coords[mask, 0]-h/2
 
     # get the refernce vectors
-    stars = cata[cata['Star ID'].isin(ids)].copy()
     stars['X'] = np.cos(stars['Ra'])*np.cos(stars['De'])
     stars['Y'] = np.sin(stars['Ra'])*np.cos(stars['De'])
     stars['Z'] = np.sin(stars['De'])
-    #! careful! use index to sort the stars, because the output of isin is not sorted by the given list
-    stars = stars.set_index('Star ID').loc[ids[mask]]
-    rvs = stars[['X', 'Y', 'Z']].to_numpy()
+    rvs = stars[['X', 'Y', 'Z']].to_numpy()[mask] # use mask, because ids may change after cluster_by_angle
 
     # get the angular distances
-    vagd, ragd = get_angdist(vvs), get_angdist(rvs)
+    vagds, ragds = get_angdist(vvs), get_angdist(rvs)
 
     # compare the angular distnaces
-    match = np.isclose(vagd, ragd, atol=eps)
+    match = np.isclose(vagds, ragds, atol=eps)
     scores = np.sum(match, axis=1)
 
     # at least the angular distance between one pair of stars is verified, the image can be considered as correctly identification    
     # !careful! minus one to exclude itself
     if np.max(scores)-1 < 1:
-        return np.full_like(ids, -1), np.eye(3)
+        # if no star pairs are verified, leave to postprocess    
+        # ids[probs != probs.max()] = -1
+        return ids, None
     
     # get the star pair with the highest match
     if probs is None:
         idx1, idx2 = np.argsort(scores)[-2:]
     else:
-        # if more than one maximum pair, use probability to determine
+        # if more than one maximum pair, use probability/score to determine
         # in other words, sort by scores first, if same score, then use probs to sort
         idx1, idx2 = np.lexsort((probs[mask], scores))[-2:]    
 
@@ -344,13 +368,17 @@ def verify(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, fov: float, 
     return ids, att_mat
 
 
-def postprocess(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, att_mat: np.ndarray, fov: float, h: int, w: int, f: int, eps: float=1e-3):
+def postprocess(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, att_mat: np.ndarray, h: int, w: int, f: int, eps1: float=5e-5, eps2: float=0.05):
     '''
         Use the estimated and verified ids(attitude info) to predict unidentified ids.
     '''
     assert len(coords) == len(ids)
     n = len(ids)
 
+    mask = ids != -1
+    if not np.any(mask):
+        return ids
+    
     # get the view vectors
     vvs = np.full((n, 3), f)
     vvs[:, 0] = coords[:, 1]-w/2
@@ -358,6 +386,50 @@ def postprocess(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, att_mat
 
     # normalize
     vvs = vvs/np.linalg.norm(vvs, axis=1, keepdims=True)
+
+    # if no attitude infomation is offerred, do angular distance match directly
+    if att_mat is None:
+        # cosine cangular distances between view vectors
+        vagds = get_angdist(vvs[mask], vvs) # (m, n) (m is np.sum(mask), n is len(ids)) 
+
+        # get the all potential reference vectors in guide star database
+        rvs = np.zeros((len(cata), 3))
+        rvs[:, 0] = np.cos(cata['Ra'])*np.cos(cata['De'])
+        rvs[:, 1] = np.sin(cata['Ra'])*np.cos(cata['De'])
+        rvs[:, 2] = np.sin(cata['De'])
+        
+        # get the idxs of non -1 ids in cata
+        idxs = cata.set_index('Star ID').index.get_indexer(ids[mask])
+        cata.reset_index()
+
+        # cosine angular distances between all reference vectors
+        ragds = get_angdist(rvs[idxs], rvs) # (m, k) (k is len(cata))
+
+        # calculate the differences between view vectors and reference vectors
+        diffs = np.abs(vagds[..., None] - ragds[:, None, :]) # (m, n, k)
+
+        # count the valid match for each non -1
+        valid_counts = np.sum(
+            np.any(diffs < eps1, axis=2), # (m, n)
+            axis=1
+        )  # (m,)
+
+        # no reference star is matched        
+        if np.max(valid_counts) == 1:
+            return ids
+        
+        # take the maximum match count as match result
+        diffs = diffs[np.argmax(valid_counts)]  # (n, k)
+        match = np.argmin(diffs, axis=1) # (n,)
+
+        # only when differences less than eps, match is valid
+        valid_mask = np.min(diffs, axis=1) < eps1
+        print(diffs.shape, match.shape, valid_mask.shape)
+
+        # get the matched star id
+        ids[valid_mask] = cata.loc[match[valid_mask], 'Star ID'].to_numpy()
+        
+        return ids
 
     # get the ideal reference vectors
     rvs = vvs @ att_mat
@@ -375,7 +447,7 @@ def postprocess(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, att_mat
     idxs = np.argmin(dists, axis=1) # n, each element is in [0, m-1]
 
     # keep the outputs, if similarity is higher than threshold.
-    mask = (ids == -1) & (min_dists < eps)
+    mask = (ids == -1) & (min_dists < eps2)
     ids[mask] = cata.loc[idxs, 'Star ID'][mask]
 
     return ids
@@ -442,7 +514,7 @@ def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, meth_para
         #     coords[mask], 
         #     esti_ids[mask], 
         #     att_mat=att_mat,
-        #     fov=2*rp,
+        #     fov=2*rp
         #     h=h,
         #     w=w,
         #     f=f,
@@ -481,26 +553,28 @@ def draw_results(res: dict, save: bool=False):
 
     # method abbreviation to full name
     abbr_2_name = {
-        'rac_1dcnn': '本文方法',
+        'rac_nn': '本文方法',
         'lpt_nn': '基于Polestar模式的神经网络算法',
         'grid': '栅格算法',
         'lpt': '改进的LPT算法'
     }
     # test type abbreviation to full name
     type_2_name = {
-        'pos': '位置噪声',
-        'mag': '亮度噪声',
-        'fs': '伪星噪声',
-        'ms': '缺失星噪声'
+        'pos': '位置噪声(pixel)',
+        'mag': '亮度噪声(Mv)',
+        'fs': '伪星数目',
+        'ms': '缺失星数目'
     }
 
     # set timestamp as sub directory
-    subdir = time.time()
-    if not os.path.exists(f'res/chapter4/{subdir}'):
-        os.makedirs(f'res/chapter4/{subdir}')
+    now = datetime.now()
+    subdir = now.strftime("%Y%m%d_%H%M%S")
+    dir = f'res/chapter4/sim/{subdir}'
+    os.makedirs(dir, exist_ok=True)
+    
     # save the results
     if save:
-        with open(f'res/chapter4/{subdir}/res.txt', 'w') as f:
+        with open(f'{dir}/res.txt', 'w') as f:
             json.dump(res, f, indent=4)
 
     # change abbreviation to full name
@@ -517,9 +591,8 @@ def draw_results(res: dict, save: bool=False):
     for name in type_2_name.values():
         fig, ax = plt.subplots()
         ax.set_xlabel(name)
-        ax.set_ylabel('识别率')
+        ax.set_ylabel('识别率(%)')
 
-        ymin = 90
         for method in abbr_2_name.values():
             if method not in res or name not in res[method]:
                 continue
@@ -531,16 +604,17 @@ def draw_results(res: dict, save: bool=False):
             # ys = [y-0.1 for y in ys]
             
             # calculate the minimum y value
-            if ymin > ys[-1]:
-                ymin = np.floor(ys[-1]/10)*10
+            # if ymin > ys[-1]:
+            #     ymin = np.floor(ys[-1]/10)*10
 
             # plot the results
             ax.plot(xs, ys, label=method, marker='o')
             ax.set_xlim(min(xs), max(xs))
-            ax.set_ylim(ymin, 100)
+            ax.set_ylim(80, 100)
+            ax.set_xticks(xs)
             ax.legend()
 
-        fig.savefig(f'res/chapter4/{subdir}/{name}.png')
+        fig.savefig(f'{dir}/{name}.png')
     plt.show()
 
 
@@ -553,10 +627,10 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
 
     # set threshold
     Ts = {
-        'grid': 3.2,
-        'lpt': 2.2,
-        'lpt_nn': 0.5,
-        'rac_nn': 0.5,
+        'grid': 3.4,
+        'lpt': 3.8,
+        'lpt_nn': 0.3,
+        'rac_nn': 0.7,
     }
 
     # setup
@@ -574,12 +648,12 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
         test_names.extend(f'{test_type}{val}' for val in test_params[test_type])
 
     print(
-        'Test',
-        '\n------------------------------',
-        '\nTEST INFO',
+        # 'Test',
+        # '\n------------------------------',
+        # '\nTEST INFO',
         '\nNoise config:', noise_cfg,
         '\nTest name:', test_names,
-        '\n------------------------------',
+        # '\n------------------------------',
     )
 
     # add each test task to the threadpool
@@ -590,11 +664,11 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
         
         # print info
         print(
-            'METHOD INFO',
+            # 'METHOD INFO',
             '\nMethod:', method, 
-            '\nSimulation config:', sim_cfg,
-            '\nGeneration config:', gen_cfg,
-            '\n------------------------------',
+            # '\nSimulation config:', sim_cfg,
+            # '\nGeneration config:', gen_cfg,
+            # '\n------------------------------',
         )
         
         if method in ['grid', 'lpt']:
@@ -607,14 +681,14 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
             max_cnt, min_cnt, avg_cnt = np.max(db_info), np.min(db_info), np.sum(db_info)/len(db)
 
             print(
-                'DATABASE INFO',
+                # 'DATABASE INFO',
                 '\nThreshold:', Ts[method],
-                '\nSize of database:', len(db),
-                '\nTheoretical size of database:', len(gcata),
-                '\nMax count of 1 in pattern matrix', max_cnt, 
-                '\nMin count of 1 in pattern matrix', min_cnt, 
-                '\nAvg count of 1 in pattern matrix', avg_cnt,
-                '\n------------------------------',
+                # '\nSize of database:', len(db),
+                # '\nTheoretical size of database:', len(gcata),
+                # '\nMax count of 1 in pattern matrix', max_cnt, 
+                # '\nMin count of 1 in pattern matrix', min_cnt, 
+                # '\nAvg count of 1 in pattern matrix', avg_cnt,
+                # '\n------------------------------',
             )
         elif method in ['rac_nn', 'lpt_nn']:
             # device
@@ -627,11 +701,11 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
             model.load_state_dict(torch.load(os.path.join('model', sim_cfg, method, gen_cfg, model_types[method], 'best_model.pth')))
 
             print(
-                'MODEL INFO'
+                # 'MODEL INFO'
                 '\nThreshold:', Ts[method],
                 '\nModel type:', model_types[method],
-                '\nDevice:', device,
-                '\n------------------------------',
+                # '\nDevice:', device,
+                # '\n------------------------------',
             )
         else:
             print('Wrong Method!')
@@ -701,10 +775,10 @@ if __name__ == '__main__':
     if True:
         res = do_test(
             {
-                'lpt_nn': [0.5, 6, 55, 0],
-                # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
+                # 'lpt_nn': [0.5, 6, 55, 0],
+                'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
                 # 'grid': [0.5, 6, 100], 
-                # 'lpt': [0.5, 6, 50, 36]
+                # 'lpt': [0.5, 6, 50, 50]
             },
             {
                 'h': 1024,
@@ -713,7 +787,7 @@ if __name__ == '__main__':
                 'fovx': 14.9925,
                 'limit_mag': 6,
                 'sigma_pos': 0.5,
-                'sigma_mag': 0,
+                'sigma_mag': 0.1,
                 'num_fs': 0,
                 'num_ms': 0,
                 'rot': 1
@@ -724,8 +798,8 @@ if __name__ == '__main__':
             },
             {
                 # 'pos': [0, 0.5, 1, 1.5, 2],
-                'mag': [0, 0.1, 0.2, 0.3, 0.4],
-                # 'fs': [0, 1, 2, 3, 4],
+                # 'mag': [0, 0.1, 0.2, 0.3, 0.4],
+                'fs': [0, 1, 2, 3, 4],
                 # 'ms': [0, 1, 2, 3, 4]
             },
             './catalogue/sao6.0_d0.03_12_15.csv',
