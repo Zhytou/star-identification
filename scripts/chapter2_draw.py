@@ -1,52 +1,51 @@
 import os
 import cv2
-import pandas as pd
 import numpy as np
-import matplotlib
-matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-from math import radians, tan, degrees
+from math import radians, tan
 
-from simulate import create_star_image
+from simulate import create_star_image, draw_star
+from utils import get_angdist, find_overlap_and_unique
 
 
-if False:
-    z = draw_star((3.5, 3.5), 5, np.zeros((7, 7), dtype=np.uint8), 0.7)
-
+# 灰度分布模型
+if True:
     x, y = np.meshgrid(np.arange(7), np.arange(7))
-    x = x.flatten() + 0.5  # 偏移到像素中心
-    y = y.flatten() + 0.5  # 偏移到像素中心
-    # z = np.zeros_like(x)
-    dx = dy = 0.8  # 柱子宽度
-    dz = z.flatten()  # 高度为归一化灰度值
+    x, y = x.flatten() + 0.5, y.flatten() + 0.5
+    dx = dy = 0.8
+    
+    mag = 3
+    psf = 0.7
+    z = draw_star((3.5, 3.5), mag, np.zeros((7, 7), dtype=np.uint8), sigma=psf)
+    dz = z.flatten()
 
-    # 创建三维画布
     fig = plt.figure(figsize=(6, 6))
     ax = fig.add_subplot(111, projection='3d')
 
-    # 绘制柱状图（颜色与高度同步）
-    bars = ax.bar3d(x, y, 0, dx, dy, dz, 
-                    color='gray',
-                    # edgecolor='k',         # 黑色边框
-                    linewidth=0.3,         # 边框粗细
-                    alpha=0.9)            # 透明度
+    bars = ax.bar3d(
+        x, y, 0, dx, dy, dz, 
+        color='gray',
+        linewidth=0.3,
+        alpha=0.9
+    )           
 
     plt.show()
 
 
-h, w = 512, 512
+ra, de, roll = radians(249.2104), radians(-12.0386), radians(-13.3845)
+h = w = 512
 fov = 10
 limit_mag = 6
-ra, de, roll = radians(249.2104), radians(-12.0386), radians(-13.3845)
-f = 58e-3
-mtot = 2*tan(radians(fov/2))*f
-xpixel = w/mtot
-ypixel = h/mtot
+f = h/tan(radians(fov/2))
 
-if False:
-    # stars= id, row, col, ra, de, mag
-    img0, stars = create_star_image(ra, de, roll, h=h, w=w, fov=fov, limit_mag=limit_mag, f=f)
+# 角距验证
+if True:
+    img0, stars = create_star_image(
+        ra, de, roll, 
+        h=h, w=w, 
+        fovy=fov, fovx=fov, 
+        limit_mag=limit_mag, 
+    )
 
     coords = stars[:, 1:3]
     img1 = cv2.cvtColor(img0, cv2.COLOR_GRAY2BGR)
@@ -55,77 +54,101 @@ if False:
         img1 = cv2.circle(img1, (col, row), 5, (255, 0, 0), 1)
     cv2.imwrite('res/chapter2/sim/coord.png', img1)
 
-    ids = stars[:, 0].astype(np.int64)
+    # print stars info
+    for star in stars:
+        print(
+            int(star[0]),       # id
+            round(star[1], 2),  # row
+            round(star[2], 2),  # col
+            round(star[3], 2),  # ra
+            round(star[4], 2),  # de
+        )
+    n = len(stars)
     ras, des = stars[:, 3], stars[:, 4]
-    Xs = np.cos(ras) * np.cos(des)
-    Ys = np.sin(ras) * np.cos(des)
-    Zs = np.sin(des)
 
-    print(ids, coords, np.degrees(ras), np.degrees(des))
+    # view vectors
+    vvs = np.full((n, 3), f)
+    vvs[:, 0] = coords[:, 1]-w/2
+    vvs[:, 1] = coords[:, 0]-h/2
 
-    num_star = len(stars)
-    for i in range(num_star):
-        idi = ids[i]
-        # celestial cartesian coordinate vector
-        Xi, Yi, Zi = Xs[i], Ys[i], Zs[i]
-        Vci = np.array([Xi, Yi, Zi]).transpose()
-        # screen(image) coordinate vector
-        rowi, coli = coords[i]
-        xi, yi = (coli-w/2)/xpixel, (rowi-h/2)/ypixel
-        Vsi = np.array([xi, yi, f]).transpose()
-        
-        for j in range(i+1, num_star):
-            idj = ids[j]
-            # celestial cartesian coordinate vector
-            Xj, Yj, Zj = Xs[j], Ys[j], Zs[j]
-            Vcj = np.array([Xj, Yj, Zj])
-            # screen(image) coordinate vector
-            rowj, colj = coords[j]
-            xj, yj = (colj-w/2)/xpixel, (rowj-h/2)/ypixel
-            Vsj = np.array([xj, yj, f])
-           
-            dc = np.arccos(np.dot(Vci, Vcj) / (np.linalg.norm(Vci) * np.linalg.norm(Vcj)))
-            ds = np.arccos(np.dot(Vsi, Vsj) / (np.linalg.norm(Vsi) * np.linalg.norm(Vsj)))
+    # reference vectors
+    rvs = np.zeros((n, 3))
+    rvs[:, 0] = np.cos(ras) * np.cos(des)
+    rvs[:, 1] = np.sin(ras) * np.cos(des)
+    rvs[:, 2] = np.sin(des)
 
-            print(idi, idj, dc, ds)
+    # angular distances
+    vagds, ragds = get_angdist(vvs), get_angdist(rvs)
+
+    # print validation results
+    for i in range(n):
+        for j in range(i+1, n):
+            print(i, j, vagds[i, j], ragds[i, j])
 
 
+def label_image(img: np.ndarray, coords: np.ndarray, color: tuple=(0, 255, 0),  radius: int=5):
+    '''
+        Label image with colored circles.
+    '''
+    for coord in coords:
+        row, col = int(coord[0]), int(coord[1])
+        cv2.circle(img, (col, row), radius, color, 1)
+    return img
+
+
+# 噪声仿真测试
 if True:
     os.makedirs('res/chapter2/sim', exist_ok=True)
 
     # backgroud noise
-    img, stars = create_star_image(ra, de, roll, sigma_g=0.1, prob_p=0.001, fov=fov, limit_mag=limit_mag, h=h, w=w, f=f)
+    img, stars = create_star_image(
+        ra, de, roll, 
+        h=h, w=w, 
+        fovy=fov, fovx=fov, 
+        limit_mag=limit_mag, 
+        sigma_g=0.05, prob_p=0.001
+    )
     cv2.imwrite('res/chapter2/sim/noise.png', img)
 
-    real_ids = stars[:, 0].astype(np.int64)
-    real_rows, real_cols = stars[:, 1:3].astype(np.int64).transpose()
+    ids = stars[:, 0].astype(np.int64)
+    coords = stars[:, 1:3]
 
     # positional noise
-    img, _ = create_star_image(ra, de, roll, fov=fov, limit_mag=limit_mag, h=h, w=w, f=f, sigma_pos=10)
+    img, _ = create_star_image(
+        ra, de, roll, 
+        h=h, w=w, 
+        fovy=fov, fovx=fov, 
+        limit_mag=limit_mag, 
+        sigma_pos=10
+    )
     cv2.imwrite('res/chapter2/sim/pos.png', img)
 
     # magnititude noise
-    # img, stars = create_star_image(ra, de, roll, fov=fov, limit_mag=limit_mag, h=h, w=w, f=f, sigma_mag=0.3)
-    # img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    # ids = stars[:, 0].astype(np.int64)
-    # rows, cols = stars[:, 1:3].astype(np.int64).transpose()
-    # for idi, row, col in zip(ids, rows, cols):
-    #     if idi not in real_ids:
-    #         img = cv2.circle(img, (col, row), 5, (0, 0, 255), 1)
-    # for idi, row, col in zip(real_ids, real_rows, real_cols):
-    #     if idi not in ids:
-    #         img = cv2.circle(img, (col, row), 5, (255, 255, 0), 1)
-    # cv2.imwrite('res/chapter2/sim/mag.png', img)
+    img, stars = create_star_image(
+        ra, de, roll, 
+        h=h, w=w, 
+        fovy=fov, fovx=fov, 
+        limit_mag=limit_mag, 
+        sigma_mag=0.3
+    )
+    _, _, coords1, coords2 = find_overlap_and_unique(coords, stars[:, 1:3])
+    
+    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    img = label_image(img, coords1, (0, 0, 255)) # miss
+    img = label_image(img, coords2, (255, 0, 0)) # false
+    cv2.imwrite('res/chapter2/sim/mag.png', img)
 
     # false star noise
-    # img, stars = create_star_image(ra, de, roll, fov=fov, limit_mag=limit_mag, h=h, w=w, f=f, num_fs=1)
-    # img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    # ids = stars[:, 0].astype(np.int64)
-    # rows, cols = stars[:, 1:3].astype(np.int64).transpose()
-    # for idi, row, col in zip(ids, rows, cols):
-    #     if idi == -1:
-    #         img = cv2.circle(img, (col, row), 5, (0, 0, 255), 1)
-    # cv2.imwrite('res/chapter2/sim/fs.png', img)
+    img, stars = create_star_image(
+        ra, de, roll, 
+        h=h, w=w, 
+        fovy=fov, fovx=fov, 
+        limit_mag=limit_mag, 
+        num_fs=2
+    )
+    mask = stars[:, 0] == -1
+    coords = stars[mask, 1:3]
 
-    # img, _ = create_star_image(ra, de, roll, fov=fov, limit_mag=limit_mag, h=h, w=w, f=f, num_ms=1)
-    # cv2.imwrite('res/chapter2/sim/ms.png', img)
+    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    img = label_image(img, coords, (255, 0, 0)) # false
+    cv2.imwrite('res/chapter2/sim/fs.png', img)

@@ -16,8 +16,8 @@ from extract import get_star_centroids
 from utils import find_overlap_and_unique, cal_mse_psnr_ssim
 
 
+# 非局部均匀吕布 Lena图片测试
 if False:
-    # nlm lean test
     img = cv2.imread(f'example/lena/lena.png', cv2.IMREAD_GRAYSCALE)
 
     imgs = {}
@@ -35,14 +35,38 @@ if False:
 
 ra, de, roll = radians(29.2104), radians(-12.0386), radians(0)
 d = 64
+h, w = 512, 512
 x, y = 188, 169
 fov = 12
+limit_mag = 6
+background = 9
+psf = 1
 
+# 改进双边滤波测试
 if False:
-    # nlm/nlm+cv2.blf/nlm+blf star test
-    img0, stars = create_star_image(ra, de, roll, fovx=fov, fovy=fov, sigma_g=0.0, prob_p=0.00, background=9.5, limit_mag=6)
-    img1, _ = create_star_image(ra, de, roll, fovx=fov, fovy=fov, sigma_g=0.05, prob_p=0.001, background=9.5, limit_mag=6)
-
+    img0, stars = create_star_image(
+        ra, de, roll,
+        w=w, 
+        h=h,
+        fovx=fov, 
+        fovy=fov, 
+        limit_mag=limit_mag, 
+        sigma_psf=psf,
+        background=background
+    )
+    img1, _ = create_star_image(
+        ra, de, roll, 
+        w=w, 
+        h=h,
+        fovx=fov, 
+        fovy=fov,
+        sigma_g=0.05,
+        prob_p=0.001,
+        limit_mag=limit_mag, 
+        sigma_psf=psf,
+        background=background
+    )
+    
     img2 = denoise_with_nlm(img1)
     img3 = cv2.bilateralFilter(img2, 9, 30, 4)
     img4 = denoise_with_blf_new(img2, 3)
@@ -64,20 +88,41 @@ if False:
     print('nlm+sdblf', cal_mse_psnr_ssim(img0, img4))
 
 
+# 星图降噪效果测试（质量指标比较）
 if False:
-    # final denoise test
-    img0, stars = create_star_image(ra, de, roll, fovx=fov, fovy=fov, sigma_g=0.0, prob_p=0.00, background=9, limit_mag=6)
+    img0, stars = create_star_image(
+        ra, de, roll, 
+        w=w, 
+        h=h,
+        fovx=fov, 
+        fovy=fov, 
+        limit_mag=limit_mag, 
+        sigma_psf=psf,
+        background=background
+    )
 
     dir = f'res/chapter3/denoise'
     for (g, p) in [(0.05, 0.005)]:
         os.makedirs(f'{dir}/{g}_{p}', exist_ok=True)
         
-        img1, _ = create_star_image(ra, de, roll, fovx=fov, fovy=fov, sigma_g=g, prob_p=p, background=9)
+        img1, _ =  create_star_image(
+            ra, de, roll, 
+            h=h,
+            w=w,
+            fovx=fov, 
+            fovy=fov, 
+            sigma_g=g,
+            prob_p=p,
+            limit_mag=limit_mag, 
+            background=background
+        )
         cv2.imwrite(f'res/chapter3/denoise/{g}_{p}/ORIGINAL.png', img1)
 
-        for method in ['NLM_BLF', 'GAUSSIAN', 'MEAN', 'MEDIAN', 'BLF', 'GLP']:
+        for method in ['NLM_BLF', 'GAUSSIAN', 'MEAN', 'MEDIAN', 'BLF']:
             img2 = denoise_image(img1, method)
             cv2.imwrite(f'res/chapter3/denoise/{g}_{p}/{method}.png', img2)
+            
+            # 计算降噪前后图像质量指标
             mse, psnr, ssim = cal_mse_psnr_ssim(img0, img2)
             print(
                 # 'Sigma of gaussian noise:', g, 
@@ -85,8 +130,67 @@ if False:
                 'Method:', method, 
                 'MSE:', mse, 
                 'PSNR:', psnr, 
-                'SSIM:', ssim
+                'SSIM:', ssim,
+                '\n--------------------------------'
             )
+
+
+def cal_centroid_error(coords1: np.ndarray, coords2: np.ndarray):
+    '''
+        Calculate the centroid method error.
+    '''
+    coords1, coords2, _, _ = find_overlap_and_unique(coords1, coords2)
+    # print(np.hstack([coords1, coords2]))
+
+    assert len(coords1) == len(coords2), 'Error in find_overlap_and_unique!'
+    error = np.mean(np.linalg.norm(coords1 - coords2, axis=1))
+    n = len(coords1)
+
+    return n, error
+
+
+ra, de, roll = radians(229.2104), radians(-34.0386), radians(0)
+
+
+# 图像降噪对质心计算的影响
+if False:
+    img0, stars = create_star_image(
+        ra, de, roll, 
+        w=w, 
+        h=h,
+        fovx=fov, 
+        fovy=fov, 
+        sigma_g=0.1,
+        prob_p=0.01,
+        limit_mag=limit_mag, 
+        sigma_psf=psf,
+        background=background
+    )
+    real_coords = stars[:, 1:3]
+
+    for method in ['NONE', 'NLM_BLF', 'GAUSSIAN', 'MEAN', 'MEDIAN', 'BLF']:
+        # 比较各个降噪方法后误差大小
+        # 其中NONE为无预处理时
+        esti_coords = np.array(get_star_centroids(
+            img0,
+            method,
+            'Liebe3',
+            'CCL',
+            'MCoG',
+            pixel_limit=5,
+            num_esti=3 
+        ))
+
+        # correct count and error
+        cnt, err = cal_centroid_error(real_coords, esti_coords)
+
+        print(
+            'Method:', method,  
+            '\nNumber of correct extracted stars:', cnt,
+            '\nTotal number of stars:', len(stars),
+            '\nError:', err,
+            '\n--------------------------------'
+        )
 
 
 def label_image(img: np.ndarray, coords: np.ndarray, color: tuple=(0, 255, 0),  radius: int=5):
@@ -99,12 +203,20 @@ def label_image(img: np.ndarray, coords: np.ndarray, color: tuple=(0, 255, 0),  
     return img
 
 
+# 星点检测测试
 if True:
     dir = 'res/chapter3/detect'
     os.makedirs('res/chapter3/detect', exist_ok=True)
-    # final detect draw test
-
-    img0, stars = create_star_image(ra, de, roll, fovx=fov, fovy=fov, sigma_g=0.0, prob_p=0.00, limit_mag=6, background=9)
+    
+    img0, stars = create_star_image(
+        ra, de, roll,
+        h=h,
+        w=w, 
+        fovx=fov, 
+        fovy=fov, 
+        limit_mag=limit_mag, 
+        background=background
+    )
     real_coords = stars[:, 1:3]
 
     img0 = cv2.cvtColor(img0, cv2.COLOR_GRAY2BGR)
@@ -112,14 +224,24 @@ if True:
     cv2.imwrite(f'res/chapter3/detect/clean.png', img0)
 
     for (g, p) in [(0.01, 0.001), (0.03, 0.003), (0.05, 0.005), (0.07, 0.007), (0.1, 0.01)]:
-        img1, _ = create_star_image(ra, de, roll, fovx=15, fovy=15, h=1024, w=1024, sigma_g=g, prob_p=p, background=9)
+        img1, _ =create_star_image(
+            ra, de, roll, 
+            h=h,
+            w=w,
+            fovx=fov, 
+            fovy=fov, 
+            sigma_g=g,
+            prob_p=p,
+            limit_mag=limit_mag, 
+            background=background
+        )
         esti_coords = np.array(get_star_centroids(
             img1, 
             'NLM_BLF', 
             'Liebe5', 
             'RG', 
             'MCoG',
-            pixel_limit=5
+            pixel_limit=3
         ))
 
         # coords1: correct match
@@ -135,15 +257,16 @@ if True:
         cv2.imwrite(f'res/chapter3/detect/{g}_{p}.png', img1)
 
 
+# 星点检测耗时测试
 if False:
-    # final detect performance test
     # random ra & de test
-    num_test = 1000
+    num_test = 50
+    
     # generate random right ascension[0, 360] and declination[-90, 90]
     ras = np.random.uniform(0, 2*np.pi, num_test)
     des = np.arcsin(np.random.uniform(-1, 1, num_test))
 
-    # time test
+    # time test result
     res = {
         'RG': [],
         'CCL': [],
@@ -153,8 +276,18 @@ if False:
 
     # generate the star image
     for i in range(num_test):
-        img1, stars = create_star_image(ras[i], des[i], 0, fovx=fov, fovy=fov, sigma_g=0.05, prob_p=0.001, background=9)
-        real_coords = stars[:, 1:3]
+        img1, _ = create_star_image(
+            ra, de, roll, 
+            fovx=fov, 
+            fovy=fov, 
+            h=h,
+            w=w,
+            limit_mag=limit_mag, 
+            sigma_psf=psf,
+            background=background,
+            sigma_g=0.05, # default noise is important to time
+            prob_p=0.001,
+        )
 
         # denoise
         img2 = denoise_image(img1, 'NLM_BLF')
@@ -163,7 +296,7 @@ if False:
         T = cal_threshold(img2, 'Liebe3')
 
         for method in res:
-            res[method].append(timeit.timeit(lambda: group_star(img2, method, T0=T, connectivity=4, pixel_limit=5), number=1))
+            res[method].append(timeit.timeit(lambda: group_star(img2, method, T0=T, connectivity=4, pixel_limit=5), number=3))
             # res[method].append(timeit.timeit(lambda: get_star_centroids(img1, 'MEDIAN', 'Liebe3', method, 'CoG', pixel_limit=5), number=3))
         
     for method in res:
@@ -173,41 +306,3 @@ if False:
             'Min', round(np.min(res[method]), 4), 
             'Max', round(np.max(res[method]), 4)
         )
-
-
-if False:
-    # final extract performance test
-    # times of estimation using centroid algorithm
-    num_esti_times = 3
-    # random ra & de test
-    num_test = 2
-    # generate random right ascension[0, 360] and declination[-90, 90]
-    ras = np.random.uniform(0, 2*np.pi, num_test)
-    des = np.arcsin(np.random.uniform(-1, 1, num_test))
-    # centroid position error
-    pos_err = {
-        'CoG': 0.0,
-        'CCoG': 0.0,
-        'MCoG': 0.0,
-        'WCoG': 0.0
-    }
-
-    # generate the star image
-    for i in range(num_test):
-        img, stars = create_star_image(ras[i], des[i], 0, sigma_g=0.05, prob_p=0.0005)
-        real_coords = stars[:, 1:3]
-
-        # estimate the centroids of the stars in the image
-        multi_esti_coords = get_star_centroids(img, 'Liebe', 'RG', pos_err.keys(), num_esti=num_esti_times)
-
-        for method in multi_esti_coords.keys():
-            esti_coods = np.array(multi_esti_coords[method])
-        
-            # calculate the distance between the real and estimated centroids
-            dif_real_2_etsi = np.sum((real_coords[:, None] - esti_coods)**2, axis=-1)
-
-            # add position error for each star in the image
-            pos_err[method] += np.sum(np.min(dif_real_2_etsi, axis=-1)) / len(real_coords)
-
-    print('Position error: ', pos_err)
-
