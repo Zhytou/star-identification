@@ -368,7 +368,7 @@ def verify(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, probs: np.nd
     return ids, att_mat
 
 
-def postprocess(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, att_mat: np.ndarray, h: int, w: int, f: int, eps1: float=5e-5, eps2: float=0.05):
+def postprocess(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, att_mat: np.ndarray, h: int, w: int, f: int, eps1: float=5e-5, eps2: float=1e-3):
     '''
         Use the estimated and verified ids(attitude info) to predict unidentified ids.
     '''
@@ -424,7 +424,6 @@ def postprocess(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, att_mat
 
         # only when differences less than eps, match is valid
         valid_mask = np.min(diffs, axis=1) < eps1
-        print(diffs.shape, match.shape, valid_mask.shape)
 
         # get the matched star id
         ids[valid_mask] = cata.loc[match[valid_mask], 'Star ID'].to_numpy()
