@@ -8,26 +8,23 @@ from astropy.coordinates import SkyCoord
 from skimage.metrics import structural_similarity
 
 
-def find_overlap_and_unique(A, B, tol=1):
+def find_overlap_and_unique(A: np.ndarray, B: np.ndarray, eps: float=0.5):
     '''
         Find the overlap parts of two point sets.
     '''
     assert A.shape[1] == 2 and B.shape[1] == 2
 
-    dist = np.sqrt(np.sum((A[:, None] - B[None, :])**2, axis=2))
-    match_mask = dist <= tol * np.sqrt(2)    
-    idx_A, idx_B = np.where(match_mask)
+    # calculate the L2 distance between each points in both A and B
+    dist = np.sqrt(np.sum((A[:, None] - B[None, :])**2, axis=2)) # (m, n)
+
+    # find the closest point in B for each point in A
+    min_idx = np.argmin(dist, axis=1)
     
-    overlap_A = A[np.sort(np.unique(idx_A))]
-    overlap_B = B[np.sort(np.unique(idx_B))]
+    # only if distance is smaller than eps, the match is valid
+    mask = np.min(dist, axis=1) < eps
     
-    mask_A = np.ones(len(A), dtype=bool)
-    mask_A[idx_A] = False
-    unique_A = A[mask_A]
-    
-    mask_B = np.ones(len(B), dtype=bool)
-    mask_B[idx_B] = False
-    unique_B = B[mask_B]
+    overlap_A, overlap_B = A[mask], B[min_idx][mask]    
+    unique_A, unique_B = A[~mask], B[min_idx][~mask]
     
     return overlap_A, overlap_B, unique_A, unique_B
 
