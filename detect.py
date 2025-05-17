@@ -204,7 +204,7 @@ def region_grow(img: np.ndarray, seed: tuple[int, int], connectivity: int=4) -> 
     while queue:
         x, y = queue.popleft()
         # use img as visited flag matrix
-        if img[x, y]:
+        if img[x, y] == 0:
             continue
         img[x, y] = 0
 
@@ -214,6 +214,7 @@ def region_grow(img: np.ndarray, seed: tuple[int, int], connectivity: int=4) -> 
         
         # get neighbors
         neighbors = ds + (x, y)
+
         # boundary check
         mask = (neighbors[:,0] >= 0) & (neighbors[:,0] < h) & (neighbors[:,1] >= 0) & (neighbors[:,1] < w)
         neighbors = neighbors[mask]
@@ -273,16 +274,26 @@ def connected_components_label(img: np.ndarray, connectivity: int=4) -> tuple[in
 
     # offsets
     if connectivity == 4:
-        ds = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+        ds = np.array([[0, 1], [0, -1], [1, 0], [-1, 0]])
     elif connectivity == 8:
-        ds = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+        ds = np.array([[0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [1, -1], [-1, 1], [-1, -1]])
     else:
         print('wrong connectivity!')
-        return 0, np.array([])
+        return np.array([]), np.array([])
 
     # first pass
     xs, ys = np.nonzero(img)
     for x, y in zip(xs, ys):
+        # # get neighbors
+        # neighbors = ds + (x, y)
+        # # boundary check
+        # mask = (neighbors[:,0] >= 0) & (neighbors[:,0] < h) & (neighbors[:,1] >= 0) & (neighbors[:,1] < w)
+        # neighbors = neighbors[mask]
+
+        # # get connected neighbors' label
+        # connected_labels = label_img[neighbors[:, 0], neighbors[:, 1]]
+        # connected_labels = connected_labels[connected_labels!=0]
+                
         connected_labels = []
         for dx, dy in ds:
             if x + dx < 0 or x + dx >= h or y + dy < 0 or y + dy >= w:
