@@ -14,7 +14,7 @@ from sklearn.metrics.pairwise import haversine_distances
 from generate import setup
 from dataset import create_dataset
 from model import create_model
-from utils import get_angdist, get_attitude_matrix
+from utils import get_angdist, traid, gen_combos
 
 
 # Chinese font setting
@@ -107,18 +107,20 @@ def cluster_by_angle(ra_des: np.ndarray, ids: np.ndarray, probs: np.ndarray, r: 
 
     # intersect mc_labels with mp_labels
     mcp_labels = np.intersect1d(mc_labels, mp_labels)
+    mcp_cnts = cnts[clabels == mcp_labels] if len(mcp_labels) > 0 else [0]
 
     # get the label id of the biggest cluster
     if len(mc_labels) == 1:
         max_label = mc_labels[0]
-    elif len(mcp_labels) == 1:
+    elif len(mcp_labels) == 1 and mcp_cnts[0] > 1:
+        # only if the cluster size is bigger than 2, it can be determined by probabilities
         max_label = mcp_labels[0]
     else:
-        # verify failure, biggest cluster cannot be determined by both counts and probabilities
-        return np.full_like(ids, -1)
+        # cluster failure, biggest cluster cannot be determined by both counts and probabilities
+        return ids
 
     # get the ids of stars not in the biggest cluster
-    suprious_ids = ids[labels != max_label]
+    suprious_ids = ids[mask][labels != max_label]
 
     # set all the suprious ids to -1
     ids[np.isin(ids, suprious_ids)] = -1
@@ -329,11 +331,15 @@ def verify(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, probs: np.nd
     vvs[:, 0] = coords[mask, 1]-w/2
     vvs[:, 1] = coords[mask, 0]-h/2
 
+    # update stars, because ids may change after cluster_by_angle
+    stars = cata[cata['Star ID'].isin(ids)].copy()
+    stars = stars.set_index('Star ID').loc[ids[mask]].reset_index()
+
     # get the refernce vectors
     stars['X'] = np.cos(stars['Ra'])*np.cos(stars['De'])
     stars['Y'] = np.sin(stars['Ra'])*np.cos(stars['De'])
     stars['Z'] = np.sin(stars['De'])
-    rvs = stars[['X', 'Y', 'Z']].to_numpy()[mask] # use mask, because ids may change after cluster_by_angle
+    rvs = stars[['X', 'Y', 'Z']].to_numpy()
 
     # get the angular distances
     vagds, ragds = get_angdist(vvs), get_angdist(rvs)
@@ -344,8 +350,8 @@ def verify(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, probs: np.nd
 
     # at least the angular distance between one pair of stars is verified, the image can be considered as correctly identification    
     # !careful! minus one to exclude itself
-    if np.max(scores)-1 < 1:
-        # if no star pairs are verified, leave to postprocess    
+    if np.max(scores)-1 < 1 or np.sum(scores == scores.max()) > 1:
+        # if no star pairs are verified or multiple match, leave to postprocess    
         # ids[probs != probs.max()] = -1
         return ids, None
     
@@ -363,12 +369,76 @@ def verify(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, probs: np.nd
     ids[idxs[~cstr]] = -1
 
     ### 3.calculate the attitude matrix
-    att_mat = get_attitude_matrix(vvs[cstr].T, rvs[cstr].T)
+    att_mat = traid(vvs[cstr].T, rvs[cstr].T)
 
     return ids, att_mat
 
 
-def postprocess(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, att_mat: np.ndarray, h: int, w: int, f: int, eps1: float=5e-5, eps2: float=1e-3):
+def triangle_match(cata: pd.DataFrame, vvs: np.ndarray, init_id: int, init_idx: int, eps: float, cnt: int=10):
+    '''
+        Identify the stars(view vectors) by triangle algorithm with an initial id info.
+    '''
+    n = len(vvs)
+    assert(n >= 3)
+
+    # cosine cangular distances between view vectors
+    vagds = get_angdist(vvs) # (n, n)
+
+    # get the all potential reference vectors in guide star database
+    rvs = np.zeros((len(cata), 3))
+    rvs[:, 0] = np.cos(cata['Ra'])*np.cos(cata['De'])
+    rvs[:, 1] = np.sin(cata['Ra'])*np.cos(cata['De'])
+    rvs[:, 2] = np.sin(cata['De'])    
+
+    # cosine angular distances between initial vector and all reference vectors
+    ragds = get_angdist(rvs[cata['Star ID'] == init_id], rvs) # (1, k) (k is len(cata))
+
+    # calculate the differences between view vectors and reference vectors
+    diffs = np.abs(vagds[init_idx, :, None] - ragds) # (n, k)
+
+    # triangle match result
+    ids = np.full(n, -1)
+
+    # iterate the rest of stars by triagnle
+    for idxs in gen_combos(n, 3): # idxs (3,)
+        if init_idx in idxs:
+            continue
+
+        # the possible catalogue idxs for each point in the triangle
+        cata_idxs = np.argsort(diffs[idxs], axis=1) # (3, k)
+        cata_idxs = cata_idxs[:, :cnt] # (3, cnt)
+
+        # generate all the combinations of catalogue idxs
+        c1, c2, c3 = np.meshgrid(np.arange(cnt), np.arange(cnt), np.arange(cnt))
+        ac_cata_idxs = np.vstack([ 
+            cata_idxs[0, c1.ravel()],
+            cata_idxs[1, c2.ravel()],
+            cata_idxs[2, c3.ravel()],
+        ]).transpose() # (cnt*cnt*cnt, 3)
+
+        for cata_idxs in ac_cata_idxs:
+            if np.any(diffs[idxs, cata_idxs]>= eps):
+                continue
+
+            # candidate triangle angular distance
+            ragds = get_angdist(rvs[cata_idxs])
+            if np.all(np.abs(vagds[idxs][:, idxs] - ragds) < eps):
+                # set the matced triangle to ids
+                ids[init_idx] = init_id
+                ids[idxs] = cata.loc[cata_idxs, 'Star ID'].to_numpy()
+                
+                # get attitude info
+                mask = ids != -1
+                cata_idxs = cata.set_index('Star ID').index.get_indexer(ids[mask])
+                cata.reset_index() # reset index
+                att_mat = traid(vvs[mask].T, rvs[cata_idxs].T)
+
+                return ids, att_mat
+
+    return ids, None
+
+
+def postprocess(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, att_mat: np.ndarray, h: int, w: int, f: int, eps1: float=1e-4, eps2: float=1e-3):
     '''
         Use the estimated and verified ids(attitude info) to predict unidentified ids.
     '''
@@ -387,48 +457,17 @@ def postprocess(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, att_mat
     # normalize
     vvs = vvs/np.linalg.norm(vvs, axis=1, keepdims=True)
 
-    # if no attitude infomation is offerred, do angular distance match directly
+    # if no attitude infomation is offerred, do triangle match
     if att_mat is None:
-        # cosine cangular distances between view vectors
-        vagds = get_angdist(vvs[mask], vvs) # (m, n) (m is np.sum(mask), n is len(ids)) 
+        idxs = np.where(ids!=-1)[0]
+        for idx in idxs:
+            nids, att_mat = triangle_match(cata, vvs, ids[idx], idx, eps1)
+            if att_mat is not None:
+                ids = nids
+                break
 
-        # get the all potential reference vectors in guide star database
-        rvs = np.zeros((len(cata), 3))
-        rvs[:, 0] = np.cos(cata['Ra'])*np.cos(cata['De'])
-        rvs[:, 1] = np.sin(cata['Ra'])*np.cos(cata['De'])
-        rvs[:, 2] = np.sin(cata['De'])
-        
-        # get the idxs of non -1 ids in cata
-        idxs = cata.set_index('Star ID').index.get_indexer(ids[mask])
-        cata.reset_index()
-
-        # cosine angular distances between all reference vectors
-        ragds = get_angdist(rvs[idxs], rvs) # (m, k) (k is len(cata))
-
-        # calculate the differences between view vectors and reference vectors
-        diffs = np.abs(vagds[..., None] - ragds[:, None, :]) # (m, n, k)
-
-        # count the valid match for each non -1
-        valid_counts = np.sum(
-            np.any(diffs < eps1, axis=2), # (m, n)
-            axis=1
-        )  # (m,)
-
-        # no reference star is matched        
-        if np.max(valid_counts) == 1:
+        if att_mat is None:
             return ids
-        
-        # take the maximum match count as match result
-        diffs = diffs[np.argmax(valid_counts)]  # (n, k)
-        match = np.argmin(diffs, axis=1) # (n,)
-
-        # only when differences less than eps, match is valid
-        valid_mask = np.min(diffs, axis=1) < eps1
-
-        # get the matched star id
-        ids[valid_mask] = cata.loc[match[valid_mask], 'Star ID'].to_numpy()
-        
-        return ids
 
     # get the ideal reference vectors
     rvs = vvs @ att_mat
