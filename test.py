@@ -374,7 +374,7 @@ def verify(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, probs: np.nd
     return ids, att_mat
 
 
-def triangle_match(cata: pd.DataFrame, vvs: np.ndarray, init_id: int, init_idx: int, eps: float, cnt: int=10):
+def triangle_match(cata: pd.DataFrame, vvs: np.ndarray, init_id: int, init_idx: int, eps: float, cnt: int=5):
     '''
         Identify the stars(view vectors) by triangle algorithm with an initial id info.
     '''
@@ -408,32 +408,50 @@ def triangle_match(cata: pd.DataFrame, vvs: np.ndarray, init_id: int, init_idx: 
         cata_idxs = np.argsort(diffs[idxs], axis=1) # (3, k)
         cata_idxs = cata_idxs[:, :cnt] # (3, cnt)
 
-        # generate all the combinations of catalogue idxs
+        # generate all the combinations of catalogue idxs, in other words all the candidate triangle
         c1, c2, c3 = np.meshgrid(np.arange(cnt), np.arange(cnt), np.arange(cnt))
-        ac_cata_idxs = np.vstack([ 
+        ct_cata_idxs = np.vstack([ 
             cata_idxs[0, c1.ravel()],
             cata_idxs[1, c2.ravel()],
             cata_idxs[2, c3.ravel()],
-        ]).transpose() # (cnt*cnt*cnt, 3)
+        ]).transpose() # (tot, 3) tot is the total number of triangle, here is cnt**3
 
-        for cata_idxs in ac_cata_idxs:
-            if np.any(diffs[idxs, cata_idxs]>= eps):
-                continue
+        # condition 1: the distances bewteen the intial star(init_id) and the points in the candiate triangle have to match the distance between the concerning view vectors
+        cond1 = np.all(
+            diffs[idxs][np.arange(3)[None, :], ct_cata_idxs] < eps, # (tot, 3)
+            axis=1,
+        ) # (tot,)
 
-            # candidate triangle angular distance
-            ragds = get_angdist(rvs[cata_idxs])
-            if np.all(np.abs(vagds[idxs][:, idxs] - ragds) < eps):
-                # set the matced triangle to ids
-                ids[init_idx] = init_id
-                ids[idxs] = cata.loc[cata_idxs, 'Star ID'].to_numpy()
-                
-                # get attitude info
-                mask = ids != -1
-                cata_idxs = cata.set_index('Star ID').index.get_indexer(ids[mask])
-                cata.reset_index() # reset index
-                att_mat = traid(vvs[mask].T, rvs[cata_idxs].T)
+        # the angular distances of all the candidate triangles 
+        ct_rvs = rvs[ct_cata_idxs, :] # (tot, 3, 3)
+        
+        # cannot use get_angdist, calculate reference angular distances of candidate triangles manually
+        ct_ragds = np.einsum('tia,tja->tij', ct_rvs, ct_rvs) # (tot, 3, 3)
+        
+        # the concerning view vectors' angular distances
+        ct_vagds = vagds[idxs][:, idxs] # (3, 3)
 
-                return ids, att_mat
+        # condition 2: the three edges of the candidate triangle have to match the distance between the concerning view vectors
+        cond2 = np.all(
+            np.abs(ct_ragds - ct_vagds[None, ...]) < eps, # (tot, 3, 3)
+            axis=(1, 2)
+        ) # (tot,)
+
+        if np.any(cond1 & cond2):
+            # get match result
+            cata_idxs = ct_cata_idxs[np.where(cond1 & cond2)[0][0]]
+
+            # set the matced triangle to ids
+            ids[init_idx] = init_id
+            ids[idxs] = cata.loc[cata_idxs, 'Star ID'].to_numpy()
+            
+            # get attitude info
+            mask = ids != -1
+            cata_idxs = cata.set_index('Star ID').index.get_indexer(ids[mask])
+            cata.reset_index() # reset index
+            att_mat = traid(vvs[mask].T, rvs[cata_idxs].T)
+
+            return ids, att_mat
 
     return ids, None
 
