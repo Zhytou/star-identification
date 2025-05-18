@@ -56,7 +56,7 @@ def get_rotation_matrix(w: np.ndarray, v: np.ndarray) -> np.ndarray:
     return np.array([[cos_theta, -sin_theta], [sin_theta, cos_theta]])
 
 
-def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idxs: np.ndarray, img_id: str, h: int, w: int, f: float, ra: float=None, de: float=None, roll: float=None, realshot: bool=False, max_num_samp: int=20):
+def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idxs: np.ndarray, grays: np.ndarray, img_id: str, h: int, w: int, f: float, ra: float=None, de: float=None, roll: float=None, realshot: bool=False, max_num_samp: int=20):
     '''
         Generate the pattern with the given star coordinates for one star image.
     Args:
@@ -98,9 +98,9 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
     angdists = get_angdist(points)
 
     # choose top max_num_samp brightest star as the reference star
-    n = min(n, max_num_samp+1) if realshot else n
+    n = min(n, max_num_samp+1) if realshot and max_num_samp != -1 else n
 
-    for star_id, cata_idx, coord, ds, ags, ads in zip(ids[:n], cata_idxs[:n], coords[:n], distances[:n], angles[:n], angdists[:n]):
+    for star_id, cata_idx, coord, gray, ds, ags, ads in zip(ids[:n], cata_idxs[:n], coords[:n], grays[:n], distances[:n], angles[:n], angdists[:n]):
         # get catalogue index of the guide star
         if not realshot and cata_idx == -1:
             # skip the star if it is not in the catalogue
@@ -133,22 +133,21 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
             exc_cs, exc_ds, exc_ags = cs[(ads > Rp) & (ads < Rb)], ds[(ads > Rp) & (ads < Rb)], ags[(ads > Rp) & (ads < Rb)]
             assert len(exc_cs) == len(exc_ds) == len(exc_ags), "The number of stars in the region is not matched."
 
+            # total number of stars in the region
+            tot = len(exc_cs)
+
             # ?due to the precision of the float, these assertions may fail
             # assert np.all((exc_cs > -rp) & (exc_cs < rp)), f"The coordinates of stars in the region is not in the range of [-rp, rp]. {exc_cs}"
             # assert np.all((exc_ds > rb) & (exc_ds < rp)), f"The distance of stars in the region is not in the range of [rb, rp]. {exc_ds}"
-            if len(exc_cs) <= max(min_num_star-1, 3):
-                continue
-
-            # total number of stars in the region
-            tot = len(exc_cs)
 
             # initialize the pattern
             pat = {
                 'star_id': int(star_id),
                 'cata_idx': int(cata_idx),
                 'img_id': img_id,
-                'row': round(coord[0], 2),
-                'col': round(coord[1], 2),
+                'row': coord[0] if realshot else round(coord[0], 2), # when generating patterns for realshots, do not round the coordinates
+                'col': coord[1] if realshot else round(coord[1], 2), # because it may make a difference on angular distance calculation for later pattern match
+                'gray': gray
             }
 
             # add the right ascension, declination and roll angle if they are given
@@ -157,6 +156,12 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
                 pat['de'] = round(de, 2)
                 pat['roll'] = round(roll, 2)
 
+            if tot <= max(min_num_star-1, 3):
+                # for realshot, even if the tot star number is less than 3, still add to pats_dict
+                if realshot:
+                    pats_dict[method].append(pat)
+                continue
+            
             if method == 'rac_nn':
                 # parse the rest parameters
                 arr_Nr, Ns, Nn, use_prob = meth_params[method][2:]
@@ -310,7 +315,8 @@ def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd:
             coords = stars[:, 1:3]
             ids = stars[:, 0]
             cata_idxs = np.full_like(ids, cata_idx)
-            
+            grays = np.full_like(ids, 0) # only used in realshot
+
             # generate only the patterns for the given star
             cata_idxs[ids != star_id] = -1
             ids[ids != star_id] = -1
@@ -321,6 +327,7 @@ def gen_database(meth_params: dict, simu_params: dict, gcata_path: str, num_thd:
                 coords, 
                 ids, 
                 cata_idxs,
+                grays,
                 img_id='', # no need to generate img_id
                 h=simu_params['h'], 
                 w=simu_params['w'], 
@@ -438,6 +445,9 @@ def gen_dataset(meth_params: dict, simu_params: dict, star_id: int, cata_idx: in
         cata_idxs[ids != star_id] = -1
         ids[ids != star_id] = -1
         
+        # only used in realshot
+        grays = np.full_like(ids, 0) 
+
         if np.all(ids == -1):
             continue
 
@@ -447,6 +457,7 @@ def gen_dataset(meth_params: dict, simu_params: dict, star_id: int, cata_idx: in
             coords, 
             ids,
             cata_idxs, 
+            grays,
             img_id='', # no need to generate a random img_id 
             h=simu_params['h'], 
             w=simu_params['w'], 
@@ -550,6 +561,7 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, raw_dir: str,
 
         # find the catalogue index of all the guide stars in the image
         cata_idxs = np.full_like(ids, -1)
+        grays = np.full_like(ids, 0) # only used in realshot
 
         # intersect the ids with the catalogue, and return the common ids and their indexs
         intersect_ids, ids_idxs, gcata_idxs = np.intersect1d(ids, gcata['Star ID'].to_numpy(), return_indices=True)
@@ -567,6 +579,7 @@ def gen_sample(num_img: int, meth_params: dict, simu_params: dict, raw_dir: str,
             coords, 
             ids,
             cata_idxs,
+            grays,
             img_id, 
             h=simu_params['h'], 
             w=simu_params['w'],
@@ -595,8 +608,8 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, extr_params: dict, 
         # get the image size
         h, w = img.shape
 
-        # get the centroids of the stars in the image
-        coords = np.array(get_star_centroids(
+        # get the coordinates and graysums of the stars in the image
+        points = np.array(get_star_centroids(
             img, 
             den_meth=extr_params['den'],
             thr_meth=extr_params['thr'],
@@ -606,7 +619,10 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, extr_params: dict, 
             T1=extr_params.get('T1', None),
             T2=extr_params.get('T2', None),
             T3=extr_params.get('T3', None),
+            need_gray=True,
         ))
+        coords = points[:, :2]
+        grays = points[:, 2]
 
         # set all star ids and catalogue indexs to -1, since unknown for real image
         ids = np.full(len(coords), -1)
@@ -620,11 +636,12 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, extr_params: dict, 
             coords, 
             ids,
             cata_idxs,
+            grays,
             img_id=img_path,
             h=h,
             w=w,
             f=f,
-            max_num_samp=20,
+            max_num_samp=-1,
             realshot=True
         )
         

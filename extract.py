@@ -100,11 +100,8 @@ def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, m
         print('Invalid gravity method!')
         return 0.0, 0.0
     
-    # center = round(xgs/gs, 3), round(ygs/gs, 3)
     center = xgs/gs, ygs/gs
 
-    if method == 'CCoG':
-        center = center[0]+cal_compensate(center[0]), center[1]+cal_compensate(center[1])
     return center
 
 
@@ -112,7 +109,7 @@ def cal_compensate(esti_x):
     return -2.4194299127361094*np.sin(0.014439263775565864*esti_x-0.007147436746119124)
 
 
-def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: str, cen_meth: str | list[str], pixel_limit: int=5, T1: float=None, T2: float=None, T3: float=None, connectivity=4, num_esti: int=1) -> list[tuple[float, float]] | dict[str, list[tuple[float, float]]]:
+def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: str, cen_meth: str | list[str], pixel_limit: int=5, T1: float=None, T2: float=None, T3: float=None, connectivity=4, num_esti: int=1, need_gray: bool=False) -> list[tuple[float, float]] | list[tuple[float, float, int]] | dict[str, list[tuple[float, float]]]:
     '''
         Get the centroids of the stars in the image.
     Args:
@@ -124,6 +121,7 @@ def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: 
         pixel_limit: the minimum number of connected pixels
         T1/T2/T3: optional threshold used in RG segmentation method
         num_esti: the number of estimation using centroid algorithm
+        need_gray: whether return the sum of gray of each centroid
     Returns:
         centroids: the centroids of the stars in the image
     '''
@@ -137,10 +135,6 @@ def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: 
     # rough group star using connectivity
     group_coords = group_star(filtered_img, seg_meth, T, T1=T1, T2=T2, T3=T3, connectivity=connectivity, pixel_limit=pixel_limit)
 
-    # sort group_coords by grayscale sum, so that the returned centrods are sorted from high to low by brightness
-    gray_sum = [np.sum(filtered_img[rows, cols]) for rows, cols in group_coords]
-    group_idxs =np.argsort(gray_sum)[::-1]
-
     # calculate the centroid coordinate with threshold and weight
     centroids = {}
 
@@ -151,17 +145,23 @@ def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: 
 
     for method in cen_meths:
         centroids[method] = []
-        for group_idx in group_idxs:
-            rows, cols = group_coords[group_idx]
-            vals = filtered_img[rows, cols]
-            
+        for rows, cols in group_coords:
             # get the brightest pixel and use it as the center
+            vals = filtered_img[rows, cols]
             idx = np.argmax(vals)
             # ?maybe use the brightest pixel as the center to construct a window
             brightest = rows[idx], cols[idx]
 
-            avg_esti_centroid = np.mean([cal_center_of_gravity(filtered_img, rows, cols, method, T, brightest) for _ in range(num_esti)], axis=0)
-            centroids[method].append((avg_esti_centroid[0], avg_esti_centroid[1]))
+            # get the graysum
+            graysum = np.sum(vals)
+
+            # calculate the centroid
+            avg_centroid = np.mean([cal_center_of_gravity(filtered_img, rows, cols, method, T, brightest) for _ in range(num_esti)], axis=0)
+
+            if need_gray:
+                centroids[method].append((avg_centroid[0], avg_centroid[1], graysum))
+            else:
+                centroids[method].append((avg_centroid[0], avg_centroid[1]))
 
     if len(cen_meths) == 1:
         return centroids[cen_meth]

@@ -42,6 +42,9 @@ class LPTDataset(Dataset):
     '''Log-Polar transform based NN dataset'''
 
     def __init__(self, label_df: pd.DataFrame, params: list):
+        # drop na values
+        label_df = label_df.dropna(axis=0)
+
         # number of distance features
         nd = params[2]
         
@@ -53,7 +56,7 @@ class LPTDataset(Dataset):
         self.feats = label_df[cols].to_numpy(np.float32)
 
         # set data of catalog index(labels)
-        self.labels = label_df['cata_idx'].astype(int)
+        self.labels = label_df['cata_idx'].to_numpy(int)
 
     def __len__(self):
         return self.len
@@ -69,6 +72,10 @@ class RACDataset(Dataset):
     '''Radial and cyclic based NN dataset'''
 
     def __init__(self, label_df: pd.DataFrame, params: list):
+        # drop na values
+        label_df = label_df.dropna(axis=0)
+
+        # parameters
         arr_nr, ns, nn = params[2:-1]
         # number of rings
         nr = sum(arr_nr)
@@ -85,7 +92,7 @@ class RACDataset(Dataset):
         self.feats = label_df[cols].to_numpy(np.float32)
 
         # set data of catalog index(labels)
-        self.labels = label_df['cata_idx'].astype(int)
+        self.labels = label_df['cata_idx'].to_numpy(int)
 
     def __len__(self):
         return self.len
