@@ -3,7 +3,7 @@ import numpy as np
 from scipy.signal import convolve2d
 
 
-def filter_image(img: np.ndarray, method: str='GAUSSIAN', size: int=3, sigma: float=0.5) -> np.ndarray:
+def filter_image(img: np.ndarray, method: str='GAUSSIAN', size: int=3, sigma: float=1) -> np.ndarray:
     '''
         Conventional noise reducing filters.
     Args:
@@ -21,7 +21,9 @@ def filter_image(img: np.ndarray, method: str='GAUSSIAN', size: int=3, sigma: fl
         padded_img = np.pad(img, ((d, d), (d, d)), mode='constant')
         filtered_img = cv2.medianBlur(padded_img, size)
         filtered_img = filtered_img[d:-d, d:-d]
-    elif method == 'GLP':
+    elif method == 'BLF':
+        filtered_img = cv2.bilateralFilter(img, size, 30, sigma)
+    elif method == 'GLF':
         f = np.fft.fft2(img)
         fshift = np.fft.fftshift(f)
 
@@ -285,10 +287,12 @@ def denoise_image(img: np.ndarray, method: str):
         denoised_img = denoise_with_blf_new(denoised_img, 3, 0.1, sigma_color=10)
     elif method == 'NLM':
         denoised_img = denoise_with_nlm(img, 10, 7, 49)
-    elif method == 'BLF':
-        denoised_img = denoise_with_blf_new(img, 3, 0.1, sigma_color=10)
-    else:
+    # elif method == 'BLF':
+    #     denoised_img = denoise_with_blf_new(img, 3, 0.1, sigma_color=10)
+    elif method in ['MEAN', 'GAUSSIAN', 'MEDIAN', 'BLF', 'GLF']:
         denoised_img = filter_image(img, method)
+    else:
+        denoised_img = img
     return denoised_img
 
 
