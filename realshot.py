@@ -8,16 +8,16 @@ from torch.utils.data import DataLoader
 
 from simulate import cata
 from denoise import filter_image, denoise_image
-from detect import cal_threshold, get_seed_coords, group_star
+from detect import cal_threshold, get_seed_coords
 from extract import get_star_centroids
 from generate import gen_real_sample, setup
 from dataset import create_dataset
 from model import create_model
 from test import predict, verify, postprocess
-from utils import get_angdist, label_star_image, get_attitude_matrix
+from utils import get_angdist, label_star_image, traid
 
 
-DEBUG = False
+DEBUG = True
 
 
 # 验证降噪\二值化\连通域等算法和matlab实现一致性
@@ -150,7 +150,7 @@ def load_h5data(dir: str, name: str):
     return data
 
 
-def cal_attitude(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, h: int, w: int, f: int):
+def cal_attitude(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, h: int, w: int, f: int, grays: np.ndarray=None):
     '''
         Calculate the attitude matrix of star sensor.
     '''
@@ -170,10 +170,10 @@ def cal_attitude(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, h: int
     stars = stars.set_index('Star ID').loc[ids]
     rvs = stars[['X', 'Y', 'Z']].to_numpy()
 
-    return get_attitude_matrix(vvs.T, rvs.T)
+    return traid(vvs.T, rvs.T)
 
 
-def identify_realshot_by_nn(img_paths: list[str], simu_params: dict, meth_params: dict, extr_params: dict, model_types: dict, gcata_path: str, device: str=torch.device('cuda' if torch.cuda.is_available() else 'cpu'), eps1: float=1e-4, eps2: float=1e-3):
+def identify_realshot_by_nn(img_paths: list[str], simu_params: dict, meth_params: dict, extr_params: dict, model_types: dict, gcata_path: str, device: str=torch.device('cuda' if torch.cuda.is_available() else 'cpu'), eps1: float=1e-4, eps2: float=1e-3, output_dir: str=None):
     '''
         Identify realshot by nn method.
     '''
@@ -192,9 +192,6 @@ def identify_realshot_by_nn(img_paths: list[str], simu_params: dict, meth_params
         gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
         ext_cfg = '_'.join(map(str, extr_params.values()))
 
-        # model parameters
-        model_path = os.path.join('model', sim_cfg, method, gen_cfg, model_types[method], 'best_model.pth')
-
         # print info
         print(
             'Realshot Test',
@@ -208,6 +205,7 @@ def identify_realshot_by_nn(img_paths: list[str], simu_params: dict, meth_params
             '\nMODEL INFO',
             '\nModel type:', model_types[method],
             '\nDevice:', device,
+            '\n-----------------------',
         )
 
         # get the pattern radius for later fov restriction
@@ -231,30 +229,36 @@ def identify_realshot_by_nn(img_paths: list[str], simu_params: dict, meth_params
             meth_params[method],
             len(gcata),
         )
+        model_path = os.path.join('model', sim_cfg, method, gen_cfg, model_types[method], 'best_model.pth')
         model.load_state_dict(torch.load(model_path))
 
-        # predict the star id
-        all_esti_idxs, all_probs = predict(model, loader, 0, device)
-        all_esti_ids = np.full_like(all_esti_idxs, -1)
-        mask = all_esti_idxs != -1    
-        all_esti_ids[mask] = gcata.loc[all_esti_idxs[mask], 'Star ID'].to_numpy()
+        # predict the star catalogue index
+        cata_idxs, valid_probs = predict(model, loader, 0, device)
+        
+        # initilize the predicted ids and probs
+        ids, probs = np.full(len(df), -1), np.full(len(df), 0.0)
+        
+        # some stars may not have valid patterns, because of insufficient stars in their neighboring regions
+        mask = df.isna().any(axis=1).to_numpy()
+        ids[~mask] = gcata.loc[cata_idxs, 'Star ID'].to_numpy()
+        probs[~mask] = valid_probs
 
-        # get the star coordinates
-        all_coords = df[['row', 'col']].to_numpy()
-        # need to substract 0.5 offset for later coords match
-        all_coords -= 0.5
-
-        assert len(all_esti_ids) == len(all_coords)
+        # get all the coordinates
+        coords = df[['row', 'col']].to_numpy()
 
         # get the image id(same as image path)
         img_ids = df['img_id'].to_numpy()
 
+        # add flags
+        df['valid'] = ~mask
+        df['verified'] = False
+
         # do verification and postprocess for each image
-        for img_id in img_ids:
-            # get the image predications
-            esti_ids = all_esti_ids[img_ids == img_id]
-            esti_coords = all_coords[img_ids == img_id]
-            esti_probs = all_probs[img_ids == img_id]
+        for img_id in np.unique(img_ids):
+            # get the predications for each image
+            esti_ids = ids[img_ids == img_id]
+            esti_coords = coords[img_ids == img_id]
+            esti_probs = probs[img_ids == img_id]
 
             # verify the results
             esti_ids, esti_atti = verify(
@@ -263,10 +267,13 @@ def identify_realshot_by_nn(img_paths: list[str], simu_params: dict, meth_params
                 ids=esti_ids, 
                 probs=esti_probs,
                 fov=2*rp, 
-                h=h, 
-                w=w, 
-                f=f,
+                h=simu_params['h'], 
+                w=simu_params['w'], 
+                f=simu_params['f'],
             )
+
+            if esti_atti is not None:
+                df.loc[img_ids==img_id, 'verified'] = esti_ids != -1
 
             # postprocess
             esti_ids = postprocess(
@@ -274,15 +281,37 @@ def identify_realshot_by_nn(img_paths: list[str], simu_params: dict, meth_params
                 esti_coords, 
                 esti_ids, 
                 esti_atti,
-                h=h, 
-                w=w, 
-                f=f,
+                h=simu_params['h'], 
+                w=simu_params['w'], 
+                f=simu_params['f'],
                 eps1=eps1,
                 eps2=eps2
             )
 
             # store the estimation results
             df.loc[img_ids==img_id, 'star_id'] = esti_ids
+
+            # label the realshot and save it to res dir
+            if output_dir is not None:                
+                # xxxx.bmp
+                img_name = os.path.basename(img_id)
+
+                # read image
+                img = cv2.imread(img_id, cv2.IMREAD_GRAYSCALE)
+
+                # label and save the image
+                label_star_image(
+                    img, 
+                    esti_coords, 
+                    esti_ids, 
+                    circle=True,
+                    axis_on=False,
+                    show=False,
+                    output_path=os.path.join(output_dir, img_name)
+                )
+
+        # update dataframe
+        df_dict[method] = df[['img_id', 'star_id', 'row', 'col', 'gray', 'valid', 'verified']]
 
     return df_dict
 
@@ -354,51 +383,62 @@ if True:
     # load test data
     data = []
     for prefix in [
-        # '0P0', 
-        # '1P0', 
+        '0P0', 
+        '1P0', 
+        '2P0',
         '3P0'
     ]:
         data.extend(load_h5data(f'example/{prefix}/', f'{prefix}_liebe5_pixel5_eps00005.h5')) 
 
     # get the path of test image
+    # target_paths = ['00000064_000000000198AA97.bmp', '00000071_000000000198AF3A.bmp', '00000084_000000000198B7D6.bmp', '00000129_000000000198D4C4.bmp', '00000255_000000000199265E.bmp']
+    # img_paths = [item['path'] for item in data if os.path.basename(item['path']) in target_paths]
     img_paths = [item['path'] for item in data]
 
     # test image config
     h, w, f = 1040, 1288, 18500/4.8
 
+    # parameters
+    simu_params = {
+        'h': h,
+        'w': w,
+        'f': f,
+        'fovy': 2*np.degrees(np.arctan(h/(2*f))),
+        'fovx': 2*np.degrees(np.arctan(w/(2*f))),
+        'limit_mag': 5.5,
+        'rot': 1
+    }
+    meth_params = {
+        'rac_nn': [
+            0.5,            # Rb
+            7.7,            # Rp
+            [35, 75, 115],  # arr_ring
+            18,             # num_sector
+            3,              # num_neighbor
+            0,              # use_prob
+        ],
+    }
+    extr_params = {
+        'den': 'MEDIAN',    # denoise
+        'thr': 'Liebe5',    # threshold
+        'seg': 'CCL',       # segmentation
+        'cen': 'MCoG',      # centroid
+        'pixel': 5          # pixel number limit
+    }
+
     # identify realshots
     df_dict = identify_realshot_by_nn(
         img_paths, 
-        simu_params={
-            'h': h,
-            'w': w,
-            'f': f,
-            'fovy': 2*np.degrees(np.arctan(h/(2*f))),
-            'fovx': 2*np.degrees(np.arctan(w/(2*f))),
-            'limit_mag': 5.5,
-            'rot': 1
-        },
-        meth_params={
-            'rac_nn': [
-                0.5,            # Rb
-                7.7,            # Rp
-                [35, 75, 115],  # arr_ring
-                18,             # num_sector
-                3,              # num_neighbor
-                0,              # use_prob
-            ],
-        },
-        extr_params={
-            'den': 'MEDIAN',    # denoise
-            'thr': 'Liebe5',    # threshold
-            'seg': 'CCL',       # segmentation
-            'cen': 'MCoG',      # centroid
-            'pixel': 5          # pixel number limit
-        },
+        simu_params,
+        meth_params,
+        extr_params,
         model_types={
-            'rac_nn': 'cnn2',
+            'rac_nn': 'cnn3',
         },
-        gcata_path = 'catalogue/sao5.5_d0.03_9_10.csv' # guide star catalogue
+        gcata_path='catalogue/sao5.5_d0.03_9_10.csv', # guide star catalogue，
+        eps1=5e-5,
+        eps2=1e-2,
+        # output_dir='res/chapter4/realshot',
     )
 
     # only take rac results
@@ -406,23 +446,25 @@ if True:
 
     # the result dict
     res = {}
+    # failed star image paths
+    failed_img_paths = []
 
     # check the results by image
     for item in data:
         img_path, real_coords, real_ids = item['path'], item['coords'], item['ids']
 
+        if img_path not in img_paths:
+            continue
+
         # get esti coords and id
-        esti = df.loc[df['img_id']==img_path, ['star_id', 'row', 'col']].to_numpy()
-        esti_ids, esti_coords = esti[:, 0].astype(int), esti[:, 1:3]
+        esti = df.loc[df['img_id']==img_path, ['star_id', 'row', 'col', 'gray', 'valid', 'verified']].to_numpy()
+        esti_ids, esti_coords, grays, flags = esti[:, 0].astype(int), esti[:, 1:3].astype(float), esti[:, 3].astype(int), esti[:, 4:6].astype(bool)
+
+        # add 0.5 offset, since row and column of matlab matrixs start with 1
+        esti_coords += 0.5
 
         # get the attitude matrix
         real_atti = cal_attitude(cata, real_coords, real_ids, h=h, w=w, f=f)
-
-        # subtract 1 offset, since row and column of matlab matrixs start with 1
-        real_coords -= 1
-
-        # subtract 0.5 offset
-        esti_coords -= 0.5
 
         # search for matched coordinates
         cnt = 0
@@ -436,26 +478,52 @@ if True:
             assert np.allclose(esti_coords[idx], real_coord, atol=1e-1)
             cnt += 1 if esti_ids[idx] == real_id else 0
 
-        res[img_path] = (cnt >= 3) #or np.allclose(real_atti, esti_atti, atol=1e-1)
+        # add to result
+        res[img_path] = cnt
 
-        if True:
+        if DEBUG and cnt < 3:
+            failed_img_paths.append(img_path)
+            
+            # print debug info
             print(
                 'Image:', os.path.basename(img_path),
-                '\nReal coords:\n', real_coords,
-                '\nReal ids:\n', real_ids,
-                '\nEsti coords:\n', esti_coords,
-                '\nEsti ids:\n', esti_ids,
+                # '\nReal coords:\n', real_coords,
+                # '\nReal ids:\n', real_ids,
+                # '\nReal attitude:\n', real_atti,
+                # '\nEsti coords:\n', esti_coords,
+                # '\nEsti ids:\n', esti_ids,
+                # '\nEsti attitude:\n', esti_atti,
+                '\nNumber of valid patterns:', np.sum(flags[:, 0]),
+                '\nNumber of verified patterns:', np.sum(flags[:, 1]),
+                '\nNumber of correct match:', cnt, 
+                '\nNumber of stars:', len(flags),
+                '\n',
             )
-                
+    
+    # average number of successfully identified star in each image
+    avg_istar_cnt = sum(map(lambda x: res[x], res)) / len(data)
+    # average number of valid reference star in each image
+    avg_rstar_cnt = df.groupby('img_id')['valid'].sum().mean()
+    # average number of star in each image
+    avg_star_cnt = df.groupby('img_id').size().mean()
+    
     # number of successfully identified star image
-    cnt = sum(res.values())
+    img_cnt = sum(map(lambda x: res[x]>=3, res))
     # accuracy
-    acc = cnt / len(res) * 100
+    acc = img_cnt / len(data) * 100
+
+    # describe the failed test star images
+    if DEBUG:
+        # df = gen_real_sample(failed_img_paths, meth_params, extr_params, simu_params['f'])['rac_nn']
+        df = df[df['img_id'].isin(failed_img_paths)]
+        print(df.groupby('img_id')[['valid', 'verified']].sum())        
 
     print(
-        '----------------------'
-        '\nTEST RESULTS'
+        'TEST RESULTS'
         '\nTotal number of test star image:', len(data), 
-        '\nNumber of successfully identified star image:', cnt, 
+        '\nAverage number of successfully identified stars in each image:', avg_istar_cnt, #只能反映和matlab中代码识别相同的数量，受matlab代码识别限制
+        '\nAverage number of reference stars in each image:', avg_rstar_cnt, 
+        '\nAverage number of stars in each image:', avg_star_cnt, 
+        '\nNumber of successfully identified star image:', img_cnt, 
         '\nAccuracy of successfully identified star image:', acc, '%'  
     )
