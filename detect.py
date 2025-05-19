@@ -5,6 +5,37 @@ import scipy.ndimage as nd
 from collections import defaultdict, deque
 
 
+class UnionSet:
+    '''
+        Union set for connected components label.
+    '''
+    def __init__(self):
+        self.parent = {}
+        self.rank = {}
+
+    def find(self, x):
+        if self.parent[x] != x:
+            self.parent[x] = self.find(self.parent[x])
+        return self.parent[x]
+
+    def union(self, x, y):
+        root_x = self.find(x)
+        root_y = self.find(y)
+        if root_x != root_y:
+            if self.rank[root_x] > self.rank[root_y]:
+                self.parent[root_y] = root_x
+            elif self.rank[root_x] < self.rank[root_y]:
+                self.parent[root_x] = root_y
+            else:
+                self.parent[root_y] = root_x
+                self.rank[root_x] += 1
+
+    def add(self, x):
+        if x not in self.parent:
+            self.parent[x] = x
+            self.rank[x] = 0
+
+
 def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int=5, gray_diff: int=4) -> int:
     """
         Calculate the threshold for image segmentation.
@@ -118,19 +149,30 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
     return T
 
 
-def get_seed_coords(img: np.ndarray, wind_size: int=5, T1: int=0, T2: int=-np.inf, T3: int=0) -> np.ndarray:
+def get_seed_coords(img: np.ndarray, wind_size: int=5, T1: int=0, T2: int=-np.inf, T3: int=0, connectivity: int=4) -> tuple[int, np.ndarray]:
     '''
         Get the seed coordinates with the star distribution.
     Args:
         img: the image to be processed
         wind_size: the size of the window used to calculate the threshold
-        T1: the threshold for local maxima
+        T1: the threshold for local maximum
         T2: the threshold for Hessian determinant
-        T3: the threshold for local maxima values and neighborhood means
+        T3: the threshold for local maximum values and neighborhood means
+        connectivity
     Returns:
-        coords: the coordinates of the seed points
+        seeds: the coordinates and labels of the seeds
     '''
+    # image size
     h, w = img.shape
+
+    # offsets
+    if connectivity == 4:
+        ds = np.array([[0, 1], [0, -1], [1, 0], [-1, 0]])
+    elif connectivity == 8:
+        ds = np.array([[0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [1, -1], [-1, 1], [-1, -1]])
+    else:
+        print('wrong connectivity!')
+        return np.array([])
 
     # half window
     if wind_size % 2 == 0:
@@ -138,7 +180,7 @@ def get_seed_coords(img: np.ndarray, wind_size: int=5, T1: int=0, T2: int=-np.in
     half_size = wind_size // 2
 
     # get the coordinates of the local maxima
-    mask = (img == nd.maximum_filter(img, size=wind_size)) & (img > T1)
+    mask = (img == nd.maximum_filter(img, size=wind_size)) & (img >= T1)
     coords = np.transpose(np.nonzero(mask))
 
     # pad the image
@@ -173,91 +215,96 @@ def get_seed_coords(img: np.ndarray, wind_size: int=5, T1: int=0, T2: int=-np.in
     neighborhood_means = np.mean(neighborhoods[coords[:, 0], coords[:, 1]], axis=(-2, -1))
 
     # filter the coordinates based on the conditions
-    condition1 = doh_results > T2
-    condition2 = (local_max_values > T3) & (neighborhood_means > T3)
-    valid_indices = np.where(condition1 | condition2)[0]
+    cond1 = doh_results > T2
+    cond2 = (local_max_values > T3) & (neighborhood_means > T3)
+    mask = cond1 | cond2
+    
+    # initialize seeds(row, col, label)
+    n = np.sum(mask)
+    seeds = np.zeros((n, 3), dtype=int)
+    
+    # save to seeds 
+    seeds[:, 0] = coords[mask, 0]
+    seeds[:, 1] = coords[mask, 1]
 
-    return coords[valid_indices]
+    # determine the label of each seed(some of them may be connected itself)
+    label_cnt = 0
+    label_tab = UnionSet() 
+
+    for i in range(n):
+        # neighboring coordinates for current seeds[i]
+        ncoords = seeds[i][None, :2] + ds # (4, 2)
+
+        # get the indexs of seeds connected to current seeds[i]
+        match = (seeds[:i, None, 0] == ncoords[:, 0]) & (seeds[:i, None, 1] == ncoords[:, 1]) # (i, 4)
+        cidxs = np.where(
+            np.any(match, axis=1) # (i,)
+        )[0]
+        
+        # not connected
+        if len(cidxs) == 0:
+            label_cnt += 1
+            seeds[i, 2] = label_cnt
+            label_tab.add(label_cnt)
+        # connected
+        else:
+            min_label = np.min(seeds[cidxs, 2])
+            seeds[i, 2] = min_label
+            for cidx in cidxs:
+                label_tab.union(min_label, seeds[cidx, 2])
+
+    # merge same label
+    for i in range(n):
+        seeds[i, 2] = label_tab.find(seeds[i, 2])
+
+    return label_cnt, seeds
 
 
-def region_grow(img: np.ndarray, seed: tuple[int, int], connectivity: int=4) -> np.ndarray:
+def region_grow(img: np.ndarray, seeds: np.ndarray, connectivity: int=4, steps: int=4) -> np.ndarray:
     '''
         Region grow the image.(Careful, image will change)
     '''
-    h, w = img.shape
+    assert seeds.shape[1] == 3
 
-    # initialize the waiting queue
-    queue = deque([seed])
+    # img size
+    h, w = img.shape
 
     # offsets
     if connectivity == 4:
-        ds = np.array([[0, 1], [0, -1], [1, 0], [-1, 0]])
+        ds = np.array([[0, 1, 0], [0, -1, 0], [1, 0, 0], [-1, 0, 0]])
     elif connectivity == 8:
-        ds = np.array([[0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [1, -1], [-1, 1], [-1, -1]])
+        ds = np.array([[0, 1, 0], [0, -1, 0], [1, 0, 0], [-1, 0, 0], [1, 1, 0], [1, -1, 0], [-1, 1, 0], [-1, -1, 0]])
     else:
         print('wrong connectivity!')
-        return np.array([]), np.array([])
+        return np.array([])
 
-    # coords
-    xs, ys = [], []
+    # breadth first search
+    trace = [seeds]
 
-    while queue:
-        x, y = queue.popleft()
-        # use img as visited flag matrix
-        if img[x, y] == 0:
-            continue
-        img[x, y] = 0
+    # maximum search steps
+    while steps > 0 and len(seeds) > 0:
+        # set to visited
+        assert np.all(img[seeds[:, 0], seeds[:, 1]] == 1)
+        img[seeds[:, 0], seeds[:, 1]] = 0
 
-        # add to result
-        xs.append(x)
-        ys.append(y)
-        
-        # get neighbors
-        neighbors = ds + (x, y)
+        # get the neighboring seeds
+        seeds = seeds[:, None, :] + ds # (n, 4, 3)
+        seeds = seeds.reshape(-1, 3) # (4*n, 3)
 
         # boundary check
-        mask = (neighbors[:,0] >= 0) & (neighbors[:,0] < h) & (neighbors[:,1] >= 0) & (neighbors[:,1] < w)
-        neighbors = neighbors[mask]
-        
-        # find candiates
-        mask = img[neighbors[:,0], neighbors[:,1]] == 1
-        candidates = neighbors[mask]
-        
-        # add to queue
-        queue.extend(map(tuple, candidates))
+        mask = (seeds[:, 0] >= 0) & (seeds[:, 0] < h) & (seeds[:, 1] >= 0) & (seeds[:, 1] < w) #(4*n, )
+        seeds = seeds[mask]
 
-    return np.array(xs), np.array(ys)
+        # candidate check
+        mask = img[seeds[:, 0], seeds[:, 1]] == 1
+        seeds = seeds[mask]
 
+        # add to search trace
+        trace.append(seeds)
 
-class UnionSet:
-    '''
-        Union set for connected components label.
-    '''
-    def __init__(self):
-        self.parent = {}
-        self.rank = {}
+        steps -= 1
 
-    def find(self, x):
-        if self.parent[x] != x:
-            self.parent[x] = self.find(self.parent[x])
-        return self.parent[x]
-
-    def union(self, x, y):
-        root_x = self.find(x)
-        root_y = self.find(y)
-        if root_x != root_y:
-            if self.rank[root_x] > self.rank[root_y]:
-                self.parent[root_y] = root_x
-            elif self.rank[root_x] < self.rank[root_y]:
-                self.parent[root_x] = root_y
-            else:
-                self.parent[root_y] = root_x
-                self.rank[root_x] += 1
-
-    def add(self, x):
-        if x not in self.parent:
-            self.parent[x] = x
-            self.rank[x] = 0
+    return np.concatenate(trace)
 
 
 def connected_components_label(img: np.ndarray, connectivity: int=4) -> tuple[int, np.ndarray]:
@@ -455,19 +502,25 @@ def group_star(img: np.ndarray, method: str, T0: int, T1: float=None, T2: float=
 
     # label connected regions of the same value in the binary image
     if method == 'RG':
+        # set thresholds for RG
         T1 = T0 if T1 is None else T1
         T2 = 2*T0**2 if T2 is None else T2
         T3 = T0*1.2 if T3 is None else T3
-        # print(T0, T1, T2, T3)
-        seeds = get_seed_coords(img, 3, T1=T1, T2=T2, T3=T3)
-        for seed in seeds:
-            rows, cols = region_grow(binary_img, seed, connectivity)
-            if len(rows) < pixel_limit and len(cols) < pixel_limit:
+
+        # do region grow
+        n, seeds = get_seed_coords(img, 3, T1=T1, T2=T2, T3=T3)
+        trace = region_grow(binary_img, seeds)
+
+        # get group coords for each root seed
+        for i in range(n): 
+            mask = trace[:, 2] == i
+            if np.sum(mask) < pixel_limit:
                 continue
-            group_coords.append((rows, cols))
-    elif method == 'CCL':
-        label_img = connected_components_label(binary_img, connectivity)
-        # _, label_img = cv2.connectedComponents(binary_img, connectivity=connectivity)
+            group_coords.append((trace[mask, 0], trace[mask, 1]))
+
+    elif method == 'CCL' or method == 'DCCL':
+        label_img = connected_components_label(binary_img, connectivity) if method == 'CCL' else cv2.connectedComponents(binary_img, connectivity=connectivity)[1]
+
         rows, cols = np.nonzero(label_img)
         labels = label_img[rows, cols]
 
