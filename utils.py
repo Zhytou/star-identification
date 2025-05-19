@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 from itertools import combinations
@@ -6,6 +7,14 @@ from matplotlib.patches import Circle
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 from skimage.metrics import structural_similarity
+
+
+def gen_combos(n: int, k: int):
+    '''
+        Generate C(n, k).
+    '''
+    combos = np.array(list(combinations(range(n), k)))
+    return combos
 
 
 def find_overlap_and_unique(A: np.ndarray, B: np.ndarray, eps: float=0.5):
@@ -58,32 +67,24 @@ def con_orthogonal_basis(a: np.ndarray, b: np.ndarray):
     return m
     
 
-def get_attitude_matrix(v: np.ndarray, w: np.ndarray):
+def traid(v: np.ndarray, w: np.ndarray, i: int=0, j: int=1):
     '''
         Get the three-dimensional attitude matrix of the star sensor using Triad algorithm. Each column in v is a unit vector representing the direction of a star as measured by the star sensor, while column vector in w is expressed in celestial coordinate system. 
     Args:
-        w: reference vectors(3*n)
-        v: view vectors(3*n)
+        v: view vectors(3, n)
+        w: reference vectors(3, n)
     Returns:
-        r: the rotation matrix(v = r*w)
+        r: the rotation matrix(v = r @ w)
     '''
     assert v.shape[0] == 3 and w.shape[0] == 3 and v.shape[1] == w.shape[1]
-    
-    n = v.shape[1]
-    result = [
-        (i, j) for i, j in combinations(range(n), 2) 
-        if not (are_collinear(v[:, i], v[:, j]) or 
-                are_collinear(w[:, i], w[:, j]) )
-    ]
+    assert not np.any(np.isnan(v)) and not np.any(np.isnan(w))
+    assert not are_collinear(v[:, i], v[:, j]) and not are_collinear(w[:, i], w[:, j]) 
 
-    if len(result) == 0:
-        return np.eye(3)
-
-    i, j = result[0]
     vm = con_orthogonal_basis(v[:, i], v[:, j])
     wm = con_orthogonal_basis(w[:, i], w[:, j])
     r = vm @ np.linalg.inv(wm) 
 
+    # ? why assertion always fail
     # for i, j in result:
     #     vm = con_orthogonal_basis(v[:, i], v[:, j])
     #     wm = con_orthogonal_basis(w[:, i], w[:, j])
@@ -92,15 +93,65 @@ def get_attitude_matrix(v: np.ndarray, w: np.ndarray):
     return r
 
 
+def quest(v: np.ndarray, w: np.ndarray, weights: np.ndarray=None):
+    '''
+        Get the three-dimensional attitude matrix of the star sensor using Quest algorithm. Each column in v is a unit vector representing the direction of a star as measured by the star sensor, while column vector in w is expressed in celestial coordinate system. 
+    Args:
+        v: view vectors(3, n)
+        w: reference vectors(3, n)
+        weights: vector weights
+    Returns:
+        r: the rotation matrix(v = r @ w)
+    '''
+    assert v.shape[0] == 3 and w.shape[0] == 3 and v.shape[1] == w.shape[1]
+    assert not np.any(np.isnan(v)) and not np.any(np.isnan(w))
+    assert np.allclose(np.linalg.norm(v, axis=0), 1, atol=1e-6)
+    assert np.allclose(np.linalg.norm(w, axis=0), 1, atol=1e-6)
+
+    #! Something wrong, need to fix
+    n = v.shape[1]
+    if weights is None:
+        weights = np.ones(n)/n
+    else:
+        weights = weights/np.sum(weights)
+
+    S = w @ (weights * v).T
+    
+    sigma = np.trace(S)
+    z = np.array([S[1,2]-S[2,1], S[2,0]-S[0,2], S[0,1]-S[1,0]])
+    
+    K = np.zeros((4,4))
+    K[:3,:3] = S + S.T - sigma*np.eye(3)
+    K[:3,3] = z
+    K[3,:3] = z
+    K[3,3] = sigma
+    
+    eigenvals, eigenvecs = np.linalg.eig(K)
+    max_idx = np.argmax(eigenvals.real)
+    q = eigenvecs[:, max_idx].real
+    
+    q = q / np.linalg.norm(q)
+    q0, q1, q2, q3 = q
+    
+    r = np.array([
+        [1-2*(q2**2+q3**2), 2*(q1*q2-q0*q3), 2*(q1*q3+q0*q2)],
+        [2*(q1*q2+q0*q3), 1-2*(q1**2+q3**2), 2*(q2*q3-q0*q1)],
+        [2*(q1*q3-q0*q2), 2*(q2*q3+q0*q1), 1-2*(q1**2+q2**2)]
+    ])
+    
+    u, _, vh = np.linalg.svd(r)
+    return u @ vh
+
+
 def get_angdist(points1: np.ndarray, points2: np.ndarray=None):
     '''
         Get the angular distance of the points.
     '''
-    assert points1.shape[1] == 3
-
     if points2 is None:
         points2 = points1
 
+    assert points1.shape[1] == 3 and points2.shape[1] == 3
+    
     norm1 = np.linalg.norm(points1, axis=1)
     norm2 = np.linalg.norm(points2, axis=1)
     angd = np.dot(points1, points2.T) / np.outer(norm1, norm2)
@@ -166,7 +217,7 @@ def draw_freq_spectrum(img: np.ndarray):
     plt.show()
 
 
-def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, circle: bool=False, auto_label: bool=False, axis_on: bool=True, grid_on: bool=False, grid_step: int=10, output_path: str=None):
+def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, circle: bool=False, auto_label: bool=False, axis_on: bool=True, grid_on: bool=False, grid_step: int=10, show: bool=True, output_path: str=None):
     '''
         Label the stars in the image with id or circle.
     '''
@@ -200,10 +251,12 @@ def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, 
             row, col = min(row+10, h-20), min(col-20, w-20)
             ax.text(col, row, str(id), fontsize=10, color='white', ha='left', va='top')
 
-    plt.show()
+    if show:
+        plt.show()
 
     if output_path:
-        plt.savefig(output_path, bbox_inches='tight', pad_inches=1, dpi=300)
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        plt.savefig(output_path, format='png', bbox_inches='tight', pad_inches=1, dpi=300)
     
     plt.close()
 
