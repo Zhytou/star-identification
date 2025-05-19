@@ -51,25 +51,28 @@ def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float
     """
     h, w = img.shape
 
+    # initilize noised_img for result
+    noised_img = img
+    
     # normalize image
-    img = img / 255.0
+    noised_img = noised_img / 255.0
 
     # add pepper noise
-    num_pepper = int(prob_p * img.size)
+    num_pepper = int(prob_p * noised_img.size)
     for _ in range(num_pepper):
         x, y = np.random.randint(0, h), np.random.randint(0, w)
 
-        if img[x, y] > 50:
-            continue
+        # if img[x, y] > 50:
+        #     continue
 
         if np.random.rand() > 0.5:
-            img[x, y] = 0
+            noised_img[x, y] = 0
         else:
-            img[x, y] = 1.0
+            noised_img[x, y] = 1.0
 
     # add gaussian noise
-    noise = np.random.normal(0, sigma_g, img.shape)
-    noised_img = np.clip(img + noise, 0, 1.0)
+    noise = np.random.normal(0, sigma_g, noised_img.shape)
+    np.clip(noised_img+noise, 0, 1.0, out=noised_img)
 
     # denormalize image
     noised_img = (noised_img * 255).astype(np.uint8)
@@ -254,7 +257,7 @@ def cal_zxz_euler(R: np.ndarray, method: int=1) -> tuple[float, float, float]:
     return ra, de, roll
 
 
-def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0, background: float=np.inf, limit_mag: float=7.0, fovy: float=10, fovx: float=10, h: int=512, w: int=512, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False, rot_meth: int=1) -> tuple[np.ndarray, list]:
+def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0, prob_fs: float=0, prob_ms: float=0, background: float=np.inf, limit_mag: float=7.0, fovy: float=10, fovx: float=10, h: int=512, w: int=512, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False, rot_meth: int=1) -> tuple[np.ndarray, list]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
@@ -406,7 +409,7 @@ if __name__ == '__main__':
     h, w = 1024, 1280
     f = 35269.52
     pixel = 5.5
-    limit_mag = 5
+    limit_mag = 6
 
     # test 3
     # xie/20161227224732.bmp
@@ -458,11 +461,11 @@ if __name__ == '__main__':
 
     # test 4
     # Tsinghua 3P0/00001010_00000000019CFBA2.bmp
-    # R = np.array([
-    #     [0.6223, 0.0902, -0.7776],
-    #     [-0.2887, 0.9498, -0.1208],
-    #     [0.7276, 0.2997, 0.6171],
-    # ])
+    R = np.array([
+        [0.6223, 0.0902, -0.7776],
+        [-0.2887, 0.9498, -0.1208],
+        [0.7276, 0.2997, 0.6171],
+    ])
     # Tsinghua 3P0/00001051_00000000019D162E.bmp
     # R = np.array([
     #     [0.6261, 0.0830, -0.7753],
@@ -475,16 +478,28 @@ if __name__ == '__main__':
     #     [-0.0300, 0.9962, 0.0816],
     #     [0.7791, -0.0278, 0.6263]
     # ])
+    # Tsinghua 3P0/00001173_00000000019D6548.bmp
+    R = np.array([
+        [0.6230, 0.0925, -0.7767],
+        [-0.2335, 0.9697, -0.0717],
+        [0.7465, 0.2260, 0.6258],
+    ])
     # Tsinghua 0P0/00000001_00000000019880C8.bmp
     # R = np.array([
     #     [0.6268, 0.0666, -0.7763],
     #     [-0.2633, 0.9558, -0.1306],
     #     [0.7333, 0.2863, 0.6167],
     # ])
-    # h, w = 1040, 1288
-    # f = 18500
-    # pixel = 4.8
-    # limit_mag = 5.5
+    # Tsinghua 1P0/00005161_0000000001B500DD.bmp
+    # R = np.array([
+    #     [0.6110, 0.1547, -0.7764],
+    #     [-0.3311, 0.9407, -0.0731],
+    #     [0.7190, 0.3017, 0.6260],
+    # ])
+    h, w = 1040, 1288
+    f = 18500
+    pixel = 4.8
+    limit_mag = 5.5
 
     fovx = degrees(2 * atan(w * pixel / (2 * f)))
     fovy = degrees(2 * atan(h * pixel / (2 * f)))
