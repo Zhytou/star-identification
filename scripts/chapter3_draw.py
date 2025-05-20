@@ -1,22 +1,17 @@
 import os
 import cv2
 import numpy as np
-from astropy.io import fits
 import timeit
-import cProfile
-import matplotlib
-matplotlib.use('TkAgg')
-import matplotlib.pyplot as plt
 from math import radians
 
-from simulate import create_star_image
+from simulate import create_star_image, add_gaussian_and_pepper_noise
 from denoise import denoise_image
 from detect import group_star, cal_threshold
 from extract import get_star_centroids
 from utils import find_overlap_and_unique, cal_mse_psnr_ssim
 
 
-# 非局部均匀吕布 Lena图片测试
+# 非局部均匀滤波测试——Lena图片
 if False:
     img = cv2.imread(f'example/lena/lena.png', cv2.IMREAD_GRAYSCALE)
 
@@ -88,6 +83,15 @@ if False:
     print('nlm+sdblf', cal_mse_psnr_ssim(img0, img4))
 
 
+# 第三章末尾测试参数
+ra, de, roll = radians(29.2104), radians(-12.0386), radians(0) # 可能每个测试拍摄视角不同
+h, w = 512, 512
+fov = 12
+limit_mag = 6
+background = 9
+psf = 1
+
+
 # 星图降噪效果测试（质量指标比较）
 if False:
     img0, stars = create_star_image(
@@ -125,12 +129,12 @@ if False:
             # 计算降噪前后图像质量指标
             mse, psnr, ssim = cal_mse_psnr_ssim(img0, img2)
             print(
-                # 'Sigma of gaussian noise:', g, 
-                # 'Probability of pepper noise', p, 
-                'Method:', method, 
-                'MSE:', mse, 
-                'PSNR:', psnr, 
-                'SSIM:', ssim,
+                method,
+                '\nSigma of gaussian noise:', g, 
+                '\nProbability of pepper noise', p, 
+                '\nMSE:', mse, 
+                '\nPSNR:', psnr, 
+                '\nSSIM:', ssim,
                 '\n--------------------------------'
             )
 
@@ -149,46 +153,61 @@ def cal_centroid_error(coords1: np.ndarray, coords2: np.ndarray):
     return n, error
 
 
-ra, de, roll = radians(229.2104), radians(-34.0386), radians(0)
-
-
 # 图像降噪对质心计算的影响
 if False:
+    num_test = 10
+
     img0, stars = create_star_image(
         ra, de, roll, 
         w=w, 
         h=h,
         fovx=fov, 
         fovy=fov, 
-        sigma_g=0.1,
-        prob_p=0.01,
         limit_mag=limit_mag, 
         sigma_psf=psf,
         background=background
     )
+    tot = len(stars)
     real_coords = stars[:, 1:3]
 
-    for method in ['NONE', 'NLM_BLF', 'GAUSSIAN', 'MEAN', 'MEDIAN', 'BLF']:
-        # 比较各个降噪方法后误差大小
-        # 其中NONE为无预处理时
-        esti_coords = np.array(get_star_centroids(
-            img0,
-            method,
-            'Liebe3',
-            'CCL',
-            'MCoG',
-            pixel_limit=5,
-            num_esti=3 
-        ))
+    # 打印视场内恒星信息
+    print(np.histogram(stars[:, -1], range=(0, 6), bins=6))
 
-        # correct count and error
-        cnt, err = cal_centroid_error(real_coords, esti_coords)
+    # 比较各个降噪方法后误差大小
+    # 其中NONE为无预处理时
+    for method in [
+        'NONE', 
+        'NLM_BLF', 
+        'GAUSSIAN', 
+        'MEAN', 
+        # 'MEDIAN', 
+        # 'BLF'
+    ]:
+        
+        cnts, errs = [], []
+        for _ in range(num_test):
+            img1 = add_gaussian_and_pepper_noise(img0, sigma_g=0.1, prob_p=0.005)
+            esti_coords = np.array(get_star_centroids(
+                img1,
+                method,
+                'Liebe3',
+                'CCL',
+                'MCoG',
+                pixel_limit=5,
+                num_esti=3 
+            ))
+
+            # 正确提取质心数量和质心误差
+            cnt, err = cal_centroid_error(real_coords, esti_coords)
+            cnts.append(cnt)
+            errs.append(err)
 
         print(
             'Method:', method,  
-            '\nNumber of correct extracted stars:', cnt,
-            '\nTotal number of stars:', len(stars),
-            '\nError:', err,
+            '\nTotal number of stars for the test:', tot,
+            '\nNumber of correct extracted stars for each test image:', cnts,
+            '\nError for each test image:', errs,
+            '\nAveragae error:', np.mean(errs),
             '\n--------------------------------'
         )
 
@@ -203,8 +222,13 @@ def label_image(img: np.ndarray, coords: np.ndarray, color: tuple=(0, 255, 0),  
     return img
 
 
-# 星点检测测试
-if True:
+# 选择一处恒星数量多、星等差异大的视场，从而说明检测算法针对不同星等的恒星均能有限检测
+ra, de, roll = radians(55.0588), radians(49.7205), radians(0)
+background = 7.5
+
+
+# 星点检测作图
+if False:
     dir = 'res/chapter3/detect'
     os.makedirs('res/chapter3/detect', exist_ok=True)
     
@@ -219,22 +243,8 @@ if True:
     )
     real_coords = stars[:, 1:3]
 
-    img0 = cv2.cvtColor(img0, cv2.COLOR_GRAY2BGR)
-    img0 = label_image(img0, real_coords)
-    cv2.imwrite(f'res/chapter3/detect/clean.png', img0)
-
     for (g, p) in [(0.01, 0.001), (0.03, 0.003), (0.05, 0.005), (0.07, 0.007), (0.1, 0.01)]:
-        img1, _ =create_star_image(
-            ra, de, roll, 
-            h=h,
-            w=w,
-            fovx=fov, 
-            fovy=fov, 
-            sigma_g=g,
-            prob_p=p,
-            limit_mag=limit_mag, 
-            background=background
-        )
+        img1 = add_gaussian_and_pepper_noise(img0, sigma_g=g, prob_p=p)
         esti_coords = np.array(get_star_centroids(
             img1, 
             'NLM_BLF', 
@@ -256,11 +266,86 @@ if True:
 
         cv2.imwrite(f'res/chapter3/detect/{g}_{p}.png', img1)
 
+    img0 = cv2.cvtColor(img0, cv2.COLOR_GRAY2BGR)
+    img0 = label_image(img0, real_coords)
+    cv2.imwrite(f'res/chapter3/detect/clean.png', img0)
+
+
+# 星点检测数量对比
+if True:
+    num_test = 10
+
+    img0, stars = create_star_image(
+        ra, de, roll,
+        h=h,
+        w=w, 
+        fovx=fov, 
+        fovy=fov, 
+        sigma_psf=psf,
+        limit_mag=limit_mag, 
+        background=background
+    )
+    real_coords = stars[:, 1:3]
+    mags = stars[:, -1]
+
+    # 打印测试相关信息
+    print(
+        'Detect Test',
+        '\n-----------------------------',
+        '\nNumber of test:', num_test,
+        '\nRA:', ra, 'DE:', de,
+        '\nMag info:', np.sort(mags), #np.histogram(mags, range=(0, limit_mag), bins=int(limit_mag)),
+        '\n-----------------------------',
+    )
+
+    for den_meth, seg_meth in [('MEDIAN', 'RG'), ('MEDIAN', 'DCCL')]:
+        for (g, p) in [
+            # (0.01, 0.001), 
+            # (0.03, 0.003), 
+            # (0.05, 0.005), 
+            # (0.07, 0.007), 
+            (0.1, 0.01)
+        ]:
+            cnts = []
+
+            for _ in range(num_test):
+                img1 = add_gaussian_and_pepper_noise(img0, sigma_g=g, prob_p=p)
+
+                T = cal_threshold(img1, 'Liebe3')
+                esti_coords = np.array(get_star_centroids(
+                    img1, 
+                    den_meth=den_meth, 
+                    thr_meth='Liebe3', 
+                    seg_meth=seg_meth, 
+                    cen_meth='CoG',
+                    pixel_limit=3,
+                    T2=T,
+                ))
+
+                # coords1: correct match
+                # coords2: miss match
+                # coords3: false match
+                _, coords1, coords2, coords3 = find_overlap_and_unique(real_coords, esti_coords, eps=1)
+
+                cnts.append((len(coords1), len(coords2), len(coords3)))
+            
+            agv_cnts = np.mean(cnts, axis=0)
+            print(
+                'Denoise and segmentation method:', den_meth, seg_meth,
+                '\nGuassian noise:', g, p,
+                '\nTotal number of stars in test image:', len(real_coords),
+                '\nDetect result:', cnts,
+                '\nAverage correct count:', agv_cnts[0],
+                '\nAverage miss count:', agv_cnts[1],
+                '\nAverage false count:', agv_cnts[2],
+                '\n---------------------------------'
+            )
+
 
 # 星点检测耗时测试
 if False:
     # random ra & de test
-    num_test = 50
+    num_test = 1000
     
     # generate random right ascension[0, 360] and declination[-90, 90]
     ras = np.random.uniform(0, 2*np.pi, num_test)
