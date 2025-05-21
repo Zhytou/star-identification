@@ -497,10 +497,10 @@ def postprocess(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, att_mat
     # find the most similar points
     query = np.column_stack((ras, des))
     refer = cata[['Ra', 'De']].to_numpy()
-    dists = haversine_distances(query, refer) # n * m
+    dists = haversine_distances(query, refer) # (n, m)
 
-    min_dists = np.min(dists, axis=1) # n
-    idxs = np.argmin(dists, axis=1) # n, each element is in [0, m-1]
+    min_dists = np.min(dists, axis=1) # (n,)
+    idxs = np.argmin(dists, axis=1) # (n,) each element is in [0, m-1]
 
     # keep the outputs, if similarity is higher than threshold.
     mask = (ids == -1) & (min_dists < eps2)

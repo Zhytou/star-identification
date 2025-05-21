@@ -33,7 +33,7 @@ def find_overlap_and_unique(A: np.ndarray, B: np.ndarray, eps: float=0.5):
     mask = np.min(dist, axis=1) < eps
     
     overlap_A, overlap_B = A[mask], B[min_idx][mask]    
-    unique_A, unique_B = A[~mask], B[min_idx][~mask]
+    unique_A, unique_B = A[~mask], B[~np.isin(B, overlap_B)]
     
     return overlap_A, overlap_B, unique_A, unique_B
 

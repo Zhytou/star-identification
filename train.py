@@ -163,7 +163,7 @@ def do_train(meth_params: dict, simu_params: dict, model_types: dict, gcata_path
     
 
 if __name__ == '__main__':
-    if True:
+    if False:
         do_train(
             {
                 'lpt_nn': [0.5, 6, 55, 0],
@@ -235,7 +235,7 @@ if __name__ == '__main__':
             learning_rate=0.01
         )
 
-    if False:
+    if True:
         do_train(
             {
                 'rac_nn': [0.5, 7.7, [35, 75, 115], 18, 3, 0],
@@ -245,14 +245,14 @@ if __name__ == '__main__':
                 'w': 1288,
                 'fovx': 18.97205141393946,
                 'fovy': 15.36777053565561,
-                'limit_mag': 5.5,
+                'limit_mag': 6,
                 'rot': 1
             },
             {
-                'rac_nn': 'cnn3',
+                'rac_nn': 'cnn2',
             },
             gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
-            num_epochs=10,
+            num_epochs=30,
             batch_size=512,
-            learning_rate=0.005
+            learning_rate=0.01
         )

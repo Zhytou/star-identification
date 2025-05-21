@@ -272,7 +272,7 @@ if False:
 
 
 # 星点检测数量对比
-if True:
+if False:
     num_test = 10
 
     img0, stars = create_star_image(
@@ -343,9 +343,9 @@ if True:
 
 
 # 星点检测耗时测试
-if False:
+if True:
     # random ra & de test
-    num_test = 1000
+    num_test = 10
     
     # generate random right ascension[0, 360] and declination[-90, 90]
     ras = np.random.uniform(0, 2*np.pi, num_test)
@@ -355,6 +355,7 @@ if False:
     res = {
         'RG': [],
         'CCL': [],
+        'DCCL': [],
         'RLC': [],
         'CPL': []
     }

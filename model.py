@@ -46,18 +46,15 @@ class CNN1(nn.Module):
         super(CNN1, self).__init__()
         
         self.conv = nn.Sequential(
-            # output batch_size*64*num_feat
-            ConvBlock(1, 32),
+            ConvBlock(1, 64),
             
-            # output batch_size*128*num_feat
-            ConvBlock(32, 128),
+            ConvBlock(64, 64),
             
-            # output batch_size*512*num_feat
-            ConvBlock(128, 512),
+            ConvBlock(64, 64),
             
-            # global avg pool
-            # output batch_size*512*1
-            nn.AdaptiveAvgPool1d(output_size=1)
+            ConvBlock(64, 64),
+
+            ConvBlock(64, 64),
         )
 
         self.fc = nn.Sequential(

@@ -242,7 +242,7 @@ def agg_sample(num_img: int, meth_params: dict, simu_params: dict, test_params: 
     return
 
 
-def merge_dataset(dir: str, num_roll: int):
+def merge_dataset(dir: str, num_rolls: list[int]):
     '''
         Merge all the datasets into labels.csv.
     '''
@@ -251,25 +251,32 @@ def merge_dataset(dir: str, num_roll: int):
         with open(os.path.join(dir, 'merge.log'), 'r') as log_file:
             names = json.load(log_file)
     else:
-        names = []
+        names = {}
 
     dfs = []
     for offset in os.listdir(dir):
-        if offset == 'labels.csv' or offset == 'merge.log':
+        # offset dir
+        subdir = os.path.join(dir, offset)
+        if not os.path.isdir(subdir):
             continue
-        for noise_cfg in os.listdir(os.path.join(dir, offset)):
-            name = os.path.join(offset, noise_cfg)
-            if name in names:
-                print(name)
-                continue
-            else:
-                names.append(name)
 
+        for noise_cfg in os.listdir(subdir):
+            name = os.path.join(offset, noise_cfg)
             path = os.path.join(dir, name)
-            dfs.extend(
-                [pd.read_csv(os.path.join(path, file)) for file in os.listdir(path) if file.endswith(f'_{num_roll}')]
-            )
-    
+
+            for num_roll in num_rolls:
+                # json only use str as key
+                num_roll = str(num_roll)
+
+                if name in names.setdefault(num_roll, []):
+                    print('Merged', name)
+                    continue
+                else:
+                    print('Merging', name)
+                    names[num_roll].append(name)
+
+                dfs.extend([pd.read_csv(os.path.join(path, file)) for file in os.listdir(path) if file.endswith(num_roll)])
+
     # get all the csv files
     if os.path.exists(os.path.join(dir, 'labels.csv')):
         dfs.append(pd.read_csv(os.path.join(dir, 'labels.csv')))
@@ -354,7 +361,30 @@ if __name__ == '__main__':
             num_thd=20
         )
     
-    if True:
+    if False:
+        agg_dataset(
+            meth_params={
+                'rac_nn': [0.5, 7.7, [35, 75, 115], 18, 3, 0],
+            },
+            simu_params={
+                'h': 1040,
+                'w': 1288,
+                'fovy': 15.36777053565561,
+                'fovx': 18.97205141393946,
+                'limit_mag': 6,
+                'sigma_pos': 0,
+                'sigma_mag': 0.5,
+                'num_fs': 0,
+                'num_ms': 0,
+                'rot': 1
+            },
+            gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
+            offset=1,
+            num_roll=10,
+            num_thd=20
+        )
+
+    if False:
         agg_sample(
             1000, 
             {
@@ -387,12 +417,12 @@ if __name__ == '__main__':
             './catalogue/sao6.0_d0.03_12_15.csv',
         )
     
-    if False:
+    if True:
         # dir = 'dataset/1024_1280_9.129887427521604_11.398822251559647_5.5_1/rac_nn/sao5.5_d0.03_9_10_0.1_4.5_[25, 55, 85]_18_3_0'
         # dir = 'dataset/1024_1280_9.129887427521604_11.398822251559647_5.5_1/rac_nn/sao5.5_d0.03_9_10_0.1_4.5_[15, 35, 55]_18_3_0'
         # dir = 'dataset/1024_1280_11.522621164995503_14.37611786938476_5.5_1/rac_nn/sao5.5_d0.03_9_10_0.1_5.7_[25, 55, 85]_18_3_0'
-        dir = 'dataset/1024_1282_12_14.9925_6_1/lpt_nn/sao6.0_d0.03_12_15_0.5_6_55_0'
+        # dir = 'dataset/1024_1282_12_14.9925_6_1/lpt_nn/sao6.0_d0.03_12_15_0.5_6_55_0'
         # dir = 'dataset/1024_1282_12_14.9925_6_1/rac_nn/sao6.0_d0.03_12_15_0.5_6_[15, 35, 55]_18_3_0'
         # dir = 'dataset/1024_1282_12_14.9925_6_1/rac_nn/sao6.0_d0.03_12_15_0.5_6_[25, 55, 85]_18_3_0'
-        # dir = 'dataset/1040_1288_15.36777053565561_18.97205141393946_5.5_1/rac_nn/sao5.5_d0.03_9_10_0.5_7.7_[35, 75, 115]_18_3_0'
-        merge_dataset(dir, 10)
+        dir = 'dataset/1040_1288_15.36777053565561_18.97205141393946_6_1/rac_nn/sao5.5_d0.03_9_10_0.5_7.7_[35, 75, 115]_18_3_0'
+        merge_dataset(dir, [10, 20])

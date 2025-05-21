@@ -14,21 +14,9 @@ cata['Y'] = np.sin(cata['Ra'])*np.cos(cata['De'])
 cata['Z'] = np.sin(cata['De'])
 
 
-def cal_avg_star_num_within_fov(mv_limit: float=6.0, fov: float=15) -> float:
-    '''
-        Calculate the average number of stars within the field of view.
-    '''
-    N = 6.57 * np.exp(1.08*mv_limit) * (1 - cos(radians(fov)/2)) / 2
-    return N
-
-
 def add_stary_light_noise(img: np.ndarray, rc: int, cc: int, std: int, A: int) -> np.ndarray:
     '''
         Add stary light noise to the image.
-    Args:
-        img: the image to add stary light noise
-    Returns:
-        noised_img: the image with stary light noise
     '''
     h, w = img.shape
 
@@ -44,15 +32,11 @@ def add_stary_light_noise(img: np.ndarray, rc: int, cc: int, std: int, A: int) -
 def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float) -> np.ndarray:
     """
         Adds white noise to an image.
-    Args:
-        img: the image to put noise on
-    Returns:
-        noised_img: the image with white noise
     """
     h, w = img.shape
 
     # initilize noised_img for result
-    noised_img = img
+    noised_img = img.copy().astype(float)
     
     # normalize image
     noised_img = noised_img / 255.0
@@ -257,7 +241,7 @@ def cal_zxz_euler(R: np.ndarray, method: int=1) -> tuple[float, float, float]:
     return ra, de, roll
 
 
-def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0, prob_fs: float=0, prob_ms: float=0, background: float=np.inf, limit_mag: float=7.0, fovy: float=10, fovx: float=10, h: int=512, w: int=512, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False, rot_meth: int=1) -> tuple[np.ndarray, list]:
+def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0, prob_fs: float=0, prob_ms: float=0, background: float=np.inf, limit_mag: float=7.0, fovy: float=10, fovx: float=10, h: int=512, w: int=512, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False, rot_meth: int=1) -> tuple[np.ndarray, np.ndarray]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
