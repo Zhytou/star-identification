@@ -1,23 +1,21 @@
-# Star Identification
+# 恒星识别系统 (Star Identification System)
 
-![wakatime](https://wakatime.com/badge/user/a7b329b7-d489-40d2-9239-8be7cf83b65e/project/018d0c19-921c-4e32-b5ce-f4af890fa9eb.svg) ![Static Badge](https://img.shields.io/badge/:badgeContent)
+[![WakaTime](https://wakatime.com/badge/user/a7b329b7-d489-40d2-9239-8be7cf83b65e/project/018d0c19-921c-4e32-b5ce-f4af890fa9eb.svg)](https://wakatime.com/badge/user/a7b329b7-d489-40d2-9239-8be7cf83b65e/project/018d0c19-921c-4e32-b5ce-f4af890fa9eb)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/Zhytou/star-identification)](https://github.com/Zhytou/star-identification/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/Zhytou/star-identification)](https://github.com/Zhytou/star-identification/network/members)
+[![Twitter Share](https://img.shields.io/twitter/url?url=https%3A%2F%2Fgithub.com%2FZhytou%2Fstar-identification&style=social)](https://twitter.com/intent/tweet?text=Check%20out%20this%20awesome%20star%20identification%20system!&url=https%3A%2F%2Fgithub.com%2FZhytou%2Fstar-identification)
 
-- [Star Identification](#star-identification)
-  - [项目结构](#项目结构)
-  - [星图仿真](#星图仿真)
-    - [仿真原理](#仿真原理)
-  - [图像预处理](#图像预处理)
-    - [降噪处理](#降噪处理)
-    - [星点检测](#星点检测)
-    - [质心计算](#质心计算)
-  - [星图识别](#星图识别)
-    - [特征生成](#特征生成)
-    - [识别流程](#识别流程)
-  - [运行结果](#运行结果)
+- [恒星识别系统 (Star Identification System)](#恒星识别系统-star-identification-system)
+  - [📂 项目结构](#-项目结构)
+  - [🛠️ 核心功能](#️-核心功能)
+    - [🌌 星图仿真](#-星图仿真)
+    - [🔍 图像预处理](#-图像预处理)
+    - [🎯 星图识别](#-星图识别)
+  - [🚀 快速开始](#-快速开始)
 
-## 项目结构
-
-项目大致可以分成七部分：
+## 📂 项目结构
 
 - 星图仿真：simulate.py | view.py
 - 星图预处理：denoise.py | detect.py | extract.py
@@ -27,23 +25,24 @@
 - 星表处理：catalogue.py
 - 工具函数：utils.py
 
-## 星图仿真
+## 🛠️ 核心功能
 
-星图仿真是指在给定星敏感器位置和视轴指向的情况下，模拟生成其应当观察到的对应部分天空图像。
+### 🌌 星图仿真
 
-### 仿真原理
+**仿真原理**：
 
-**恒星筛选**:
+1. **恒星筛选**：基于视轴方向与恒星的角距筛选可见恒星。$
+    \theta=arccos{\vec{v_{axis}}\cdot\vec{v_{star}}}\le FOV/2$
 
-其中，恒星筛选可以使用视轴方向与恒星间矢量角距判断，也可以使用如下公式初步筛选：
-
-**坐标转换**：
-
-![天球直角坐标系](imgs/celestial_coord_system.png)
+2. **坐标转换**：
+  
+![celestial_coord_system](imgs/celestial_coord_system.png)
 
 $$
 \begin{pmatrix}
-x \\ y \\ z
+x \\
+y \\
+z
 \end{pmatrix} =
 \begin{pmatrix}
 \cos\alpha \cos\delta \\
@@ -52,9 +51,7 @@ x \\ y \\ z
 \end{pmatrix}
 $$
 
-![星敏感器坐标系](imgs/sensor_coord_system.png)
-
-其中，矩阵M是天球直角坐标系到星敏感器坐标系的旋转矩阵，它实际是三次旋转操作的组合变换。如图 2.8所示，对于星敏感器坐标系O-X′Y′Z′而言，它可由天球直角坐标系O-XYZ经过三次旋转得到。具体而言，天球直角坐标系O-XYZ首先需要沿Z轴旋转 ，使得旋转后X轴位于OX′Y′平面内。接着，沿新X轴旋转 ，使得新Z轴与目标Z’轴对齐。最后，再沿Z′轴旋转 ，便可得到星敏感器坐标系O-X′Y′Z′。
+![sensor_coord_system](imgs/sensor_coord_system.png)
 
 $$
 M =
@@ -77,6 +74,8 @@ cos\varphi & sin\varphi & 0 \\
 \end{pmatrix}
 $$
 
+![pixel_coord_system](imgs/pixel_coord_system.png)
+
 $$
 \begin{cases}
 col = \frac{w}{2}+\frac{x}{z}\cdot\frac{f}{d} \\
@@ -84,31 +83,26 @@ row = \frac{h}{2}+\frac{y}{z}\cdot\frac{f}{d}
 \end{cases}
 $$
 
-**灰度确定**：
+1. **灰度确定**：基于二维高斯函数的PSF模型
 
-## 图像预处理
+**运行效果**：
 
-### 降噪处理
+![star_simulator_gui](imgs/star_simulator_gui.png)
 
-### 星点检测
+### 🔍 图像预处理
 
-### 质心计算
+### 🎯 星图识别
 
-## 星图识别
+## 🚀 快速开始
 
-### 特征生成
+```bash
+# clone the repo
+git clone https://github.com/Zhytou/star-identification.git  
+cd star-identification  
 
-### 识别流程
+# install all the packages
+pip install -r requirements.txt  
 
-## 运行结果
-
-``` bash
-# 
-python -m scripts.chapter2_draw
-
-# 
-python -m scripts.chapter3_draw
-
-# 
+# run realshot test
 python -m scripts.chapter4_draw
 ```
