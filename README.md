@@ -31,59 +31,62 @@
 
 **仿真原理**：
 
-1. **恒星筛选**：基于视轴方向与恒星的角距筛选可见恒星。$
-    \theta=arccos{\vec{v_{axis}}\cdot\vec{v_{star}}}\le FOV/2$
+1. **恒星筛选**：基于视轴方向与恒星的角距筛选可见恒星。
+
+  $$
+    \theta=arccos{\vec{v_{axis}}\cdot\vec{v_{star}}}\le FOV/2
+  $$
 
 2. **坐标转换**：
   
-![celestial_coord_system](imgs/celestial_coord_system.png)
+  ![celestial_coord_system](imgs/celestial_coord_system.png)
 
-$$
-\begin{pmatrix}
-x \\
-y \\
-z
-\end{pmatrix} =
-\begin{pmatrix}
-\cos\alpha \cos\delta \\
-\sin\alpha \cos\delta \\
-\sin\delta
-\end{pmatrix}
-$$
+  $$
+  \begin{pmatrix}
+  x \\
+  y \\
+  z
+  \end{pmatrix} =
+  \begin{pmatrix}
+  \cos\alpha \cos\delta \\
+  \sin\alpha \cos\delta \\
+  \sin\delta
+  \end{pmatrix}
+  $$
 
-![sensor_coord_system](imgs/sensor_coord_system.png)
+  ![sensor_coord_system](imgs/sensor_coord_system.png)
 
-$$
-M =
-\begin{pmatrix}
-cos\varphi & sin\varphi & 0 \\
--sin\varphi & cos\varphi & 0 \\
-0 & 0 & 1
-\end{pmatrix}
-\cdot
-\begin{pmatrix}
-cos\varphi & sin\varphi & 0 \\
--sin\varphi & cos\varphi & 0 \\
-0 & 0 & 1
-\end{pmatrix}
-\cdot
-\begin{pmatrix}
-cos\varphi & sin\varphi & 0 \\
--sin\varphi & cos\varphi & 0 \\
-0 & 0 & 1
-\end{pmatrix}
-$$
+  $$
+  M =
+  \begin{pmatrix}
+  cos\varphi & sin\varphi & 0 \\
+  -sin\varphi & cos\varphi & 0 \\
+  0 & 0 & 1
+  \end{pmatrix}
+  \cdot
+  \begin{pmatrix}
+  cos\varphi & sin\varphi & 0 \\
+  -sin\varphi & cos\varphi & 0 \\
+  0 & 0 & 1
+  \end{pmatrix}
+  \cdot
+  \begin{pmatrix}
+  cos\varphi & sin\varphi & 0 \\
+  -sin\varphi & cos\varphi & 0 \\
+  0 & 0 & 1
+  \end{pmatrix}
+  $$
 
-![pixel_coord_system](imgs/pixel_coord_system.png)
+  ![pixel_coord_system](imgs/pixel_coord_system.png)
 
-$$
-\begin{cases}
-col = \frac{w}{2}+\frac{x}{z}\cdot\frac{f}{d} \\
-row = \frac{h}{2}+\frac{y}{z}\cdot\frac{f}{d}
-\end{cases}
-$$
+  $$
+  \begin{cases}
+  col = \frac{w}{2}+\frac{x}{z}\cdot\frac{f}{d} \\
+  row = \frac{h}{2}+\frac{y}{z}\cdot\frac{f}{d}
+  \end{cases}
+  $$
 
-1. **灰度确定**：基于二维高斯函数的PSF模型
+3. **灰度确定**：基于二维高斯函数的PSF模型
 
 **运行效果**：
 
