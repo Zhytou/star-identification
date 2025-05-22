@@ -40,8 +40,8 @@
 
 2. **坐标转换**：
   
-  <div style="text-align: center;">
-    <img src="imgs/celestial_coord_system.png" alt="celestial_coord_system" width="-1" height="256">
+  <div align="center">
+    <img src="imgs/celestial_coord_system.png" alt="celestial_coord_system" width="256">
   </div>
 
   $$
@@ -57,10 +57,10 @@
   \end{pmatrix}
   $$
 
-  <div style="text-align: center;">
-    <img src="imgs/sensor_coord_system.png" alt="sensor_coord_system" width="-1" height="256">
+  <div align="center">
+    <img src="imgs/sensor_coord_system.png" alt="sensor_coord_system.png" width="256">
   </div>
-
+  
   $$
   M =
   \begin{pmatrix}
@@ -82,8 +82,8 @@
   \end{pmatrix}
   $$
 
-  <div style="text-align: center;">
-    <img src="imgs/pixel_coord_system.png" alt="pixel_coord_system" width="-1" height="256">
+  <div align="center">
+    <img src="imgs/pixel_coord_system.png" alt="pixel_coord_system.png" width="256">
   </div>
 
   $$
