@@ -9,12 +9,26 @@
 [![Twitter Share](https://img.shields.io/twitter/url?url=https%3A%2F%2Fgithub.com%2FZhytou%2Fstar-identification&style=social)](https://twitter.com/intent/tweet?text=Check%20out%20this%20awesome%20star%20identification%20system!&url=https%3A%2F%2Fgithub.com%2FZhytou%2Fstar-identification)
 
 - [恒星识别系统 (Star Identification System)](#恒星识别系统-star-identification-system)
+  - [� 快速开始](#-快速开始)
   - [📂 项目结构](#-项目结构)
   - [🛠️ 核心功能](#️-核心功能)
     - [🌌 星图仿真](#-星图仿真)
     - [🔍 星点提取](#-星点提取)
     - [🎯 星图识别](#-星图识别)
-  - [🚀 快速开始](#-快速开始)
+
+## 🚀 快速开始
+
+```bash
+# clone the repo
+git clone https://github.com/Zhytou/star-identification.git  
+cd star-identification  
+
+# install all the packages
+pip install -r requirements.txt  
+
+# run realshot test
+python -m scripts.chapter4_draw
+```
 
 ## 📂 项目结构
 
@@ -140,17 +154,3 @@
 ![00001021_00000000019D02A6](res/chapter4/realshot/00001021_00000000019D02A6.bmp)
 
 ![00001410_00000000019DFFD3](res/chapter4/realshot/00001410_00000000019DFFD3.bmp)
-
-## 🚀 快速开始
-
-```bash
-# clone the repo
-git clone https://github.com/Zhytou/star-identification.git  
-cd star-identification  
-
-# install all the packages
-pip install -r requirements.txt  
-
-# run realshot test
-python -m scripts.chapter4_draw
-```
