@@ -9,7 +9,7 @@ from utils import get_angdist, find_overlap_and_unique
 
 
 # 灰度分布模型
-if True:
+if False:
     x, y = np.meshgrid(np.arange(7), np.arange(7))
     x, y = x.flatten() + 0.5, y.flatten() + 0.5
     dx = dy = 0.8
@@ -39,7 +39,7 @@ limit_mag = 6
 f = h/tan(radians(fov/2))
 
 # 角距验证
-if True:
+if False:
     img0, stars = create_star_image(
         ra, de, roll, 
         h=h, w=w, 
@@ -97,9 +97,9 @@ def label_image(img: np.ndarray, coords: np.ndarray, color: tuple=(0, 255, 0),  
 
 
 # 噪声仿真测试
-if True:
-    os.makedirs('res/chapter2/sim', exist_ok=True)
+os.makedirs('res/chapter2/sim', exist_ok=True)
 
+if True:
     # backgroud noise
     img, stars = create_star_image(
         ra, de, roll, 
@@ -113,6 +113,7 @@ if True:
     ids = stars[:, 0].astype(np.int64)
     coords = stars[:, 1:3]
 
+if False:
     # positional noise
     img, _ = create_star_image(
         ra, de, roll, 
@@ -123,6 +124,7 @@ if True:
     )
     cv2.imwrite('res/chapter2/sim/pos.png', img)
 
+if True:
     # magnititude noise
     img, stars = create_star_image(
         ra, de, roll, 
@@ -134,10 +136,11 @@ if True:
     _, _, coords1, coords2 = find_overlap_and_unique(coords, stars[:, 1:3])
     
     img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    img = label_image(img, coords1, (0, 0, 255)) # miss
-    img = label_image(img, coords2, (255, 0, 0)) # false
+    img = label_image(img, coords1, (255, 0, 0)) # miss
+    img = label_image(img, coords2, (0, 0, 255)) # false
     cv2.imwrite('res/chapter2/sim/mag.png', img)
 
+if False:
     # false star noise
     img, stars = create_star_image(
         ra, de, roll, 

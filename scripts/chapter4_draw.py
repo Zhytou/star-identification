@@ -1,4 +1,4 @@
-import os, cv2
+import os, cv2, torch
 import numpy as np
 import pandas as pd
 
@@ -6,15 +6,16 @@ from simulate import cata
 from denoise import filter_image, denoise_image
 from detect import cal_threshold, get_seed_coords
 from extract import get_star_centroids
-from test import draw_results
+from model import create_model
 from realshot import identify_realshot_by_nn, cal_attitude, load_h5data
+from test import draw_results
 from utils import get_angdist, label_star_image
 
 
 DEBUG = True
 
 
-# 仿真实验
+# 仿真实验结果作图
 if False:
     res = {
         # grid 0.5_6_100 T=3.6
@@ -82,6 +83,96 @@ if False:
     }
 
     draw_results(res, save=True)
+
+
+# 模型内存和计算消耗统计
+if True:
+    gcata = pd.read_csv('./catalogue/sao6.0_d0.03_12_15.csv')
+    num_class = len(gcata)
+    
+    from torchsummary import summary
+    from thop import profile
+    from torchstat import stat
+
+    # proposed
+    model = create_model(
+        'rac_nn',
+        'cnn3',
+        [0.5, 6, [15, 35, 55], 18, 3, 0],
+        num_class
+    )
+    input = torch.randn(1, 213)
+
+    from test import eval_time
+    print(eval_time(model, input))
+    flops, params = profile(model, inputs=(input, ))
+    print(
+        flops, params,
+        round(flops / (1024 * 1024), 2),
+        round(params / (1024 * 1024) * 4, 2)
+    )
+
+    # model = create_model(
+    #     'rac_nn',
+    #     'cnn4',
+    #     [0.5, 6, [15, 35, 55], 18, 3, 0],
+    #     num_class
+    # )
+    # input = torch.randn(1, 213)
+    # flops, params = profile(model, inputs=(input, ))
+    # print(
+    #     flops, params,
+    #     round(flops / (1024 * 1024), 2),
+    #     round(params / (1024 * 1024) * 4, 2)
+    # )
+    
+    # Rijlaarsdam
+    model = create_model(
+        'lpt_nn',
+        'fnn',
+        [0.5, 6, 55, 0],
+        num_class
+    )
+    input = torch.randn(1, 55)
+    print(eval_time(model, input))
+    flops, params = profile(model, inputs=(input, ))
+    print(
+        flops, params,
+        round(flops / (1024 * 1024), 2),
+        round(params / (1024 * 1024) * 4, 2)
+    )
+
+    from model import MIFNet, RPNet, GridVgg
+    # model = MIFNet()
+    # input = torch.randn(1, 11, 32)
+    # flops, params = profile(model, inputs=(input, ))
+    # print(
+    #     flops, params,
+    #     round(flops / (1024 * 1024), 2),
+    #     round(params / (1024 * 1024) * 4, 2)
+    # )
+
+    model = RPNet()
+    input = torch.randn(1, 400)
+    print(eval_time(model, input))
+
+    flops, params = profile(model, inputs=(input, ))
+    print(
+        flops, params,
+        round(flops / (1024 * 1024), 2),
+        round(params / (1024 * 1024) * 4, 2)
+    )
+
+    model = GridVgg()
+    input = torch.randn(1, 1, 224, 224)
+    print(eval_time(model, input))
+
+    flops, params = profile(model, inputs=(input, ))
+    print(
+        flops, params,
+        round(flops / (1024 * 1024), 2),
+        round(params / (1024 * 1024) * 4, 2)
+    )
 
 
 # 验证降噪\二值化\连通域等算法和matlab实现一致性
@@ -252,7 +343,7 @@ if False:
 
 
 # 多张实拍星图验证算法有效性
-if True:
+if False:
     # load test data
     data = []
     for prefix in [
@@ -278,7 +369,7 @@ if True:
         'f': f,
         'fovy': 2*np.degrees(np.arctan(h/(2*f))),
         'fovx': 2*np.degrees(np.arctan(w/(2*f))),
-        'limit_mag': 5.5,
+        'limit_mag': 6,
         'rot': 1
     }
     meth_params = {
@@ -306,7 +397,7 @@ if True:
         meth_params,
         extr_params,
         model_types={
-            'rac_nn': 'cnn3',
+            'rac_nn': 'lcnn',
         },
         gcata_path='catalogue/sao5.5_d0.03_9_10.csv', # guide star catalogue，
         eps1=5e-5,

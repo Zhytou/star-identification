@@ -4,8 +4,8 @@ import numpy as np
 import timeit
 from math import radians
 
-from simulate import create_star_image, add_gaussian_and_pepper_noise
-from denoise import denoise_image
+from simulate import create_star_image, add_gaussian_and_pepper_noise, add_stary_light_noise, get_stellar_intensity
+from denoise import denoise_image, denoise_with_blf_new
 from detect import group_star, cal_threshold
 from extract import get_star_centroids
 from utils import find_overlap_and_unique, cal_mse_psnr_ssim
@@ -31,7 +31,7 @@ if False:
 ra, de, roll = radians(29.2104), radians(-12.0386), radians(0)
 d = 64
 h, w = 512, 512
-x, y = 188, 169
+x, y = 188, 169*2
 fov = 12
 limit_mag = 6
 background = 9
@@ -55,28 +55,29 @@ if False:
         h=h,
         fovx=fov, 
         fovy=fov,
-        sigma_g=0.05,
+        sigma_g=0.1,
         prob_p=0.001,
         limit_mag=limit_mag, 
         sigma_psf=psf,
         background=background
     )
     
-    img2 = denoise_with_nlm(img1)
-    img3 = cv2.bilateralFilter(img2, 9, 30, 4)
-    img4 = denoise_with_blf_new(img2, 3)
+    img2 = denoise_image(img1, 'NLM')
+    img3 = cv2.bilateralFilter(img2, 5, 30, 3)
+    img4 = denoise_with_blf_new(img2, 5, threshold=150, sigma_color=30, sigma_space=3) # modified bilateral filter
 
-    cv2.imwrite('res/chapter3/nlm/clean.png', img0)
-    cv2.imwrite('res/chapter3/nlm/noised.png', img1)
-    cv2.imwrite('res/chapter3/nlm/nlm.png', img2)
-    cv2.imwrite('res/chapter3/nlm/nlm_cvblf.png', img3)
-    cv2.imwrite('res/chapter3/nlm/nlm_sdblf.png', img4)
+    dir = 'res/chapter3/nlm/'
+    cv2.imwrite(dir+'clean.png', img0)
+    cv2.imwrite(dir+'noised.png', img1)
+    cv2.imwrite(dir+'nlm.png', img2)
+    cv2.imwrite(dir+'nlm_cvblf.png', img3)
+    cv2.imwrite(dir+'nlm_sdblf.png', img4)
 
-    cv2.imwrite('res/chapter3/nlm/clean_scale.png', img0[y-d:y+d, x-d:x+d])
-    cv2.imwrite('res/chapter3/nlm/noised_scale.png', img1[y-d:y+d, x-d:x+d])
-    cv2.imwrite('res/chapter3/nlm/nlm_scale.png', img2[y-d:y+d, x-d:x+d])
-    cv2.imwrite('res/chapter3/nlm/nlm_cvblf_scale.png', img3[y-d:y+d, x-d:x+d])
-    cv2.imwrite('res/chapter3/nlm/nlm_sdblf_scale.png', img4[y-d:y+d, x-d:x+d])
+    cv2.imwrite(dir+'clean_scale.png', img0[y-d:y+d, x-d:x+d])
+    cv2.imwrite(dir+'noised_scale.png', img1[y-d:y+d, x-d:x+d])
+    cv2.imwrite(dir+'nlm_scale.png', img2[y-d:y+d, x-d:x+d])
+    cv2.imwrite(dir+'nlm_cvblf_scale.png', img3[y-d:y+d, x-d:x+d])
+    cv2.imwrite(dir+'nlm_sdblf_scale.png', img4[y-d:y+d, x-d:x+d])
 
     print('nlm', cal_mse_psnr_ssim(img0, img2))
     print('nlm+cvblf', cal_mse_psnr_ssim(img0, img3))
@@ -88,7 +89,7 @@ ra, de, roll = radians(29.2104), radians(-12.0386), radians(0) # 可能每个测
 h, w = 512, 512
 fov = 12
 limit_mag = 6
-background = 9
+background = 8
 psf = 1
 
 
@@ -222,10 +223,11 @@ def label_image(img: np.ndarray, coords: np.ndarray, color: tuple=(0, 255, 0),  
     return img
 
 
-# 选择一处恒星数量多、星等差异大的视场，从而说明检测算法针对不同星等的恒星均能有限检测
-ra, de, roll = radians(55.0588), radians(49.7205), radians(0)
-background = 7.5
-
+# # 选择一处恒星数量多、星等差异大的视场，从而说明检测算法针对不同星等的恒星均能有限检测
+ra, de, roll = radians(25.0588), radians(-21.7205), radians(0)
+limit_mag = 5.9
+fov = 20
+background = 10
 
 # 星点检测作图
 if False:
@@ -243,22 +245,26 @@ if False:
     )
     real_coords = stars[:, 1:3]
 
-    for (g, p) in [(0.01, 0.001), (0.03, 0.003), (0.05, 0.005), (0.07, 0.007), (0.1, 0.01)]:
+    for (g, p) in [
+        # (0.02, 0.002), 
+        (0.05, 0.005), 
+        # (0.08, 0.008), 
+    ]:
         img1 = add_gaussian_and_pepper_noise(img0, sigma_g=g, prob_p=p)
+
         esti_coords = np.array(get_star_centroids(
             img1, 
-            'NLM_BLF', 
-            'Liebe5', 
-            'RG', 
-            'MCoG',
-            pixel_limit=3
+            den_meth='NLM_BLF', #'NONE', #'MEDIAN',
+            thr_meth='Liebe3', 
+            seg_meth='RG', #'CCL',
+            cen_meth='CoG',
+            pixel_limit=4,
         ))
 
         # coords1: correct match
         # coords2: miss match
         # coords3: false match
-        _, coords1, coords2, coords3 = find_overlap_and_unique(real_coords, esti_coords)
-
+        _, coords1, coords2, coords3 = find_overlap_and_unique(real_coords, esti_coords, 4)       
         img1 = cv2.cvtColor(img1, cv2.COLOR_GRAY2BGR)
         img1 = label_image(img1, coords1, (0, 255, 0))
         img1 = label_image(img1, coords2, (255, 0, 0))
@@ -272,7 +278,7 @@ if False:
 
 
 # 星点检测数量对比
-if False:
+if True:
     num_test = 10
 
     img0, stars = create_star_image(
@@ -288,6 +294,8 @@ if False:
     real_coords = stars[:, 1:3]
     mags = stars[:, -1]
 
+    real_coord = real_coords[3]
+
     # 打印测试相关信息
     print(
         'Detect Test',
@@ -295,55 +303,82 @@ if False:
         '\nNumber of test:', num_test,
         '\nRA:', ra, 'DE:', de,
         '\nMag info:', np.sort(mags), #np.histogram(mags, range=(0, limit_mag), bins=int(limit_mag)),
+        '\nBackgroud intensity:', get_stellar_intensity(background),
         '\n-----------------------------',
     )
 
-    for den_meth, seg_meth in [('MEDIAN', 'RG'), ('MEDIAN', 'DCCL')]:
+    for den_meth, thr_meth, seg_meth, pixel_num in [
+        # ('NONE', 'Liebe3', 'CCL', 5),
+        ('NONE', 'Otsu', 'CCL', 5),
+        # ('GAUSSIAN', 'Liebe3', 'CCL', 5),
+        # ('MEDIAN', 'Liebe3', 'CCL', 5),
+        # ('NONE', 'Liebe3', 'RG', 3),
+        # ('NLM_BLF', 'Liebe3', 'RG', 5)
+        ]:
+        
+        avg_cnts = []
+        avg_err = []
         for (g, p) in [
             # (0.01, 0.001), 
+            # (0.02, 0.002), 
             # (0.03, 0.003), 
-            # (0.05, 0.005), 
+            # (0.04, 0.004), 
+            # (0.05, 0.005),
+            # (0.06, 0.006), 
             # (0.07, 0.007), 
-            (0.1, 0.01)
-        ]:
-            cnts = []
+            # (0.08, 0.008),
+            # (0.09, 0.009),
 
+            (0.02, 0.002), 
+            (0.05, 0.005),
+            (0.08, 0.008)
+        ]:
+            
+            cnts = []
+            err = []
             for _ in range(num_test):
                 img1 = add_gaussian_and_pepper_noise(img0, sigma_g=g, prob_p=p)
 
-                T = cal_threshold(img1, 'Liebe3')
                 esti_coords = np.array(get_star_centroids(
                     img1, 
                     den_meth=den_meth, 
-                    thr_meth='Liebe3', 
+                    thr_meth=thr_meth, 
                     seg_meth=seg_meth, 
                     cen_meth='CoG',
-                    pixel_limit=3,
-                    T2=T,
+                    pixel_limit=pixel_num,
+                    T2=-np.inf,
+                    connectivity=8
                 ))
 
                 # coords1: correct match
                 # coords2: miss match
                 # coords3: false match
-                _, coords1, coords2, coords3 = find_overlap_and_unique(real_coords, esti_coords, eps=1)
+                _, coords1, coords2, coords3 = find_overlap_and_unique(real_coords, esti_coords, eps=2)
 
                 cnts.append((len(coords1), len(coords2), len(coords3)))
             
-            agv_cnts = np.mean(cnts, axis=0)
-            print(
-                'Denoise and segmentation method:', den_meth, seg_meth,
-                '\nGuassian noise:', g, p,
-                '\nTotal number of stars in test image:', len(real_coords),
-                '\nDetect result:', cnts,
-                '\nAverage correct count:', agv_cnts[0],
-                '\nAverage miss count:', agv_cnts[1],
-                '\nAverage false count:', agv_cnts[2],
-                '\n---------------------------------'
-            )
+                # find the closest esti_coord
+                dis = np.linalg.norm(coords1 - real_coord, axis=1)
+                err.append(np.min(dis))
+
+            avg_cnts.append(np.mean(cnts, axis=0))
+            avg_err.append(np.mean(err))
+
+        avg_cnts, avg_err = np.array(avg_cnts), np.array(avg_err)
+        print(
+            'Method:', den_meth, seg_meth, thr_meth, pixel_num,
+            # '\nTotal number of stars in test image:', len(real_coords),
+            # '\nDetect result:', avg_cnts,
+            '\nAverage correct rate:', avg_cnts[:, 0] / len(real_coords) * 100.0,
+            '\nAverage miss count:', avg_cnts[:, 1],
+            '\nAverage false count:', avg_cnts[:, 2],
+            f'\nAverage centroid error for {real_coord[0], real_coord[1]}:', avg_err,
+            '\n---------------------------------'
+        )
 
 
 # 星点检测耗时测试
-if True:
+if False:
     # random ra & de test
     num_test = 10
     
