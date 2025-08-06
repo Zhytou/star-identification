@@ -42,17 +42,19 @@ class LPTDataset(Dataset):
     '''Log-Polar transform based NN dataset'''
 
     def __init__(self, label_df: pd.DataFrame, params: list):
-        # drop na values
-        label_df = label_df.dropna(axis=0)
-
         # number of distance features
         nd = params[2]
+
+        cols = [f'dist{i}' for i in range(nd)]
+        label_df = label_df[cols + ['cata_idx']]
+
+        # drop na values
+        label_df = label_df.dropna(axis=0)
         
         # set length of dataset
         self.len = len(label_df)
 
         # set data of distance features
-        cols = [f'dist{i}' for i in range(nd)]
         self.feats = label_df[cols].to_numpy(np.float32)
 
         # set data of catalog index(labels)
@@ -72,9 +74,6 @@ class RACDataset(Dataset):
     '''Radial and cyclic based NN dataset'''
 
     def __init__(self, label_df: pd.DataFrame, params: list):
-        # drop na values
-        label_df = label_df.dropna(axis=0)
-
         # parameters
         arr_nr, ns, nn = params[2:-1]
         # number of rings
@@ -82,14 +81,20 @@ class RACDataset(Dataset):
         # number of sectors and neighbors
         ns, nn = int(ns), int(nn)
 
+        # retain columns of features and labels
+        cols1 = [f'ring{i}' for i in range(nr)]
+        cols2 = [f'n{i}_sector{j}' for i in range(nn) for j in range(ns)]
+        cols = cols1 + cols2 + ['cata_idx']
+        label_df = label_df[cols]
+
+        # drop na values
+        label_df = label_df.dropna(axis=0)
+
         # set length of dataset
         self.len = len(label_df)
 
         # set data of rings and sectors
-        cols1 = [f'ring{i}' for i in range(nr)]
-        cols2 = [f'n{i}_sector{j}' for i in range(nn) for j in range(ns)]
-        cols = cols1 + cols2
-        self.feats = label_df[cols].to_numpy(np.float32)
+        self.feats = label_df[cols1+cols2].to_numpy(np.float32)
 
         # set data of catalog index(labels)
         self.labels = label_df['cata_idx'].to_numpy(int)

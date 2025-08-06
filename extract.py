@@ -109,7 +109,7 @@ def cal_compensate(esti_x):
     return -2.4194299127361094*np.sin(0.014439263775565864*esti_x-0.007147436746119124)
 
 
-def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: str, cen_meth: str | list[str], pixel_limit: int=5, T1: float=None, T2: float=None, T3: float=None, connectivity=4, num_esti: int=1, need_gray: bool=False) -> list[tuple[float, float]] | list[tuple[float, float, int]] | dict[str, list[tuple[float, float]]]:
+def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: str, cen_meth: str | list[str], pixel_limit: int=5, T1: float=None, T2: float=None, T3: float=None, connectivity=4, num_esti: int=1, need_gray: bool=False, save_path:str=None) -> list[tuple[float, float]] | list[tuple[float, float, int]] | dict[str, list[tuple[float, float]]]:
     '''
         Get the centroids of the stars in the image.
     Args:
@@ -121,7 +121,8 @@ def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: 
         pixel_limit: the minimum number of connected pixels
         T1/T2/T3: optional threshold used in RG segmentation method
         num_esti: the number of estimation using centroid algorithm
-        need_gray: whether return the sum of gray of each centroid
+        need_gray: whether to return the sum of gray of each centroid
+        save_img: whether to save the filtered image
     Returns:
         centroids: the centroids of the stars in the image
     '''
@@ -129,6 +130,9 @@ def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: 
     # denoise
     filtered_img = denoise_image(img, den_meth)
     
+    if type(save_path) is str:
+        cv2.imwrite(save_path, filtered_img)
+
     # calaculate the threshold
     T =  cal_threshold(filtered_img, thr_meth)
 

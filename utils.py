@@ -17,7 +17,7 @@ def gen_combos(n: int, k: int):
     return combos
 
 
-def find_overlap_and_unique(A: np.ndarray, B: np.ndarray, eps: float=0.5):
+def find_overlap_and_unique(A: np.ndarray, B: np.ndarray, eps: float=2):
     '''
         Find the overlap parts of two point sets.
     '''
@@ -31,9 +31,17 @@ def find_overlap_and_unique(A: np.ndarray, B: np.ndarray, eps: float=0.5):
     
     # only if distance is smaller than eps, the match is valid
     mask = np.min(dist, axis=1) < eps
-    
     overlap_A, overlap_B = A[mask], B[min_idx][mask]    
-    unique_A, unique_B = A[~mask], B[~np.isin(B, overlap_B)]
+    unique_A = A[~mask]
+    
+    # only if distance is smaller than eps, the match is valid
+    mask = np.min(dist, axis=0) < eps
+    unique_B = B[~mask]
+
+    # # struct numpy array
+    # BS = B.view([('x', B.dtype), ('y', B.dtype)]).reshape(-1)
+    # OBS = overlap_B.view([('x', overlap_B.dtype), ('y', overlap_B.dtype)]).reshape(-1)
+    # unique_B = np.setdiff1d(BS, OBS).view(A.dtype).reshape(-1, 2)
     
     return overlap_A, overlap_B, unique_A, unique_B
 

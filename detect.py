@@ -36,7 +36,7 @@ class UnionSet:
             self.rank[x] = 0
 
 
-def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int=5, gray_diff: int=4) -> int:
+def cal_threshold(img: np.ndarray, method: str, factor: float=0.1, wind_size: int=5, gray_diff: int=4) -> int:
     """
         Calculate the threshold for image segmentation.
     Args:
@@ -52,7 +52,6 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
                 https://www.sciencedirect.com/science/article/abs/pii/0734189X89900510?via%3Dihub
             'Xiao': entropic thresholding based on GLSC 2D histogram
                 https://ieeexplore.ieee.org/document/4761626/?arnumber=4761626
-        delta: scale parameter used for new threshold iterative calculation in 'Xu' method
         wind_size: the size of the window used to calculate the threshold in 'Abutaleb'/'Xiao' method
         gray_diff: the max difference of the gray value to count the similarity in 'Xiao' method
     Returns:
@@ -66,11 +65,31 @@ def cal_threshold(img: np.ndarray, method: str, delta: float=0.1, wind_size: int
     if method == 'Otsu':
         # use cv2 threshold function to get otsu threshold
         T, _ = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    elif method == 'Liebe1.8':
+        # calculate the threshold using the mean and standard deviation of multiple windows
+        mean = np.mean(img)
+        std = np.std(img)
+        T = mean + 1.8 * std
+    elif method == 'Liebe2':
+        # calculate the threshold using the mean and standard deviation of multiple windows
+        mean = np.mean(img)
+        std = np.std(img)
+        T = mean + 2 * std
+    elif method == 'Liebe2.5':
+        # calculate the threshold using the mean and standard deviation of multiple windows
+        mean = np.mean(img)
+        std = np.std(img)
+        T = mean + 2.5 * std
     elif method == 'Liebe3':
         # calculate the threshold using the mean and standard deviation of multiple windows
         mean = np.mean(img)
         std = np.std(img)
         T = mean + 3 * std
+    elif method == 'Liebe4':
+        # calculate the threshold using the mean and standard deviation of multiple windows
+        mean = np.mean(img)
+        std = np.std(img)
+        T = mean + 4 * std
     elif method == 'Liebe5':
         # calculate the threshold using the mean and standard deviation of multiple windows
         mean = np.mean(img)
@@ -207,7 +226,8 @@ def get_seed_coords(img: np.ndarray, wind_size: int=5, T1: int=0, T2: int=-np.in
     # calculate the determinant of the Hessian matrix with offset
     doh_results = doh_operator(neighborhoods[coords[:, 0], coords[:, 1]])
 
-    # print(np.sort(doh_results)[::-1][:20])
+    # print(np.sort(doh_results)[::-1][:22])
+    # print(T2)
 
     # get the local maxima values for bright star
     local_max_values = img[coords[:, 0], coords[:, 1]]
@@ -504,7 +524,7 @@ def group_star(img: np.ndarray, method: str, T0: int, T1: float=None, T2: float=
     if method == 'RG':
         # set thresholds for RG
         T1 = T0 if T1 is None else T1
-        T2 = 2*T0**2 if T2 is None else T2
+        T2 = T0**2 if T2 is None else T2
         T3 = T0*1.2 if T3 is None else T3
 
         # do region grow

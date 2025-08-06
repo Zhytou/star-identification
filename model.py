@@ -1,9 +1,132 @@
-import torch
+import torch, torchvision
 import torch.nn as nn
 
 
 DEBUG = False
 
+
+class MIFNet(nn.Module):
+    '''
+        A 1D-CONV Net
+        (doi:10.1109/TAES.2022.3160134)
+    '''
+
+    def __init__(self):
+        super(MIFNet, self).__init__()
+
+        self.net = nn.Sequential(
+            nn.Conv1d(11, 48, 5),
+            nn.ReLU(),
+            nn.BatchNorm1d(48),
+            nn.Conv1d(48, 48, 5),
+            nn.ReLU(),
+            nn.BatchNorm1d(48),
+            nn.Conv1d(48, 48, 5),
+            nn.ReLU(),
+            nn.BatchNorm1d(48),
+
+            nn.Conv1d(48, 96, 5),
+            nn.ReLU(),
+            nn.BatchNorm1d(96),
+            nn.Conv1d(96, 96, 5),
+            nn.ReLU(),
+            nn.BatchNorm1d(96),
+             nn.Conv1d(96, 96, 5),
+            nn.ReLU(),
+            nn.BatchNorm1d(96),
+
+            nn.Conv1d(96, 4956, 1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool1d(1)
+        )
+
+    def forward(self, x):
+        y = self.net(x)
+        print(y.shape)
+        return y
+        
+    
+class RPNet(nn.Module):
+    '''
+        A representation learning-based model
+        (doi:10.1109/ACCESS.2019.2927684)
+    '''
+    def __init__(self):
+        super(RPNet, self).__init__()
+
+        # star pattern generator
+        self.spg = nn.Sequential(
+            nn.Linear(400, 512), #fc1
+            nn.ReLU(),
+            nn.Linear(512, 1024), #fc2
+        )
+
+        # star pattern classifier
+        self.spc = nn.Sequential(
+            nn.Linear(1024, 512), #fc3
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Linear(512, 5045), #fc4
+        )
+
+    def forward(self, x):
+        xx = self.spg(x)
+        y = self.spc(xx)
+        return y
+
+
+class SpiderWeb(nn.Module):
+    '''
+        A hierarchical CNN based on spider-web image
+        (doi:10.1109/TAES.2019.2961826)
+    '''
+    def __init__(self):
+        super(SpiderWeb, self).__init__()
+
+
+class GridVgg(nn.Module):
+    '''
+        A modified vgg-16 model for star identification.
+        (doi:10.1631/FITEE.1900590)
+    '''
+    def __init__(self):
+        super(GridVgg, self).__init__()
+        
+        original = torchvision.models.vgg16(weights=torchvision.models.VGG16_Weights.DEFAULT)
+        
+        self.features = nn.Sequential(
+            nn.Conv2d(
+                in_channels=1,
+                out_channels=64,
+                kernel_size=3,
+                padding=1,
+            ),
+            *list(original.features.children())[1:]
+        )
+        self.classifier = nn.Sequential(
+            # 25088 -> 500
+            nn.Linear(512 * 7 * 7, 500),
+            nn.BatchNorm1d(500),
+            nn.LeakyReLU(0.01, inplace=True),
+            nn.Dropout(0.5),
+            
+            # 500 -> 500
+            nn.Linear(500, 500),
+            nn.BatchNorm1d(500),
+            nn.LeakyReLU(0.01, inplace=True),
+            nn.Dropout(0.5),
+            
+            # number of guide star 
+            nn.Linear(500, 4897)
+        )
+
+    def forward(self, x):
+        xx = self.features(x)
+        xx = xx.flatten(1) # reshape(xx.shape[0], -1)
+        y = self.classifier(xx)
+
+        return y
+        
 
 class FNN(nn.Module):
     '''
@@ -220,6 +343,45 @@ class CNN4(nn.Module):
             nn.Conv1d(64, num_class, kernel_size=1),
 
             # global avg pool
+            # output batch_size*1024*1
+            nn.AdaptiveAvgPool1d(output_size=1)
+        )
+
+    def forward(self, x):
+        # x is composed of two input: raidal features and cyclic features
+        # convert x.shape from [batch_size, num_ring+num_sector*num_neighbor]
+        # into [batch_size, 1, num_ring+num_sector*num_neighbor]
+        x = x.unsqueeze(1)
+
+        # apply the convolutional layers and remove the last dimension
+        y = self.conv(x).squeeze(-1)
+
+        return y
+
+
+class CNN5(nn.Module):
+    '''
+        The one dimension convolutional neural network model.
+    '''
+    def __init__(self, num_feat: int, num_class: int):
+        '''
+            input_dim: the dimension of the features
+            output_dim: the number of the class(guide star)
+        '''
+
+        super(CNN5, self).__init__()
+        
+        self.conv = nn.Sequential(
+            NConvBlock(1, 48),
+            NConvBlock(48, 48),
+            
+            NConvBlock(48, 96),
+            NConvBlock(96, 96),
+            NConvBlock(96, 96),
+
+            nn.Conv1d(96, num_class, kernel_size=1),
+
+            # global avg pool
             # output batch_size*256*1
             nn.AdaptiveAvgPool1d(output_size=1)
         )
@@ -233,11 +395,52 @@ class CNN4(nn.Module):
         # apply the convolutional layers and remove the last dimension
         y = self.conv(x).squeeze(-1)
 
+        return y
+    
+
+class NConvBlock(nn.Module):
+    '''
+        The block for rac 1dcnn.
+    '''
+    def __init__(self, input_dim: int, output_dim: int):
+        super(NConvBlock, self).__init__()
+        self.conv_5 = nn.Sequential(
+            nn.Conv1d(input_dim, output_dim//3, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.BatchNorm1d(output_dim//3),
+        )
+
+        self.conv_3 = nn.Sequential(
+            nn.Conv1d(input_dim, output_dim//3, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.BatchNorm1d(output_dim//3),
+        )
+
+        self.conv_1 = nn.Sequential(
+            nn.Conv1d(input_dim, output_dim//3, kernel_size=1),
+            nn.ReLU(),
+            nn.BatchNorm1d(output_dim//3),
+        )
+
+        self.pool_2 = nn.MaxPool1d(kernel_size=2)
+
+    def forward(self, x):
+        # apply the convolutional layers        
+        y1 = self.conv_1(x)
+        y2 = self.conv_3(x)
+        y3 = self.conv_5(x)
+
+        # apply the max pooling layer
+        y = self.pool_2(torch.concat((y1, y2, y3), dim=1))
+
         if DEBUG:
             print(
-                'RAC_CNN',
+                'ConvBlock',
                 '\nX shape', x.shape,
-                '\nY shape', y.shape,
+                '\nY1 shape', y1.shape,
+                '\nY2 shape', y2.shape,
+                '\nY3 shape', y3.shape,
+                '\nY shape', y.shape
             )
 
         return y
@@ -291,6 +494,81 @@ class ConvBlock(nn.Module):
         return y
 
 
+class LightCNN(nn.Module):
+    '''
+        The one dimension convolutional neural network model.
+    '''
+    def __init__(self, num_feat: int, num_class: int):
+        '''
+            input_dim: the dimension of the features
+            output_dim: the number of the class(guide star)
+        '''
+
+        super(LightCNN, self).__init__()
+        
+        self.conv = nn.Sequential(
+            LightConvBlock(1, 48),
+            
+            LightConvBlock(48, 48),
+
+            LightConvBlock(48, 48),
+            
+            LightConvBlock(48, 96),
+            
+            LightConvBlock(96, 96),
+
+            LightConvBlock(96, 96),
+
+            nn.Conv1d(96, num_class, kernel_size=1),
+
+            # global avg pool
+            # output batch_size*64*1
+            nn.AdaptiveAvgPool1d(output_size=1)
+        )
+
+    def forward(self, x):
+        # x is composed of two input: raidal features and cyclic features
+        # convert x.shape from [batch_size, num_ring+num_sector*num_neighbor]
+        # into [batch_size, 1, num_ring+num_sector*num_neighbor]
+        x = x.unsqueeze(1)
+
+        # apply the convolutional layers and remove the last dimension
+        y = self.conv(x).squeeze(-1)
+
+        return y
+
+
+class LightConvBlock(nn.Module):
+    '''
+        The block for rac 1dcnn.
+    '''
+    def __init__(self, input_dim: int, output_dim: int):
+        super(LightConvBlock, self).__init__()
+        self.conv_3 = nn.Sequential(
+            nn.Conv1d(input_dim, output_dim//2, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.BatchNorm1d(output_dim//2),
+        )
+
+        self.conv_1 = nn.Sequential(
+            nn.Conv1d(input_dim, output_dim//2, kernel_size=1),
+            nn.ReLU(),
+            nn.BatchNorm1d(output_dim//2),
+        )
+
+        self.pool_2 = nn.MaxPool1d(kernel_size=2)
+
+    def forward(self, x):
+        # apply the convolutional layers        
+        y1 = self.conv_1(x)
+        y2 = self.conv_3(x)
+
+        # apply the max pooling layer
+        y = self.pool_2(torch.concat((y1, y2), dim=1))
+
+        return y
+
+
 def create_model(method: str, model_type: str, meth_params: list, num_class: int) -> nn.Module:
     '''
         Create the model for different method.
@@ -309,6 +587,8 @@ def create_model(method: str, model_type: str, meth_params: list, num_class: int
         'cnn2': CNN2,
         'cnn3': CNN3,
         'cnn4': CNN4,
+        'cnn5': CNN5,
+        'lcnn': LightCNN,
     }
 
     method_mapping = {

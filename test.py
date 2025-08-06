@@ -1,4 +1,4 @@
-import os, re, json
+import os, re, json, time
 from datetime import datetime
 import numpy as np
 import pandas as pd
@@ -590,6 +590,43 @@ def check_nn_accuracy(model: nn.Module, df: pd.DataFrame, method: str, meth_para
     return acc
 
 
+def eval_memo(model: nn.Module, param_type: type=torch.float16):
+    '''
+        Evaluate model memory consumption(Mb).
+    '''
+    param_bytes = {
+        torch.float32: 4,    
+        torch.float16: 2,    
+        torch.bfloat16: 2,
+        torch.float64: 8,
+        torch.int8: 1,
+        torch.uint8: 1,
+        torch.int16: 2,
+        torch.int32: 4,
+        torch.int64: 8,
+    }
+
+    # parameter count
+    cnt = sum(p.numel() for p in model.parameters())
+    # model memory
+    mem = cnt / (1024 ** 2) * param_bytes[param_type]
+    return cnt, mem
+
+
+def eval_time(model: nn.Module, input: torch.Tensor, times: int=100):
+    '''
+        Evaluet model excution time(ms).
+    '''
+    model.eval()
+    start_time = time.perf_counter()
+    for _ in range(times):
+        _ = model(input)
+    end_time = time.perf_counter()
+    elapsed = (end_time - start_time) / times * 1000
+    
+    return round(elapsed, 6)
+
+
 def draw_results(res: dict, save: bool=False):
     '''
         Draw the results of the accuracy.
@@ -686,7 +723,7 @@ def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params
         'grid': 3.4,
         'lpt': 3.8,
         'lpt_nn': 0.3,
-        'rac_nn': 0.7,
+        'rac_nn': 0.3,
     }
 
     # setup
@@ -831,7 +868,7 @@ if __name__ == '__main__':
     if True:
         res = do_test(
             {
-                # 'lpt_nn': [0.5, 6, 55, 0],
+                'lpt_nn': [0.5, 6, 55, 0],
                 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
                 # 'grid': [0.5, 6, 100], 
                 # 'lpt': [0.5, 6, 50, 50]
@@ -842,7 +879,7 @@ if __name__ == '__main__':
                 'fovy': 12,
                 'fovx': 14.9925,
                 'limit_mag': 6,
-                'sigma_pos': 0.5,
+                'sigma_pos': 0,
                 'sigma_mag': 0.1,
                 'num_fs': 0,
                 'num_ms': 0,
@@ -853,40 +890,12 @@ if __name__ == '__main__':
                 'rac_nn': 'cnn2',
             },
             {
-                # 'pos': [0, 0.5, 1, 1.5, 2],
+                'pos': [0, 0.5, 1, 1.5, 2],
                 # 'mag': [0, 0.1, 0.2, 0.3, 0.4],
-                'fs': [0, 1, 2, 3, 4],
+                # 'fs': [0, 1, 2, 3, 4],
                 # 'ms': [0, 1, 2, 3, 4]
             },
             './catalogue/sao6.0_d0.03_12_15.csv',
-        )
-
-    if False:
-        res = do_test(
-            {
-                'rac_nn': [0.5, 7.7, [35, 75, 115], 18, 3, 0],
-            },
-            {
-                'h': 1040,
-                'w': 1288,
-                'fovx': 18.97205141393946,
-                'fovy': 15.36777053565561,
-                'limit_mag': 5.5,
-                'sigma_pos': 3,
-                'sigma_mag': 0,
-                'num_fs': 0,
-                'num_ms': 0,
-                'rot': 1
-            },
-            {
-                'rac_nn': 'cnn2',
-            },
-            {
-                'pos': [0, 0.5, 1, 1.5, 2], 
-                'mag': [0, 0.1, 0.2, 0.3, 0.4], 
-                'fs': [0, 1, 2, 3, 4],
-            },
-            gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
         )
 
     print(res)

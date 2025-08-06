@@ -163,14 +163,14 @@ def do_train(meth_params: dict, simu_params: dict, model_types: dict, gcata_path
     
 
 if __name__ == '__main__':
-    if False:
+    if True:
         do_train(
             {
-                'lpt_nn': [0.5, 6, 55, 0],
+                # 'lpt_nn': [0.5, 6, 55, 0],
                 # 'lpt_nn': [0.5, 6, 55, 1],
                 # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 0],
                 # 'rac_nn': [0.5, 6, [15, 35, 55], 18, 3, 1],
-                # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
+                'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 0],
                 # 'rac_nn': [0.5, 6, [25, 55, 85], 18, 3, 1],
             },
             {
@@ -183,10 +183,10 @@ if __name__ == '__main__':
             },
             {
                 'lpt_nn': 'fnn',
-                'rac_nn': 'cnn2',
+                'rac_nn': 'cnn4',
             },
             gcata_path='catalogue/sao6.0_d0.03_12_15.csv',
-            num_epochs=30,
+            num_epochs=20,
             batch_size=512,
             learning_rate=0.01
         )
@@ -235,7 +235,7 @@ if __name__ == '__main__':
             learning_rate=0.01
         )
 
-    if True:
+    if False:
         do_train(
             {
                 'rac_nn': [0.5, 7.7, [35, 75, 115], 18, 3, 0],
@@ -245,14 +245,14 @@ if __name__ == '__main__':
                 'w': 1288,
                 'fovx': 18.97205141393946,
                 'fovy': 15.36777053565561,
-                'limit_mag': 6,
+                'limit_mag': 5.5,
                 'rot': 1
             },
             {
-                'rac_nn': 'cnn2',
+                'rac_nn': 'lcnn',
             },
             gcata_path='catalogue/sao5.5_d0.03_9_10.csv',
             num_epochs=30,
             batch_size=512,
-            learning_rate=0.01
+            learning_rate=0.005
         )

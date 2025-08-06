@@ -14,16 +14,19 @@ cata['Y'] = np.sin(cata['Ra'])*np.cos(cata['De'])
 cata['Z'] = np.sin(cata['De'])
 
 
-def add_stary_light_noise(img: np.ndarray, rc: int, cc: int, std: int, A: int) -> np.ndarray:
+def add_stary_light_noise(img: np.ndarray, center: tuple[float, float], sigma: float, mag: float) -> np.ndarray:
     '''
         Add stary light noise to the image.
     '''
     h, w = img.shape
 
-    row = np.arange(w).reshape(-1, 1) - rc
-    col = np.arange(h).reshape(1, -1) - cc
+    y = np.arange(w).reshape(-1, 1) - center[0]
+    x = np.arange(h).reshape(1, -1) - center[1]
 
-    stary = 200 * np.exp(-(row**2 + col**2) / (2 * std**2))
+    intensity = get_stellar_intensity(mag)
+    stary = intensity * np.exp(-(y**2 + x**2) / (2 * sigma**2))
+
+    print(intensity, stary.shape)
     noised_img = np.clip(img + stary, 0, 255).astype(np.uint8)
 
     return noised_img
@@ -42,20 +45,15 @@ def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float
     noised_img = noised_img / 255.0
 
     # add pepper noise
-    num_pepper = int(prob_p * noised_img.size)
-    for _ in range(num_pepper):
-        x, y = np.random.randint(0, h), np.random.randint(0, w)
+    num_pepper = int(prob_p * noised_img.size / 2)
 
-        # if img[x, y] > 50:
-        #     continue
-
-        if np.random.rand() > 0.5:
-            noised_img[x, y] = 0
-        else:
-            noised_img[x, y] = 1.0
+    for pepper in [0.0, 1.0]:
+        for _ in range(num_pepper):
+            x, y = np.random.randint(0, h), np.random.randint(0, w)
+            noised_img[x, y] = pepper
 
     # add gaussian noise
-    noise = np.random.normal(0, sigma_g, noised_img.shape)
+    noise = np.random.normal(0.05, sigma_g, noised_img.shape)
     np.clip(noised_img+noise, 0, 1.0, out=noised_img)
 
     # denormalize image
