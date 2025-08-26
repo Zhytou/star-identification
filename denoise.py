@@ -1,9 +1,10 @@
 import cv2
 import numpy as np
+import pywt
 from scipy.signal import convolve2d
 
 
-def filter_image(img: np.ndarray, method: str='GAUSSIAN', size: int=3, sigma: float=0.5) -> np.ndarray:
+def filter_image(img: np.ndarray, method: str='GAUSSIAN', size: int=3) -> np.ndarray:
     '''
         Conventional noise reducing filters.
     Args:
@@ -13,7 +14,7 @@ def filter_image(img: np.ndarray, method: str='GAUSSIAN', size: int=3, sigma: fl
         filtered_img: the image after filtering
     '''
     if method == 'GAUSSIAN':
-        filtered_img = cv2.GaussianBlur(img, (size, size), sigma)
+        filtered_img = cv2.GaussianBlur(img, (size, size), 0.7)
     elif method == 'MEAN':
         filtered_img = cv2.blur(img, (size, size))
     elif method == 'MEDIAN':
@@ -23,12 +24,12 @@ def filter_image(img: np.ndarray, method: str='GAUSSIAN', size: int=3, sigma: fl
         # filtered_img = filtered_img[d:-d, d:-d]
         filtered_img = cv2.medianBlur(img, size)
     elif method == 'BLF':
-        filtered_img = cv2.bilateralFilter(img, size, 30, sigma)
+        filtered_img = cv2.bilateralFilter(img, 7, 10, 0.7)
     elif method == 'GLF':
         f = np.fft.fft2(img)
         fshift = np.fft.fftshift(f)
 
-        kernel = cv2.getGaussianKernel(size, sigma)
+        kernel = cv2.getGaussianKernel(size, 0.7)
         kernel = np.outer(kernel, kernel.transpose())
         kernel_padded = np.pad(kernel, ((0, img.shape[0] - kernel.shape[0]), (0, img.shape[1] - kernel.shape[1])), mode='constant')
         kernel_f = np.fft.fft2(kernel_padded)
@@ -108,6 +109,24 @@ def denoise_with_nlm(img: np.ndarray, patch_size: int=7, wind_size: int=21, sigm
     return denoised_img
 
 
+def denoise_with_wavelet(img, wavelet: str='sym4', level: int=3, threshold: float=2):
+    '''
+        Denoise with wavelet.
+    '''
+    coeffs = pywt.wavedec2(img, wavelet, level=level)
+    cA = coeffs[0]              # low freq coeff
+    cD = coeffs[1:]             # high freq coeff
+    denoised_coeffs = [cA]      # keep low freq coeff
+
+    for cd in cD:
+        denoised_cd = [pywt.threshold(band, threshold, mode='soft') for band in cd]
+        denoised_coeffs.append(denoised_cd)
+    
+    denoised_image = pywt.waverec2(denoised_coeffs, wavelet)
+    denoised_image = np.clip(denoised_image, 0, 255).astype(np.uint8)
+    return denoised_image
+
+
 def denoise_with_blf(img: np.ndarray, size: int = 9, atten: float = 0.1, threshold: int = 150, sigma_color: float = 30, sigma_space: float = 1):
     '''
         Improved bilateral filter denoising.
@@ -167,46 +186,79 @@ def denoise_with_blf(img: np.ndarray, size: int = 9, atten: float = 0.1, thresho
     return filtered_img
 
 
-def denoise_with_emf(img: np.ndarray, half_size: int=2):
+def denoise_with_emf(img: np.ndarray):
     '''
         Denoise with the extreme median filter.
     '''
     h, w = img.shape
 
-    max_img = morph_filter(img, 'max')
-    min_img = morph_filter(img, 'min')
+    denoised_img = img
+    mean_map = cv2.blur(img, (3, 3))
+    median_map = cv2.medianBlur(img, 3)
 
-    is_extreme = (img == max_img) | (img == min_img)
-    coords = np.transpose(np.nonzero(is_extreme)) # n x 2
+    max_img3 = morph_filter(img, 'max', size=3)
+    min_img3 = morph_filter(img, 'min', size=3)
+    is_extreme1 = (img == max_img3) | (img == min_img3)
+    ds = [-1, 0, 1]
+    xs, ys = np.meshgrid(ds, ds, indexing='ij')
+    offsets3 = np.stack([xs.flatten(), ys.flatten()], axis=1)
 
-    # 3x3 window check 
-    offset3 = np.array(
-        [[-1, -1],
-         [-1, 0],
-         [-1, 1],
-         [0, 1],
-         [1, 1],
-         [1, 0],
-         [1, -1],
-         [0, -1]]
-    )
-    coords3 = coords + offset3[None, :] # n x 8 x 2
-    coords3[:, :, 0] < h and coords3[:, :, 1] < w
+    max_img5 = morph_filter(img, 'max', size=5)
+    min_img5 = morph_filter(img, 'min', size=5)
+    is_extreme2 = (img == max_img5) | (img == min_img5)
+    ds = [-2, -1, 0, 1, 2]
+    xs, ys = np.meshgrid(ds, ds, indexing='ij')
+    offsets5 = np.stack([xs.flatten(), ys.flatten()], axis=1)
+    
+    ## first step
+    patches = np.argwhere(is_extreme1)[:, None, :] + offsets3                       # coordinates of patches (n, 8, 2)
+    xs, ys = np.clip(patches[..., 0], 0, h-1), np.clip(patches[..., 1], 0, w-1)     # clipped coordinates
+    count = np.sum(is_extreme1[xs, ys], axis=1)                                     # count of extreme pixels in each patch(n, )
+    mask1 = count < 9                                                               # not all pixel are extreme values
+    coords = np.argwhere(is_extreme1)[mask1]
+    denoised_img[coords[:, 0], coords[:, 1]] = median_map[coords[:, 0], coords[:, 1]]
+
+    ## second step
+    coords = np.argwhere(is_extreme1)[~mask1]
+    patches = coords[:, None, :] + offsets5
+    xs, ys = np.clip(patches[..., 0], 0, h-1), np.clip(patches[..., 1], 0, w-1)
+    count = np.sum(is_extreme2[xs, ys], axis=1)   
+    mask2 = count == 25
+    coords = coords[mask2]
+    denoised_img[coords[:, 0], coords[:, 1]] = mean_map[coords[:, 0], coords[:, 1]]
+
+    return denoised_img
+    
+
+def denoise_with_cwm(img: np.ndarray, size: int=3):
+    '''
+        Denoise with combined wavelet transform and morphology.
+    '''
+    denoised_img = denoise_with_wavelet(img)
+
+    img = morph_filter(img, 'open', cv2.MORPH_ELLIPSE, size)
+    img = morph_filter(img, 'close', cv2.MORPH_ELLIPSE, size)
+
+    denoised_img = cv2.addWeighted(denoised_img, 0.5, img, 0.5, 0)
+
+    return denoised_img
 
 
-def denoise_with_cnb(img: np.ndarray, patch_size: int=3, match_num: int=49, sigma: int=10, threshold: int=150, atten: float=0.1, sigma_color: int=50, sigma_space: int=20):
+def denoise_with_cnb(img: np.ndarray, patch_size: int=3, match_num: int=49, sigma: int=10, threshold: int=50, atten: float=0.1, sigma_color: int=50, sigma_space: int=20):
     '''
         Denoise with combined nlm and blf.
     '''
 
-    def compute_ssd(patches: np.ndarray, sim_patches: np.ndarray):
+    def compute_ssd(patches: np.ndarray):
         '''
             Compute the sum of squared differences.
         '''
-        sq = np.sum(star_patches**2, axis=(1,2))          # sum of squares (n,)
-        sim_sq = np.sum(sim_patches**2, axis=(2,3))       # sum of squares (n, k)
-        dot_product = np.einsum('nij, nkij->nk', patches, sim_patches)  # dot product
-        ssd = sq[:, None] + sim_sq - 2 * dot_product
+        n = patches.shape[0]            # number of patches
+        pf = patches.reshape(n, -1)     # flatten patches
+        
+        sq = np.sum(pf**2, axis=1)      # sum of squares (n,)
+        dp = pf @ pf.T                  # dot product (n, n)
+        ssd = sq[:, None] + sq[None, :] - 2 * dp
 
         return ssd        
 
@@ -229,29 +281,22 @@ def denoise_with_cnb(img: np.ndarray, patch_size: int=3, match_num: int=49, sigm
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))  
 
     # 2. Preselect possible star pixels and similar patches for each pixles
-    T = np.percentile(mean_map, 98) 
+    T = np.percentile(mean_map, 99.9) 
     mask = mean_map > T
     print('Bound:', T, 'NLM count:', np.sum(mask))
 
     coords = np.argwhere(mask)                                      # the center coordinates of possible star patches
-    avg_grays = mean_map[coords[:, 0], coords[:, 1]]                # the average gray values of selected pixels (n, )
-    diff = np.abs(avg_grays[:, None] - avg_grays[None, :])          # the differences between pixels (n, n)
-    topk_idxs = np.argpartition(diff, kth=k, axis=1)[:, :k]         # the indexs of top kth similar pixel (n, k)
-    sim_coords = coords[topk_idxs]                                  # the center coordinates of similar patches
-
-    # 3. Do non local mean with the selected patches
-    sim_grays = img[sim_coords[..., 0], sim_coords[..., 1]]             # the gray values of similar pixels (n, k)
-    star_patches = patches[coords[:, 0], coords[:, 1]]                  # the possible star patches (n, d, d)
-    sim_patches = patches[sim_coords[..., 0], sim_coords[..., 1]]       # the similar patches of each possible star patch (n, k, d, d)
-
-    ## calculate the nlm weights
-    ssds = compute_ssd(star_patches, sim_patches)                       # the sum of squared differences (n, k)
+    grays = img[coords[:, 0], coords[:, 1]]                         # the gray values of selected pixels (n, k)
+    star_patches = patches[coords[:, 0], coords[:, 1]]              # the possible star patches (n, d, d)
+    ssds = compute_ssd(star_patches)                                # the sum of squared differences (n, k)
     
+    # 3. Do non local mean with the selected patches
+    ## calculate the nlm weights
     nlm_weights = np.exp(-ssds / (sigma **2))  
     nlm_weightsum = np.sum(nlm_weights, axis=-1)
 
     ## apply non local mean
-    denoised_img[coords[:, 0], coords[:, 1]] = (nlm_weights * sim_grays).sum(axis=-1) / nlm_weightsum
+    denoised_img[coords[:, 0], coords[:, 1]] = (nlm_weights * grays).sum(axis=-1) / nlm_weightsum
 
     # 4. Do modified bilateral filter with other patches
     coords = np.argwhere(~mask)                                         # the center coordinates of unselected patches
@@ -277,6 +322,10 @@ def denoise_image(img: np.ndarray, method: str):
     '''
     if method == 'CNB': # combined nlm and blf
         denoised_img = denoise_with_cnb(img)
+    elif method == 'CWM':
+        denoised_img = denoise_with_cwm(img)
+    elif method == 'EMF':
+        denoised_img = denoise_with_emf(img)
     elif method == 'NLM_BLF':
         denoised_img = denoise_with_nlm(img, 3, 11) # cv2.addWeighted(denoise_with_nlm(img, 5, 11), 0.5, img, 0.5, 0)
         denoised_img = denoise_with_blf(denoised_img, 3, 0.1, sigma_color=10)

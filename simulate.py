@@ -45,16 +45,17 @@ def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float
     noised_img = noised_img / 255.0
 
     # add pepper noise
-    num_pepper = int(prob_p * noised_img.size / 2)
-
-    for pepper in [0.0, 1.0]:
-        for _ in range(num_pepper):
-            x, y = np.random.randint(0, h), np.random.randint(0, w)
-            noised_img[x, y] = pepper
+    if prob_p > 0:
+        num_pepper = int(prob_p * noised_img.size / 2)
+        for pepper in [0.0, 1.0]:
+            for _ in range(num_pepper):
+                x, y = np.random.randint(0, h), np.random.randint(0, w)
+                noised_img[x, y] = pepper
 
     # add gaussian noise
-    noise = np.random.normal(0.05, sigma_g, noised_img.shape)
-    np.clip(noised_img+noise, 0, 1.0, out=noised_img)
+    if sigma_g > 0:
+        noise = np.random.normal(0, sigma_g, noised_img.shape)
+        np.clip(noised_img+noise, 0, 1.0, out=noised_img)
 
     # denormalize image
     noised_img = (noised_img * 255).astype(np.uint8)
@@ -136,13 +137,13 @@ def draw_star(position: tuple[float, float], magnitude: float, img: np.ndarray, 
                     # if dd > roi**2:
                     #     continue
                     intensity += H*exp(-dd/(2*sigma**2))
-                img[u ,v] = intensity // 4 if intensity < 1024 else 255
+                img[u ,v] += intensity // 4 if intensity < 1024 else 255
             else:
                 dd = (u+0.5-x)**2+(v+0.5-y)**2
                 # if dd > roi**2:
                 #     continue
                 intensity = H*exp(-dd/(2*sigma**2))
-                img[u, v] = intensity if intensity < 256 else 255
+                img[u, v] = img[u, v]+intensity if img[u, v]+intensity < 256 else 255
     return img
 
 

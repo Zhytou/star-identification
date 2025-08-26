@@ -5,7 +5,7 @@ import timeit
 from math import radians
 
 from simulate import create_star_image, add_gaussian_and_pepper_noise, add_stary_light_noise, get_stellar_intensity
-from denoise import denoise_image, denoise_with_blf_new
+from denoise import denoise_image, denoise_with_blf
 from detect import group_star, cal_threshold
 from extract import get_star_centroids
 from utils import find_overlap_and_unique, cal_mse_psnr_ssim
@@ -64,7 +64,7 @@ if False:
     
     img2 = denoise_image(img1, 'NLM')
     img3 = cv2.bilateralFilter(img2, 5, 30, 3)
-    img4 = denoise_with_blf_new(img2, 5, threshold=150, sigma_color=30, sigma_space=3) # modified bilateral filter
+    img4 = denoise_with_blf(img2, 5, threshold=150, sigma_color=30, sigma_space=3) # modified bilateral filter
 
     dir = 'res/chapter3/nlm/'
     cv2.imwrite(dir+'clean.png', img0)
@@ -89,12 +89,12 @@ ra, de, roll = radians(29.2104), radians(-12.0386), radians(0) # 可能每个测
 h, w = 512, 512
 fov = 12
 limit_mag = 6
-background = 8
-psf = 1
+background = 9
+psf = 0.7
 
 
 # 星图降噪效果测试（质量指标比较）
-if False:
+if True:
     img0, stars = create_star_image(
         ra, de, roll, 
         w=w, 
@@ -109,21 +109,11 @@ if False:
     dir = f'res/chapter3/denoise'
     for (g, p) in [(0.05, 0.005)]:
         os.makedirs(f'{dir}/{g}_{p}', exist_ok=True)
+        cv2.imwrite(f'res/chapter3/denoise/{g}_{p}/ORIGINAL.png', img0)
         
-        img1, _ =  create_star_image(
-            ra, de, roll, 
-            h=h,
-            w=w,
-            fovx=fov, 
-            fovy=fov, 
-            sigma_g=g,
-            prob_p=p,
-            limit_mag=limit_mag, 
-            background=background
-        )
-        cv2.imwrite(f'res/chapter3/denoise/{g}_{p}/ORIGINAL.png', img1)
-
-        for method in ['NLM_BLF', 'GAUSSIAN', 'MEAN', 'MEDIAN', 'BLF']:
+        img1 = add_gaussian_and_pepper_noise(img0, g, p)
+        for method in ['EMF', 'CWM']:
+        # for method in ['NOISED', 'CNB', 'NLM_BLF', 'BLF', 'GAUSSIAN', 'MEAN', 'MEDIAN']:
             img2 = denoise_image(img1, method)
             cv2.imwrite(f'res/chapter3/denoise/{g}_{p}/{method}.png', img2)
             
@@ -223,7 +213,7 @@ def label_image(img: np.ndarray, coords: np.ndarray, color: tuple=(0, 255, 0),  
     return img
 
 
-# # 选择一处恒星数量多、星等差异大的视场，从而说明检测算法针对不同星等的恒星均能有限检测
+# 选择一处恒星数量多、星等差异大的视场，从而说明检测算法针对不同星等的恒星均能有限检测
 ra, de, roll = radians(25.0588), radians(-21.7205), radians(0)
 limit_mag = 5.9
 fov = 20
@@ -278,7 +268,7 @@ if False:
 
 
 # 星点检测数量对比
-if True:
+if False:
     num_test = 10
 
     img0, stars = create_star_image(
