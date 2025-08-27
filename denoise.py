@@ -161,58 +161,69 @@ def denoise_with_blf(img: np.ndarray, size: int, sigma_color: float, sigma_space
     return filtered_img
 
 
-def denoise_with_emf(img: np.ndarray, size: int=3, threshold: int=5):
+def denoise_with_cmg(img: np.ndarray, size: int=3, sigma: float=1):
     '''
-        Denoise with the extreme median filter.
+        Denoise with combined morphology operation and modified gaussian filter.
+        https://doi.org/10.27241/d.cnki.gnjgu.2024.001923
     '''
-    
-    def compute_energy(img0: np.ndarray, img1: np.ndarray,):
-        '''
-            Compute the energy of each pixel in the image.
-        '''
-        padded_img = np.pad(img0, r, 'edge')
 
-        left = np.abs(padded_img - np.roll(padded_img,  1, axis=1))     
-        right = np.abs(padded_img - np.roll(padded_img, -1, axis=1))    
-        up = np.abs(padded_img - np.roll(padded_img,  1, axis=0))       
-        down = np.abs(padded_img - np.roll(padded_img, -1, axis=0))     
+    Id = 0
+    T1 = 0  
+    T2 = 0
+    T3 = 0
+    Atten = 0
 
-        energy = (left + right + up + down)[1:-1, 1:-1]
-        energy += np.abs(img1 - img0)
-
-        return energy
-
-    h, w = img.shape
     d = size
     r = d // 2
+    h, w = img.shape
 
-    denoised_img = img
-    mean_map = cv2.blur(img, (3, 3))
-    median_map = cv2.medianBlur(img, 3)
+    # 1. apply erosion operator
+    denoised_img = morph_filter(img, 'min', se=cv2.MORPH_CROSS, size=size) 
 
-    # 1.initial check with extreme values
-    max_img = morph_filter(img, 'max', size=size)
-    min_img = morph_filter(img, 'min', size=size)
-    mask = (np.abs(img - max_img)  < threshold) & (np.abs(img - min_img)  < threshold)
-    denoised_img[mask] = median_map[mask]
+    # 2. select non-star pixels
+    offsets = np.array([[0, 1], [0, -1], [1, 0], [-1, 0]])                      # 4-connectivity offsets (4, 2)
+    coords = np.stack(np.meshgrid(np.arange(0, h), np.arange(0, w)), axis=-1)   # coordinates of the entire image pixels (h, w)
+    coords = coords[..., None, :] + offsets[None, None, ...]                    # 4-connectivity neighborhoods (h, w, 4, 2)
+    padded_img = np.pad(img, ((r, r), (r, r)), mode='edge')                     # padded zero as the border of image
 
-    # 2.double check with energy
-    e0 = compute_energy(img, img)
-    e1 = compute_energy(img, denoised_img)
-    mask = e1 < e0 & np.sum(e0) / (h*w) < e0
+    min_map = np.min(padded_img[coords[..., 0], coords[..., 1]], axis=-1)       # (h, w)
+    max_map = np.min(padded_img[coords[..., 0], coords[..., 1]], axis=-1)       # (h, w)
 
-    # 3.predicate
-    grays = img[mask]
-    coords = np.argwhere(mask)
-    offsets = np.array([[0, 1], [0, -1], [1, 0], [-1, 0]])
+    S1 = (img < Id) & (img / min_map > T1)
+    S2 = (img > Id) & ((img / max_map < T2) | (max_map / img < T2)) & (max_map / min_map < T3)
 
+    # 3. apply sliding window guassian filter for S1
+    patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))  # patches for guassian filter
+
+    x, y = np.meshgrid(np.arange(-r, r+1), np.arange(-r, r+1))  # offsets
+    kernel = np.exp(-(x**2 + y**2)/(2*sigma**2))                # default gaussian kernel
+    weights = kernel * np.stack([
+        (x <= 0) & (y <= 0),                                    # north west sub window
+        (x >= 0) & (y <= 0),                                    # north east sub window
+        (x <= 0) & (y >= 0),                                    # south west sub window
+        (x >= 0) & (y >= 0),                                    # south east sub window
+    ], axis=0)                                                  # all the sliding window weights (4, d, d)
+    weights /= weights.sum(axis=(-2, -1), keepdims=True)        # normalized weights
+
+    vals = np.sum(patches[S1][:, None, ...] * weights[None, ...], axis=(-2, -1))    # swf all possible outputs (n, 4)
+    print(weights.shape, vals.shape, S1.shape, np.sum(S1), patches.shape, patches[S1].shape)
+
+    # idxs = np.argmin(np.abs(vals - denoised_img[S1]))
+    # denoised_img[S1] = vals[idxs]
+    
+    # 4. apply attenuation for S2
+    denoised_img[S2] *= Atten
+
+    # 5. apply dilation operator
+    denoised_img = morph_filter(denoised_img, 'max', se=cv2.MORPH_CROSS, size=size)
 
     return denoised_img
-    
+
 
 def denoise_with_cwm(img: np.ndarray, size: int=3):
     '''
         Denoise with combined wavelet transform and morphology.
+        https://doi.org/10.27060/d.cnki.ghbcu.2020.001632
     '''
     denoised_img = denoise_with_wavelet(img, 'sym4')
 
@@ -286,8 +297,8 @@ def denoise_image(img: np.ndarray, method: str):
         denoised_img = denoise_with_cnb(img)
     elif method == 'CWM':
         denoised_img = denoise_with_cwm(img)
-    elif method == 'EMF':
-        denoised_img = denoise_with_emf(img)
+    elif method == 'CMG':
+        denoised_img = denoise_with_cmg(img)
     elif method == 'NLM_BLF':
         denoised_img = denoise_with_nlm(img, 3, 11) # cv2.addWeighted(denoise_with_nlm(img, 5, 11), 0.5, img, 0.5, 0)
         denoised_img = denoise_with_blf(denoised_img, 3, 0.1, sigma_color=10)
