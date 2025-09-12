@@ -137,7 +137,7 @@ def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: 
     T =  cal_threshold(filtered_img, thr_meth)
 
     # rough group star using connectivity
-    group_coords = group_star(filtered_img, seg_meth, T, T1=T1, T2=T2, T3=T3, connectivity=connectivity, pixel_limit=pixel_limit)
+    group_coords = group_star(filtered_img, seg_meth, T, connectivity=connectivity, pixel_limit=pixel_limit)
 
     # calculate the centroid coordinate with threshold and weight
     centroids = {}

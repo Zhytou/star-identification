@@ -106,7 +106,7 @@ def get_stellar_intensity(magnitude: float) -> float:
     return H
 
 
-def draw_star(position: tuple[float, float], magnitude: float, img: np.ndarray, sigma: float=1.5, roi: int=2, msaa: bool=False) -> np.ndarray:
+def draw_star(img: np.ndarray, position: tuple[float, float], magnitude: float, sigma: float=1.5, roi: int=2, msaa: bool=False) -> np.ndarray:
     """
         Draw star at position[0](row) and position[1](column) in the image.
     Args:
@@ -367,7 +367,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     if not coords_only:
         for i in range(len(stars)):
             # draw (row, col) mag
-            img = draw_star((stars[i][1], stars[i][2]), stars[i][-1], img, sigma_psf, roi=roi)
+            img = draw_star(img, (stars[i][1], stars[i][2]), stars[i][-1], sigma_psf, roi=roi)
 
         # add gaussian and pepper noise
         img = add_gaussian_and_pepper_noise(img, sigma_g, prob_p)
