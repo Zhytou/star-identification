@@ -16,7 +16,7 @@ if False:
     
     mag = 3
     psf = 0.7
-    z = draw_star((3.5, 3.5), mag, np.zeros((7, 7), dtype=np.uint8), sigma=psf)
+    z = draw_star(np.zeros((7, 7), dtype=np.uint8), (3.5, 3.5), mag, sigma=psf)
     dz = z.flatten()
 
     fig = plt.figure(figsize=(6, 6))

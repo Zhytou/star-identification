@@ -8,7 +8,7 @@ from simulate import create_star_image, add_gaussian_and_pepper_noise, add_stary
 from denoise import denoise_image, denoise_with_blf
 from detect import group_star, cal_threshold
 from extract import get_star_centroids
-from utils import find_overlap_and_unique, cal_mse_psnr_ssim
+from utils import find_overlap_and_unique, cal_mse_psnr_ssim, cal_doh
 
 
 # 非局部均匀滤波测试——Lena图片
@@ -37,8 +37,12 @@ limit_mag = 6
 background = 9
 psf = 1
 
-# 改进双边滤波测试
+
+# 各种基础方法的降噪效果
 if False:
+    dir = 'res/chapter3/basis/'
+    os.makedirs(dir, exist_ok=True)
+
     img0, stars = create_star_image(
         ra, de, roll,
         w=w, 
@@ -49,39 +53,48 @@ if False:
         sigma_psf=psf,
         background=background
     )
-    img1, _ = create_star_image(
-        ra, de, roll, 
+    img1 = add_gaussian_and_pepper_noise(img0, 0.05, 0.005)
+
+    for method in ['ORINGINAL', 'NOISED', 'MEAN', 'MEDIAN', 'GLF', 'WAVELET', 'NLM']:
+        if method == 'ORINGINAL':
+            img2 = img0
+        elif method == 'NOISED':
+            img2 = img1
+        else:
+            img2 = denoise_image(img1, method)
+        cv2.imwrite(f'{dir}/{method}.png', img2)
+        cv2.imwrite(f'{dir}/{method}_S.png', img2[y-d:y+d, x-d:x+d])
+
+        mse, psnr, ssim = cal_mse_psnr_ssim(img0, img2)
+        print(method, mse, psnr, ssim)
+
+
+# 改进双边滤波测试
+if False:    
+    dir = 'res/chapter3/blf'
+    os.makedirs(dir, exist_ok=True)
+
+    img0, stars = create_star_image(
+        ra, de, roll,
         w=w, 
         h=h,
         fovx=fov, 
-        fovy=fov,
-        sigma_g=0.1,
-        prob_p=0.001,
+        fovy=fov, 
         limit_mag=limit_mag, 
         sigma_psf=psf,
         background=background
     )
-    
-    img2 = denoise_image(img1, 'NLM')
-    img3 = cv2.bilateralFilter(img2, 5, 30, 3)
-    img4 = denoise_with_blf(img2, 5, threshold=150, sigma_color=30, sigma_space=3) # modified bilateral filter
+    img1 = add_gaussian_and_pepper_noise(img0, 0.05, 0.001)
 
-    dir = 'res/chapter3/nlm/'
-    cv2.imwrite(dir+'clean.png', img0)
-    cv2.imwrite(dir+'noised.png', img1)
-    cv2.imwrite(dir+'nlm.png', img2)
-    cv2.imwrite(dir+'nlm_cvblf.png', img3)
-    cv2.imwrite(dir+'nlm_sdblf.png', img4)
-
-    cv2.imwrite(dir+'clean_scale.png', img0[y-d:y+d, x-d:x+d])
-    cv2.imwrite(dir+'noised_scale.png', img1[y-d:y+d, x-d:x+d])
-    cv2.imwrite(dir+'nlm_scale.png', img2[y-d:y+d, x-d:x+d])
-    cv2.imwrite(dir+'nlm_cvblf_scale.png', img3[y-d:y+d, x-d:x+d])
-    cv2.imwrite(dir+'nlm_sdblf_scale.png', img4[y-d:y+d, x-d:x+d])
-
-    print('nlm', cal_mse_psnr_ssim(img0, img2))
-    print('nlm+cvblf', cal_mse_psnr_ssim(img0, img3))
-    print('nlm+sdblf', cal_mse_psnr_ssim(img0, img4))
+    for method in ['NLM', 'BLF', 'MBLF']:
+        if method == 'NLM':
+            img2 = denoise_image(img1, 'NLM')
+        else:    
+            img2 = denoise_image(denoise_image(img1, 'NLM'), method)
+        
+        mse, psnr, ssim = cal_mse_psnr_ssim(img0, img2)
+        print(method, mse, psnr, ssim)
+        cv2.imwrite(f'{dir}/{method}.png', img2)
 
 
 # 第三章末尾测试参数
@@ -109,13 +122,16 @@ if True:
     dir = f'res/chapter3/denoise'
     for (g, p) in [(0.05, 0.005)]:
         os.makedirs(f'{dir}/{g}_{p}', exist_ok=True)
-        cv2.imwrite(f'res/chapter3/denoise/{g}_{p}/ORIGINAL.png', img0)
-        
+
         img1 = add_gaussian_and_pepper_noise(img0, g, p)
-        for method in ['EMF', 'CWM']:
-        # for method in ['NOISED', 'CNB', 'NLM_BLF', 'BLF', 'GAUSSIAN', 'MEAN', 'MEDIAN']:
-            img2 = denoise_image(img1, method)
-            cv2.imwrite(f'res/chapter3/denoise/{g}_{p}/{method}.png', img2)
+        for method in ['NOISED', 'ORINGINAL', 'CNB']:
+            if method == 'ORINGINAL':
+                img2 = img0
+            elif method == 'NOISED':
+                img2 = img1
+            else:
+                img2 = denoise_image(img1, method)
+            cv2.imwrite(f'{dir}/{g}_{p}/{method}.png', img2)
             
             # 计算降噪前后图像质量指标
             mse, psnr, ssim = cal_mse_psnr_ssim(img0, img2)
@@ -168,7 +184,6 @@ if False:
     # 其中NONE为无预处理时
     for method in [
         'NONE', 
-        'NLM_BLF', 
         'GAUSSIAN', 
         'MEAN', 
         # 'MEDIAN', 
@@ -213,6 +228,59 @@ def label_image(img: np.ndarray, coords: np.ndarray, color: tuple=(0, 255, 0),  
     return img
 
 
+# DoH算子效果
+if False:
+    img = np.array([
+        [6, 10, 0, 9, 7, 19, 7],
+        [0, 6, 3, 36, 0, 0, 0],
+        [1, 8, 91, 141, 81, 2, 0],
+        [6, 34, 158, 255, 156, 27, 13],
+        [11, 16, 94, 147, 95, 12, 5],
+        [0, 0, 6, 38, 0, 3, 0],
+        [7, 0, 12, 6, 7, 8, 0]
+    ], dtype=np.uint8)
+
+    x, y = np.arange(1, 6), np.arange(1, 6)
+    xx, yy = np.meshgrid(x, y)
+    print(img)
+    print(cal_doh(img, xx, yy, 1))
+
+
+    img = np.array([
+        [1, 22, 11, 0, 7, 8, 14],
+        [25, 31, 134, 225, 130, 28, 5],
+        [1, 133, 254, 252, 237, 124, 3],
+        [5, 216, 247, 255, 255, 213, 1],
+        [7, 129, 248, 252, 255, 134, 7],
+        [5, 30, 147, 220, 142, 22, 16],
+        [17, 6, 5, 23, 12, 4, 2]
+    ], dtype=np.uint8)
+    x, y = np.arange(1, 6), np.arange(1, 6)
+    xx, yy = np.meshgrid(x, y)
+    print(img)
+    print(cal_doh(img, xx, yy, 1))
+
+    img = cv2.GaussianBlur(img, (5, 5), 1.5)
+    x, y = np.arange(1, 6), np.arange(1, 6)
+    xx, yy = np.meshgrid(x, y)
+    print(img)
+    print(cal_doh(img, xx, yy, 1))
+
+    img = np.array([
+        [7, 0, 7, 10, 2, 0, 0],
+        [3, 7, 0, 15, 11, 5, 16],
+        [1, 0, 10, 5, 8, 9, 16],
+        [23, 4, 12, 255, 1, 23, 23],
+        [14, 14, 20, 13, 7, 0, 2],
+        [0, 0, 7, 8, 0, 2, 6],
+        [4, 6, 12, 0, 16, 3, 2]
+    ], dtype=np.uint8)
+    x, y = np.arange(1, 6), np.arange(1, 6)
+    xx, yy = np.meshgrid(x, y)
+    print(img)
+    print(cal_doh(img, xx, yy, 1).astype(int))
+
+
 # 选择一处恒星数量多、星等差异大的视场，从而说明检测算法针对不同星等的恒星均能有限检测
 ra, de, roll = radians(25.0588), radians(-21.7205), radians(0)
 limit_mag = 5.9
@@ -236,15 +304,16 @@ if False:
     real_coords = stars[:, 1:3]
 
     for (g, p) in [
-        # (0.02, 0.002), 
+        # (0.00, 0.000), 
+        (0.02, 0.002), 
         (0.05, 0.005), 
-        # (0.08, 0.008), 
+        (0.08, 0.008), 
     ]:
         img1 = add_gaussian_and_pepper_noise(img0, sigma_g=g, prob_p=p)
 
         esti_coords = np.array(get_star_centroids(
             img1, 
-            den_meth='NLM_BLF', #'NONE', #'MEDIAN',
+            den_meth='CNB', #'NONE', #'MEDIAN',
             thr_meth='Liebe3', 
             seg_meth='RG', #'CCL',
             cen_meth='CoG',
@@ -259,6 +328,13 @@ if False:
         img1 = label_image(img1, coords1, (0, 255, 0))
         img1 = label_image(img1, coords2, (255, 0, 0))
         img1 = label_image(img1, coords3, (0, 0, 255))
+
+        print(
+            '-----------------------------',
+            '\nSigma of gaussian noise:', g, 
+            '\nProbability of pepper noise', p, 
+            '\nMiss coordinates:\n', coords2
+        )
 
         cv2.imwrite(f'res/chapter3/detect/{g}_{p}.png', img1)
 
@@ -370,7 +446,7 @@ if False:
 # 星点检测耗时测试
 if False:
     # random ra & de test
-    num_test = 10
+    num_test = 5
     
     # generate random right ascension[0, 360] and declination[-90, 90]
     ras = np.random.uniform(0, 2*np.pi, num_test)
@@ -401,13 +477,13 @@ if False:
         )
 
         # denoise
-        img2 = denoise_image(img1, 'NLM_BLF')
+        img2 = denoise_image(img1, 'NLM')
 
         # threshold
         T = cal_threshold(img2, 'Liebe3')
 
         for method in res:
-            res[method].append(timeit.timeit(lambda: group_star(img2, method, T0=T, connectivity=4, pixel_limit=5), number=3))
+            res[method].append(timeit.timeit(lambda: group_star(img2, method, T, connectivity=4, pixel_limit=5), number=3))
             # res[method].append(timeit.timeit(lambda: get_star_centroids(img1, 'MEDIAN', 'Liebe3', method, 'CoG', pixel_limit=5), number=3))
         
     for method in res:
