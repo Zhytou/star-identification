@@ -9,12 +9,49 @@ from astropy.coordinates import SkyCoord
 from skimage.metrics import structural_similarity
 
 
+def get_neighbors(connectivity: int, roi: int=1):
+    '''
+        Get neighbor offsets based on connectivity (4 or 8).
+    '''
+    if connectivity == 4 and roi == 1:
+        offsets = np.array([[0, 1], [0, -1], [1, 0], [-1, 0]], dtype=int)
+    elif connectivity == 8 and roi ==1:
+        offsets = np.array([[0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [1, -1], [-1, 1], [-1, -1]], dtype=int)
+    elif connectivity == 4 and roi == 2:
+        offsets = np.array([[0, 1], [0, -1], [1, 0], [-1, 0],
+                            [0, 2], [0, -2], [2, 0], [-2, 0]], dtype=int)
+    elif connectivity == 8 and roi ==2:
+        offsets = np.array([[0, 1], [0, -1], [1, 0], [-1, 0],
+                            [0, 2], [0, -2], [2, 0], [-2, 0],
+                            [1, 1], [1, -1], [-1, 1], [-1, -1],
+                            [2, 2], [2, -2], [-2, 2], [-2, -2],
+                            [2, 1], [2, -1], [-2, 1], [-2, -1],
+                            [1, 2], [-1, 2], [1, -2], [-1, -2]], dtype=int)
+    else:
+        print('wrong connectivity!')
+    
+    return offsets
+
+
 def gen_combos(n: int, k: int):
     '''
         Generate C(n, k).
     '''
     combos = np.array(list(combinations(range(n), k)))
     return combos
+
+
+def cal_doh(img: np.ndarray, x: np.ndarray|int, y: np.ndarray|int, d: int):
+    '''
+        Calculate determination of hessian.
+    '''
+    img = img.astype(float)
+
+    dxx = (img[x-d, y] + img[x+d, y] - 2*img[x, y]) / d
+    dyy = (img[x, y-d] + img[x, y+d] - 2*img[x, y]) / d
+    dxy = (img[x-d, y-d] + img[x+d, y+d] - img[x-d, y+d] - img[x+d, y-d]) / d
+
+    return dxx*dyy-dxy**2
 
 
 def find_overlap_and_unique(A: np.ndarray, B: np.ndarray, eps: float=2):
@@ -316,7 +353,7 @@ def cal_mse_psnr_ssim(img: np.ndarray, filtered_img: np.ndarray):
     mse = np.mean((img - filtered_img)**2)
     
     # caculate the PSNR
-    psnr = 10 * np.log10(255**2 / mse)
+    psnr = 10 * np.log10(255**2 / mse) if mse > 0 else np.inf
     
     # caculate the SSIM
     mssim = structural_similarity(img, filtered_img, data_range=255)
