@@ -54,6 +54,53 @@ def cal_doh(img: np.ndarray, x: np.ndarray|int, y: np.ndarray|int, d: int):
     return dxx*dyy-dxy**2
 
 
+def cal_robert(img: np.ndarray, x: np.ndarray|int, y: np.ndarray|int):
+    '''
+        Calculate robert operator result.
+    '''
+    img = img.astype(float)
+
+    dx = img[x+1, y]-img[x, y]
+    dy = img[x, y+1]-img[x, y]
+    
+    return dx, dy
+
+
+def cal_ly(img: np.ndarray, x: np.ndarray|int, y: np.ndarray|int, d: int):
+    '''
+        Calculate the ly operator result.
+    '''
+    r = d//2
+
+    xx, yy = np.meshgrid(np.arange(-r, r+1), np.arange(-r, r+1))    # (r, r)
+    x, y = x[:, None, None]+xx[None, ...], y[:, None, None]+yy[None, ...]         # (n, r, r)
+    dx, dy = cal_robert(img, x, y)                               
+
+    det = np.sum(dx**2, axis=(1, 2))*np.sum(dy**2, axis=(1, 2))-np.sum(dx*dy, axis=(1, 2))**2
+    tr = np.maximum(np.sum(dx**2 + dy**2, axis=(1, 2)), 1e-10)
+
+    q = 4*det/(tr**2)
+    w = det/tr
+
+    return q, w
+
+
+def cal_sobel(img: np.ndarray, x: np.ndarray|int, y: np.ndarray|int):
+    '''
+        Calculate the sobel operator result.
+    '''
+    d0 = img[x+1, y-1]+2*img[x+1, y]+img[x+1, y+1] - (img[x-1, y-1]+2*img[x-1, y]+img[x-1, y+1])
+    d45 = img[x, y+1]+2*img[x+1, y+1]+img[x+1, y] - (img[x, y-1]+2*img[x-1, y-1]+img[x-1, y])
+    d90 = img[x-1, y+1]+2*img[x, y+1]+img[x+1, y+1] - (img[x-1, y-1]+2*img[x, y-1]+img[x+1, y-1])
+    d135 = img[x-1, y]+2*img[x-1, y+1]+img[x, y+1] - (img[x+1, y]+2*img[x+1, y-1]+img[x, y-1])
+    d180 = img[x-1, y-1]+2*img[x-1, y]+img[x-1, y+1] - (img[x+1, y-1]+2*img[x+1, y]+img[x+1, y+1])
+    d225 = img[x, y-1]+2*img[x-1, y-1]+img[x-1, y] - (img[x, y+1]+2*img[x+1, y+1]+img[x+1, y])
+    d270 = img[x-1, y-1]+2*img[x, y-1]+img[x+1, y-1] - (img[x-1, y+1]+2*img[x, y+1]+img[x+1, y+1])
+    d315 = img[x+1, y]+2*img[x+1, y-1]+img[x, y-1] - (img[x-1, y]+2*img[x-1, y+1]+img[x, y+1])
+
+    return np.vstack([d0, d45, d90, d135, d180, d225, d270, d315]).transpose()
+
+
 def find_overlap_and_unique(A: np.ndarray, B: np.ndarray, eps: float=2):
     '''
         Find the overlap parts of two point sets.

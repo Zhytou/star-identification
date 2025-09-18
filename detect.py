@@ -3,7 +3,7 @@ import bisect as bis
 import numpy as np
 import scipy.ndimage as nd
 
-from utils import get_neighbors, cal_doh
+from utils import get_neighbors, cal_doh, cal_ly, cal_sobel
 
 class UnionSet:
     '''
@@ -177,9 +177,9 @@ def cal_threshold(img: np.ndarray, method: str, factor: float=0.1, wind_size: in
     return T
 
 
-def get_seed_coords(img: np.ndarray, threshold: int, connectivity: int=4) -> tuple[int, np.ndarray]:
+def get_seeds_with_doh(img: np.ndarray, threshold: int, connectivity: int=4) -> tuple[int, np.ndarray]:
     '''
-        Get the seed coordinates with the star distribution.
+        Get the seeds by doh.
     Args:
         img: the image to be processed
         threshold: the background threshold
@@ -187,28 +187,6 @@ def get_seed_coords(img: np.ndarray, threshold: int, connectivity: int=4) -> tup
     Returns:
         seeds: the coordinates and labels of the seeds
     '''
-
-    def check_doh(img: np.ndarray, coords: np.ndarray):
-        '''
-            Check the possible seeds with determination of hessian operator.
-        '''
-
-        # new offsets including center pixel itself (5, 2) or (9, 2)
-        noffsets = np.vstack([[0, 0], offsets])
-
-        # (n, 5, 2) or (n, 9, 2)
-        neighbors = coords[:, None, :] + noffsets
-
-        # determination of hessian
-        doh1 = cal_doh(img, neighbors[..., 0], neighbors[..., 1], 1)
-        doh2 = cal_doh(img, neighbors[..., 0], neighbors[..., 1], 2)
-
-        print(doh2)
-
-        # check if the center is local maximum doh results
-        mask = (np.argmax(doh1, axis=1) == 0) & (np.argmax(doh2, axis=1) == 0)
-
-        return mask
 
     # offsets
     offsets = get_neighbors(connectivity)
@@ -222,50 +200,113 @@ def get_seed_coords(img: np.ndarray, threshold: int, connectivity: int=4) -> tup
     # pad the image
     padded_img = np.pad(img, ((d, d), (d, d)), mode='constant').astype(np.int16)
 
+    # determination of hessian
+    neighbors = coords[:, None, :] + np.vstack([[0, 0], offsets]) # (n, 5, 2) or (n, 9, 2)
+    doh1 = cal_doh(padded_img, neighbors[..., 0]+d, neighbors[..., 1]+d, 1) # !because of the pad
+    doh2 = cal_doh(padded_img, neighbors[..., 0]+d, neighbors[..., 1]+d, 2)
+
     # select seeds with determination of hessian operator
-    mask = check_doh(padded_img, coords+d)  #!because of the pad
+    mask = (np.argmax(doh1, axis=1) == 0) & (np.argmax(doh2, axis=1) == 0)
     coords = coords[mask]
 
-    # save to seeds(row, col, label)
-    n = len(coords)
-    seeds = np.zeros((n, 3), dtype=int)    
-    seeds[:, 0] = coords[:, 0]
-    seeds[:, 1] = coords[:, 1]
-    seeds[:, 2] = np.arange(1, n+1)
+    # save to seeds(row, col, label) and make sure seeds are separate
+    labels = np.arange(1, len(coords)+1).reshape(-1, 1)
+    n, seeds = merge_seeds(np.hstack([coords, labels]))
 
-    # make sure seeds are separate
-    cnt = n
-    # tab = UnionSet(n) 
-    # for seed in seeds:
-    #     if tab.find(seed[2]) != seed[2]:
-    #         continue
+    return n, seeds
 
-    #     # neighboring seeds (4, 2)
-    #     nseeds = seed[:2] + offsets
 
-    #     # the indexs of connected seeds
-    #     idxs = np.where(np.isin(seeds[:, 0], nseeds[:, 0]) & np.isin(seeds[:, 1], nseeds[:, 1]))[0]
+def get_seeds_with_ly(img: np.ndarray, threshold: int):
+    '''
+        Get the seeds by ly.
+        https://doi.org/10.16251/j.cnki.1009-2307.2012.01.033
+    '''
 
-    #     # not connected
-    #     if len(idxs) == 0:
-    #         continue
-
-    #     for idx in idxs:
-    #         tab.union(seed[2], seeds[idx, 2])
-    #         seed[2] = min(seed[2], seeds[idx, 2])
-
-    # # update label
-    # lab = {}
-    # for seed in seeds:
-    #     seed2 = tab.find(seed[2])
-    #     if seed2 in lab:
-    #         seed[2] = lab[seed2]
-    #     else:
-    #         cnt += 1
-    #         lab[seed2] = cnt
-    #         seed[2] = cnt
+    h, w = img.shape
+    d = 3
+    r = d // 2
+    padded_img = np.pad(img, ((d, d), (d, d)), mode='edge').astype(float)
     
-    # assert cnt == tab.count(), f'{cnt}, {tab.count()}'
+    # 1. Preselect
+    coords = np.stack(np.meshgrid(np.arange(d, h+d), np.arange(d, w+d)), axis=-1)   # (h, w, 2)
+    offsets = get_neighbors(4)  # (4, 2)
+    acoords = coords[..., None, :] + offsets[None, None, ...] # (h, w, 4, 2)
+    mask = np.sum(img[..., None] - padded_img[acoords[..., 0], acoords[..., 1]] > threshold, # (h, w, 4)
+                  axis=-1) >= 2
+    
+    # 2. Check
+    coords = np.argwhere(mask)  # (n, 2)
+    offsets = np.stack(np.meshgrid(np.arange(-r, r+1), np.arange(-r, r+1)), axis=-1).reshape(-1, 2) # (d², 2)
+    acoords = coords[:, None, :] + offsets[None, ...]
+    _, weights = cal_ly(padded_img, acoords[..., 0].ravel()+d, acoords[..., 1].ravel()+d, d)
+    weights = weights.reshape(-1, d**2)
+    mask = np.argmax(weights, axis=1) == r**2
+    
+    # 3. Save
+    coords = coords[mask]
+    labels = np.arange(1, len(coords)+1).reshape(-1, 1)
+    n, seeds = merge_seeds(np.hstack([coords, labels]))
+
+    return n, seeds
+
+
+def get_seeds_with_sobel(img: np.ndarray, threshold: int):
+    '''
+        Get the seeds by modified sobel.
+        https://doi.org/10.27060/d.cnki.ghbcu.2020.001632
+    '''
+    d = 3
+    r = d // 2
+    padded_img = np.pad(img, ((r, r), (r, r)), mode='edge').astype(float)
+    coords = np.argwhere(img > threshold)
+    mask = np.sum(cal_sobel(padded_img, coords[:, 0]+r, coords[:, 1]+r) > threshold, axis=1) >= 2
+
+    coords = coords[mask]
+    labels = np.arange(1, len(coords)+1).reshape(-1, 1)
+    n, seeds = merge_seeds(np.hstack([coords, labels]))
+
+    return n, seeds
+
+
+def merge_seeds(seeds: np.ndarray):
+    '''
+        Merge possible connected seeds.
+    '''
+
+    n = len(seeds)
+    tab = UnionSet(n)
+
+    for seed in seeds:
+        x, y, _ = seed
+        # the indexs of connected seeds
+        idxs = np.where(
+            ((seeds[:, 0] == x+1) & (seeds[:, 1] == y)) |
+            ((seeds[:, 0] == x-1) & (seeds[:, 1] == y)) | 
+            ((seeds[:, 0] == x) & (seeds[:, 1] == y+1)) | 
+            ((seeds[:, 0] == x) & (seeds[:, 1] == y-1))
+        )[0]
+
+        # not connected
+        if len(idxs) == 0:
+            continue
+
+        # merge the connected label
+        for idx in idxs:
+            tab.union(seed[2], seeds[idx, 2])
+            seed[2] = min(seed[2], seeds[idx, 2])
+
+    # update label
+    cnt = 0
+    lab = {}
+    for seed in seeds:
+        seed2 = tab.find(seed[2])
+        if seed2 in lab:
+            seed[2] = lab[seed2]
+        else:
+            cnt += 1
+            lab[seed2] = cnt
+            seed[2] = cnt
+    assert cnt == tab.count(), f'{cnt}, {tab.count()}'
 
     return cnt, seeds
 
@@ -497,9 +538,14 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=4
     group_coords = []
 
     # label connected regions of the same value in the binary image
-    if method == 'RG':
+    if method == 'RG_DOH' or method == 'RG_LY' or method == 'RG_SOBEL':
         # do region grow
-        n, seeds = get_seed_coords(img, threshold)
+        if method == 'RG_DOH':
+            n, seeds = get_seeds_with_doh(img, threshold)
+        elif method == 'RG_LY':
+            n, seeds = get_seeds_with_ly(img, threshold)
+        else:
+            n, seeds = get_seeds_with_sobel(img, threshold)
         trace = region_grow(binary_img, seeds)
 
         # get group coords for each root seed
@@ -508,7 +554,6 @@ def group_star(img: np.ndarray, method: str, threshold: int, connectivity: int=4
             if np.sum(mask) < pixel_limit:
                 continue
             group_coords.append((trace[mask, 0], trace[mask, 1]))
-
     elif method == 'CCL' or method == 'DCCL':
         label_img = connected_components_label(binary_img, connectivity) if method == 'CCL' else cv2.connectedComponents(binary_img, connectivity=connectivity)[1]
 
