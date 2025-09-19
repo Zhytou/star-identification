@@ -107,7 +107,7 @@ psf = 0.7
 
 
 # 星图降噪效果测试（质量指标比较）
-if True:
+if False:
     img0, stars = create_star_image(
         ra, de, roll, 
         w=w, 
@@ -124,7 +124,7 @@ if True:
         os.makedirs(f'{dir}/{g}_{p}', exist_ok=True)
 
         img1 = add_gaussian_and_pepper_noise(img0, g, p)
-        for method in ['NOISED', 'ORINGINAL', 'CNB']:
+        for method in ['NOISED', 'ORINGINAL', 'GAUSSIAN', 'MEDIAN', 'BLF', 'MBLF']:
             if method == 'ORINGINAL':
                 img2 = img0
             elif method == 'NOISED':
@@ -285,12 +285,12 @@ if False:
 ra, de, roll = radians(25.0588), radians(-21.7205), radians(0)
 limit_mag = 5.9
 fov = 20
-background = 10
+background = 9
+
 
 # 星点检测作图
-if False:
+if True:
     dir = 'res/chapter3/detect'
-    os.makedirs('res/chapter3/detect', exist_ok=True)
     
     img0, stars = create_star_image(
         ra, de, roll,
@@ -303,40 +303,45 @@ if False:
     )
     real_coords = stars[:, 1:3]
 
-    for (g, p) in [
-        # (0.00, 0.000), 
-        (0.02, 0.002), 
-        (0.05, 0.005), 
-        (0.08, 0.008), 
+    for den_meth, thr_meth, seg_meth, pixel_num in [
+        # ('GAUSSIAN', 'Otsu', 'DCCL', 12),
+        # ('MEDIAN', 'Liebe3', 'CCL', 5),
+        # ('MEDIAN', 'Liebe3', 'RG_LY', 5),
+        # ('NONE', 'Liebe3', 'RG_SOBEL', 3),
+        # ('NONE', 'Liebe3', 'RG_DOH', 3),
+        # ('NONE', 'Liebe3', 'RG_DOH', 3),
+        # ('NLM_BLF', 'Liebe3', 'RG_DOH', 5)
     ]:
-        img1 = add_gaussian_and_pepper_noise(img0, sigma_g=g, prob_p=p)
+        for (g, p) in [
+            # (0.00, 0.000), 
+            (0.02, 0.002), 
+            (0.05, 0.005), 
+            (0.08, 0.008), 
+        ]:
+            os.makedirs(f'res/chapter3/detect/{g}_{p}', exist_ok=True)
+            
+            img1 = add_gaussian_and_pepper_noise(img0, sigma_g=g, prob_p=p)
 
-        esti_coords = np.array(get_star_centroids(
-            img1, 
-            den_meth='CNB', #'NONE', #'MEDIAN',
-            thr_meth='Liebe3', 
-            seg_meth='RG', #'CCL',
-            cen_meth='CoG',
-            pixel_limit=4,
-        ))
+            esti_coords = np.array(get_star_centroids(img1, den_meth, thr_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num))
 
-        # coords1: correct match
-        # coords2: miss match
-        # coords3: false match
-        _, coords1, coords2, coords3 = find_overlap_and_unique(real_coords, esti_coords, 4)       
-        img1 = cv2.cvtColor(img1, cv2.COLOR_GRAY2BGR)
-        img1 = label_image(img1, coords1, (0, 255, 0))
-        img1 = label_image(img1, coords2, (255, 0, 0))
-        img1 = label_image(img1, coords3, (0, 0, 255))
+            # coords1: correct match
+            # coords2: miss match
+            # coords3: false match
+            _, coords1, coords2, coords3 = find_overlap_and_unique(real_coords, esti_coords, 4)       
+            img1 = cv2.cvtColor(img1, cv2.COLOR_GRAY2BGR)
+            img1 = label_image(img1, coords1, (0, 255, 0))
+            img1 = label_image(img1, coords2, (255, 0, 0))
+            img1 = label_image(img1, coords3, (0, 0, 255))
 
-        print(
-            '-----------------------------',
-            '\nSigma of gaussian noise:', g, 
-            '\nProbability of pepper noise', p, 
-            '\nMiss coordinates:\n', coords2
-        )
+            print(
+                '-----------------------------',
+                '\nSigma of gaussian noise:', g, 
+                '\nProbability of pepper noise:', p, 
+                # '\nMiss coordinates:\n', coords2
+                # '\nFalse coordinates:\n', coords3
+            )
 
-        cv2.imwrite(f'res/chapter3/detect/{g}_{p}.png', img1)
+            cv2.imwrite(f'res/chapter3/detect/{g}_{p}/{den_meth}_{thr_meth}_{seg_meth}.png', img1)
 
     img0 = cv2.cvtColor(img0, cv2.COLOR_GRAY2BGR)
     img0 = label_image(img0, real_coords)
@@ -345,7 +350,7 @@ if False:
 
 # 星点检测数量对比
 if False:
-    num_test = 10
+    num_test = 20
 
     img0, stars = create_star_image(
         ra, de, roll,
@@ -374,12 +379,13 @@ if False:
     )
 
     for den_meth, thr_meth, seg_meth, pixel_num in [
-        # ('NONE', 'Liebe3', 'CCL', 5),
-        ('NONE', 'Otsu', 'CCL', 5),
-        # ('GAUSSIAN', 'Liebe3', 'CCL', 5),
+        ('GAUSSIAN', 'Otsu', 'DCCL', 5),
         # ('MEDIAN', 'Liebe3', 'CCL', 5),
-        # ('NONE', 'Liebe3', 'RG', 3),
-        # ('NLM_BLF', 'Liebe3', 'RG', 5)
+        # ('NONE', 'Liebe3', 'RG_LY', 3),
+        # ('NONE', 'Liebe3', 'RG_SOBEL', 3),
+        # ('NONE', 'Liebe3', 'RG_DOH', 3),
+        # ('NONE', 'Liebe3', 'RG_DOH', 3),
+        # ('NLM_BLF', 'Liebe3', 'RG_DOH', 5)
         ]:
         
         avg_cnts = []
@@ -412,7 +418,6 @@ if False:
                     seg_meth=seg_meth, 
                     cen_meth='CoG',
                     pixel_limit=pixel_num,
-                    T2=-np.inf,
                     connectivity=8
                 ))
 
@@ -424,8 +429,11 @@ if False:
                 cnts.append((len(coords1), len(coords2), len(coords3)))
             
                 # find the closest esti_coord
-                dis = np.linalg.norm(coords1 - real_coord, axis=1)
-                err.append(np.min(dis))
+                if len(coords1) == 0:
+                    err.append(np.inf)
+                else:
+                    dis = np.linalg.norm(coords1 - real_coord, axis=1)
+                    err.append(np.min(dis))
 
             avg_cnts.append(np.mean(cnts, axis=0))
             avg_err.append(np.mean(err))
