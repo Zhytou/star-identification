@@ -9,7 +9,7 @@ from astropy.coordinates import SkyCoord
 from skimage.metrics import structural_similarity
 
 
-def get_neighbors(connectivity: int, roi: int=1):
+def get_offsets(connectivity: int, roi: int=1):
     '''
         Get neighbor offsets based on connectivity (4 or 8).
     '''

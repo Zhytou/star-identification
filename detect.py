@@ -3,7 +3,8 @@ import bisect as bis
 import numpy as np
 import scipy.ndimage as nd
 
-from utils import get_neighbors, cal_doh, cal_ly, cal_sobel
+from utils import get_offsets, cal_doh, cal_ly, cal_sobel
+
 
 class UnionSet:
     '''
@@ -189,7 +190,7 @@ def get_seeds_with_doh(img: np.ndarray, threshold: int, connectivity: int=4) -> 
     '''
 
     # offsets
-    offsets = get_neighbors(connectivity)
+    offsets = get_offsets(connectivity)
 
     # window size
     d = 5
@@ -229,7 +230,7 @@ def get_seeds_with_ly(img: np.ndarray, threshold: int):
     
     # 1. Preselect
     coords = np.stack(np.meshgrid(np.arange(d, h+d), np.arange(d, w+d)), axis=-1)   # (h, w, 2)
-    offsets = get_neighbors(4)  # (4, 2)
+    offsets = get_offsets(4)  # (4, 2)
     acoords = coords[..., None, :] + offsets[None, None, ...] # (h, w, 4, 2)
     mask = np.sum(img[..., None] - padded_img[acoords[..., 0], acoords[..., 1]] > threshold, # (h, w, 4)
                   axis=-1) >= 2
@@ -321,7 +322,7 @@ def region_grow(img: np.ndarray, seeds: np.ndarray, connectivity: int=4, steps: 
     h, w = img.shape
 
     # offsets
-    offsets = get_neighbors(connectivity)                                   # (connectivity, 2)
+    offsets = get_offsets(connectivity)                                   # (connectivity, 2)
     offsets = np.hstack([offsets, np.zeros((connectivity, 1), dtype=int)])  # (connectivity, 3)
 
     # breadth first search
@@ -366,7 +367,7 @@ def connected_components_label(img: np.ndarray, connectivity: int=4) -> tuple[in
     label_tab = UnionSet()
 
     # offsets
-    ds = get_neighbors(connectivity)
+    ds = get_offsets(connectivity)
 
     # first pass
     xs, ys = np.nonzero(img)
