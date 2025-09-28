@@ -2,9 +2,11 @@ import cv2
 import numpy as np
 import pywt
 import scipy.ndimage as nd
+from scipy.optimize import minimize
+from functools import partial
 
 from collections import defaultdict
-from utils import get_neighbors
+from utils import get_offsets
 
 
 def basic_filter(img: np.ndarray, method: str='GAUSSIAN', size: int=3) -> np.ndarray:
@@ -119,6 +121,13 @@ def denoise_with_shearlet(img, wavelet: str, level: int=3, threshold: float=2):
     pass
 
 
+def denoise_with_morph(img: np.ndarray, size: int=3):
+    '''
+        Denoise with Morphology filter.
+    '''
+    pass
+
+
 def denoise_with_blf(img: np.ndarray, size: int, sigma_color: float, sigma_space: float, threshold: int=100):
     '''
         Improved bilateral filter denoising.
@@ -164,12 +173,12 @@ def denoise_with_blf(img: np.ndarray, size: int, sigma_color: float, sigma_space
     filtered_img1 = (bilateral_weights * patches).sum(axis=(-2, -1))
 
     # calculate weight sum of 8-connectivity neighbor
-    neighbors = get_neighbors(8)
-    weightsum = bilateral_weights[..., r+neighbors[:, 0], r+neighbors[:, 1]].sum(axis=-1)
+    neighbors = get_offsets(8)+r
+    weightsum = bilateral_weights[..., neighbors[:, 0], neighbors[:, 1]].sum(axis=-1)
 
     # apply mean filter
     mean_weights = np.zeros((d, d))
-    mean_weights[r+neighbors[:, 0], r+neighbors[:, 1]] = 1
+    mean_weights[neighbors[:, 0], neighbors[:, 1]] = 1
     mean_weights = mean_weights / mean_weights.sum()
     filtered_img2 = (mean_weights[None, None, ...] * patches).sum(axis=(-2, -1))
 
@@ -183,13 +192,15 @@ def denoise_with_amf(img: np.ndarray, size1: int, size2: int):
         Denoise with adaptive median filter.
     '''
 
+    h, w = img.shape
+
     # generate all the windows sizes
-    sizes = np.arange(size1, size2, 2)  #(n, )
+    sizes = np.arange(size1, size2+1, 2)  #(n, )
 
     # get median, min and max of img under different the window sizes
     mids = np.stack([basic_filter(img, 'MEDIAN', size=s) for s in sizes])   # (n, h, w)
-    mins = np.stack([morph_filter(img, 'min') for s in sizes])              # (n, h, w)
-    maxs = np.stack([morph_filter(img, 'max') for s in sizes])              # (n, h, w)
+    mins = np.stack([morph_filter(img, 'min', size=s) for s in sizes])      # (n, h, w)
+    maxs = np.stack([morph_filter(img, 'max', size=s) for s in sizes])      # (n, h, w)
     
     # get valid median values
     mask1 = (mins < mids) & (mids < maxs)                                   # (n, h, w)
@@ -198,15 +209,79 @@ def denoise_with_amf(img: np.ndarray, size1: int, size2: int):
     mask2 = (mins >= img[None, ...]) | (maxs <= img[None, ...])             # (n, h, w)
 
     # set possible noisy pixels to valid median values
-    mask = mask1 & mask2
-    idxs = np.argmax(mask, axis=0)  # the first window size index whose median value is valid
+    i, j = np.meshgrid(np.arange(0, h), np.arange(0, w))
+    k = np.argmax(mask1 & mask2, axis=0)  # the first window size index whose median value is valid
     
     denoised_img = np.where(
-        np.any(mask, axis=0),  # (h, w)
-        mids[idxs],
+        np.any(mask1 & mask2, axis=0),  # (h, w)
+        mids[k, i, j],
         img        
     )
     
+    return denoised_img
+
+
+def denoise_with_emf(img: np.ndarray, size: int, threshold: int):
+    '''
+        Denoise with extreme median filter.
+        https://kns.cnki.net/KCMS/detail/detail.aspx?dbcode=CJFQ&dbname=CJFDLAST2017&filename=DZYX201706017
+    '''
+
+    def compute_energy(src: np.ndarray, tgt: np.ndarray):
+        '''
+            Compute energy.
+        '''
+        es = np.abs(src-tgt)
+        ed = np.zeros_like(es)
+        ed[1:, :] += np.abs(tgt[1:, :] - src[:-1, :])   # top
+        ed[:-1, :] += np.abs(tgt[:-1, :] - src[1:, :])  # bot
+        ed[:, 1:] += np.abs(tgt[:, 1:] - src[:, :-1])   # left
+        ed[:, :-1] += np.abs(tgt[:, :-1] - src[:, 1:])  # right
+    
+        return es, ed
+
+    def argmin_energy(x):
+        '''
+            Argmin energy.
+        '''
+        y1 = np.abs(x - x0) # energy_s
+        y2 = np.sum(2*np.power(np.abs(x[:, None] - xx0), 1.3), axis=-1) # energy_d
+
+        return np.sum(y1+y2)
+
+    h, w = img.shape
+    padded_img = np.pad(img, ((size, size), (size, size)))
+    denoised_img = img.copy()
+
+    # 1.initial check with extreme values
+    mask = (np.abs(img - np.max(img))  < threshold) & (np.abs(img - np.min(img))  < threshold)
+    denoised_img[mask] = basic_filter(img, 'MEDIAN', size)[mask]
+
+    # 2.double check with energy
+    es0, ed0 = compute_energy(img, img)
+    es1, ed1 = compute_energy(img, denoised_img)
+    mask = mask & (es1+ed1 < es0+ed0) & (np.sum(es0+ed0) / (h*w) < es0+ed0)
+
+    # 3.adapative median filter 0/255 pixels
+    mask1 = mask & ((img == 0) | (img == 255))
+    denoised_img[mask1] = denoise_with_amf(img, size, size+5)[mask1]
+    
+    # 4.argmin engery
+    mask2 = mask & (~mask1)
+    coords = np.argwhere(mask2)
+    offsets = get_offsets(4)
+    neighbors = coords[:, None, :] + offsets[None, ...]
+
+    x1, x0 = denoised_img[coords[:, 0], coords[:, 1]], img[coords[:, 0], coords[:, 1]]
+    xx0 = padded_img[neighbors[..., 0]+size, neighbors[..., 1]+size]
+
+    res = minimize(
+        argmin_energy,
+        x1,
+        method='L-BFGS-B'
+    )
+    denoised_img[coords[:, 0], coords[:, 1]] = res.x
+
     return denoised_img
 
 
@@ -230,7 +305,7 @@ def denoise_with_cmg(img: np.ndarray, size: int=5, sigma: float=1):
     denoised_img = morph_filter(img, 'min', se=cv2.MORPH_CROSS, size=size) 
 
     # 2. select non-star pixels
-    offsets = get_neighbors(4)                                                  # 4-connectivity offsets (4, 2)
+    offsets = get_offsets(4)                                                  # 4-connectivity offsets (4, 2)
     coords = np.stack(np.meshgrid(np.arange(r, h+r), np.arange(r, w+r)), axis=-1)   # coordinates of the entire image pixels (h, w)
     coords = coords[..., None, :] + offsets[None, None, ...]                    # 4-connectivity neighborhoods (h, w, 4, 2)
     padded_img = np.pad(img, ((r, r), (r, r)), mode='edge')                     # padded zero as the border of image
@@ -323,7 +398,7 @@ def denoise_with_cnb(img: np.ndarray, size: int, sigma: int=10, sigma_color: int
     h, w = img.shape
     d = size                                  # the diameter of image patch
     r = size // 2                             # the radius of image patch
-    offsets8 = get_neighbors(8, 2)
+    offsets8 = get_offsets(8, 2)
 
     denoised_img = np.zeros_like(img)
     padded_img = np.pad(img, ((r, r), (r, r)), mode='constant')             # padded zero as the border of image
@@ -372,6 +447,10 @@ def denoise_image(img: np.ndarray, method: str):
         denoised_img = denoise_with_cwm(img)
     elif method == 'CMG':
         denoised_img = denoise_with_cmg(img)
+    elif method == 'AMF':
+        denoised_img = denoise_with_amf(img, 3, 11)
+    elif method == 'EMF':
+        denoised_img = denoise_with_emf(img, 3, 20)
     elif method == 'NLM_BLF':
         denoised_img = denoise_with_nlm(img, 3, 11) # cv2.addWeighted(denoise_with_nlm(img, 5, 11), 0.5, img, 0.5, 0)
         denoised_img = denoise_with_blf(denoised_img, 3, sigma_color=20, sigma_space=1)
