@@ -240,15 +240,6 @@ def denoise_with_emf(img: np.ndarray, size: int, threshold: int):
     
         return es, ed
 
-    def argmin_energy(x):
-        '''
-            Argmin energy.
-        '''
-        y1 = np.abs(x - x0) # energy_s
-        y2 = np.sum(2*np.power(np.abs(x[:, None] - xx0), 1.3), axis=-1) # energy_d
-
-        return np.sum(y1+y2)
-
     h, w = img.shape
     padded_img = np.pad(img, ((size, size), (size, size)))
     denoised_img = img.copy()
@@ -272,15 +263,20 @@ def denoise_with_emf(img: np.ndarray, size: int, threshold: int):
     offsets = get_offsets(4)
     neighbors = coords[:, None, :] + offsets[None, ...]
 
-    x1, x0 = denoised_img[coords[:, 0], coords[:, 1]], img[coords[:, 0], coords[:, 1]]
-    xx0 = padded_img[neighbors[..., 0]+size, neighbors[..., 1]+size]
+    n = np.sum(mask2)
+    x0 = img[coords[:, 0], coords[:, 1]]                                # (n, )
+    xx0 = padded_img[neighbors[..., 0]+size, neighbors[..., 1]+size]    # (n, 4)
+    a = np.where((xx0 == 0) | (xx0 == 255), 1, 2)                       # factors for energy calculation
 
-    res = minimize(
-        argmin_energy,
-        x1,
-        method='L-BFGS-B'
-    )
-    denoised_img[coords[:, 0], coords[:, 1]] = res.x
+    x = np.arange(0, 255, threshold)                                    # possible values (m, )
+    xx = np.ones((n, 1), dtype=int) * x                                 # (n, m)
+
+    y1 = np.abs(xx - x0[:, None])                                                    # energy_s (n, m)
+    y2 = np.sum(a[:, None, :] * np.power(np.abs(xx[..., None] - xx0[:, None, :]), 1.3), axis=-1)   # energy_d (n, m)
+    y = y1 + y2
+
+    i = np.argmin(y, axis=1)
+    denoised_img[coords[:, 0], coords[:, 1]] = x[i]
 
     return denoised_img
 
@@ -406,7 +402,7 @@ def denoise_with_cnb(img: np.ndarray, size: int, sigma: int=10, sigma_color: int
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))  
 
     # 2. Preselect possible star pixels by mean filter and gray check
-    mask = (img == nd.maximum_filter(img, size=d)) & (mean_map > np.percentile(mean_map, 99))
+    mask = (img == nd.maximum_filter(img, size=d)) & (mean_map > np.percentile(mean_map, 95))
     coords = np.argwhere(mask)                                   # the coordinates of possible star(central pixels)     
     coords = np.reshape(coords[:, None, :]+offsets8, (-1, 2))   # the coordinates of possible star(all pixels)     
     coords = coords[(coords[:, 0] >= 0) & (coords[:, 0] < h) & (coords[:, 1] >= 0) & (coords[:, 1] < w)] # boundary check
@@ -432,7 +428,7 @@ def denoise_with_cnb(img: np.ndarray, size: int, sigma: int=10, sigma_color: int
             denoised_img[coords[idxs, 0], coords[idxs, 1]] = np.sum(weights * grays[idxs], axis=1)
 
     # 4. Do modified bilateral filter with other patches
-    denoised_img[~mask] = denoise_with_blf(img, 21, sigma_color, sigma_space, threshold)[~mask]
+    denoised_img[~mask] = denoise_with_blf(img, 5, sigma_color, sigma_space, threshold)[~mask]
     
     return denoised_img.astype(np.uint8)
 
@@ -450,7 +446,7 @@ def denoise_image(img: np.ndarray, method: str):
     elif method == 'AMF':
         denoised_img = denoise_with_amf(img, 3, 11)
     elif method == 'EMF':
-        denoised_img = denoise_with_emf(img, 3, 20)
+        denoised_img = denoise_with_emf(img, 5, 10)
     elif method == 'NLM_BLF':
         denoised_img = denoise_with_nlm(img, 3, 11) # cv2.addWeighted(denoise_with_nlm(img, 5, 11), 0.5, img, 0.5, 0)
         denoised_img = denoise_with_blf(denoised_img, 3, sigma_color=20, sigma_space=1)
