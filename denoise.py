@@ -4,6 +4,7 @@ import pywt
 import scipy.ndimage as nd
 from scipy.optimize import minimize
 from functools import partial
+from numba import jit
 
 from collections import defaultdict
 from utils import get_offsets
@@ -353,83 +354,92 @@ def denoise_with_cwm(img: np.ndarray, size: int=3):
     return denoised_img
 
 
-def denoise_with_cnb(img: np.ndarray, size: int, sigma: int=10, sigma_color: int=20, sigma_space: int=20, threshold: int=150):
+def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sigma_color: int=20, sigma_space: int=20):
     '''
         Denoise with combined nlm and blf.
     '''
 
-    def p_stable_hash(data: np.ndarray, w: int, l: int=3) -> dict[int, list] | dict[tuple, list]:
+    def preselect_similar(mean: np.ndarray, devi: np.ndarray, threshold: int=10):
         '''
-            P stable locality sensitive hash.
+            Preselect the similar patches and return the indexs.
         '''
-        _, d2 = data.shape
+        index_img = np.arange(0, h*w).reshape(h, w)                                         # index image for patch search
+        padded_img = np.pad(index_img, ((k//2, k//2), (k//2, k//2)), constant_values=-1)    # padded index image
+        windows = np.lib.stride_tricks.sliding_window_view(padded_img, (k, k))              # search windows (h, w, k, k)
 
-        a = np.random.normal(0, 1, (d2, l))          # standarad normal distribution
-        b = np.random.uniform(0, w, (1, l))         # uniform distribution
-        codes = np.floor((data@a+b)/w).astype(int)  # hash codes (n, l)
+        padded_mean = np.pad(mean, ((k//2, k//2), (k//2, k//2)), constant_values=0)
+        padded_devi = np.pad(devi, ((k//2, k//2), (k//2, k//2)), constant_values=0)
 
-        tab = defaultdict(list)
-        for idx, code in enumerate(codes):
-            key = tuple(code.tolist())
-            tab[key].append(idx)
+        grouped_mean = np.lib.stride_tricks.sliding_window_view(padded_mean, (k, k))
+        grouped_devi = np.lib.stride_tricks.sliding_window_view(padded_devi, (k, k))  
 
-        return tab
+        mask = (np.abs(grouped_mean - mean[..., None, None]) < threshold) & (np.abs(grouped_devi - devi[..., None, None]) < threshold)  
+        indexs = np.where(mask, windows, -1)
 
-    def compute_nlm_weights(data: np.ndarray):
+        return indexs
+
+    def compute_nlm_weights(p: np.ndarray, sp: np.ndarray, idx: np.ndarray):
         '''
             Compute non-local mean weights.
         '''
-        data = data.astype(float)
-        sq = np.sum(data**2, axis=1)    # sum of squares (n,)
-        dp = data @ data.T              # dot product (n, n)
-        ssd = sq[:, None] + sq[None, :] - 2 * dp    # sum of squared differences (n, n)
+        ssp = p[idx]                            # similar patches for star patches
+        sim = np.where(                         # similarity between two patches
+            idx==-1,                            # avoid invalid patch index(-1)
+            np.inf,                         
+            np.mean((sp[:, None, :] - ssp)**2, axis=-1),
+        )
+        w = np.exp(-sim/(sigma**2))             # weights (n, k*k)
+        ws = np.sum(w, axis=-1, keepdims=True)  # sum of weights (n, 1)
+        return w / ws
+    
+    def compute_blf_weights(g: np.ndarray, p: np.ndarray):
+        '''
+            Compute bilateral filter weights.
+        '''
+        gw = np.exp(-(g[..., None, None] - p) ** 2 / (2 * sigma_color ** 2))    # gray weights
 
-        w = np.exp(-ssd/(2*sigma**2))   # weights
-        ws = np.sum(w)                  # sum of weights
+        r = d // 2
+        x, y = np.meshgrid(np.arange(-r, r + 1), np.arange(-r, r + 1))
+        sw = np.exp(-(x ** 2 + y ** 2) / (2 * sigma_space ** 2))                # spatial weights
 
-        # print(data, sq, dp, ssd)
+        w = gw*sw                                                               # bilateral weights (h, w, d, d)
+        ws = np.sum(w, axis=(-1, -2), keepdims=True)                            # sum of weights (h, w, 1, 1)
+
         return w / ws
 
-    # 1. Prepare data
+    ## 1. Prepare data
     h, w = img.shape
-    d = size                                  # the diameter of image patch
-    r = size // 2                             # the radius of image patch
-    offsets8 = get_offsets(8, 2)
+    d = size                                    # the diameter of image patch
+    k = wind                                    # the diameter of search window
 
-    denoised_img = np.zeros_like(img)
-    padded_img = np.pad(img, ((r, r), (r, r)), mode='constant')             # padded zero as the border of image
-    mean_map = cv2.medianBlur(img, d)                                       # mean map
-    patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))  
-
-    # 2. Preselect possible star pixels by mean filter and gray check
-    mask = (img == nd.maximum_filter(img, size=d)) & (mean_map > np.percentile(mean_map, 95))
-    coords = np.argwhere(mask)                                   # the coordinates of possible star(central pixels)     
-    coords = np.reshape(coords[:, None, :]+offsets8, (-1, 2))   # the coordinates of possible star(all pixels)     
-    coords = coords[(coords[:, 0] >= 0) & (coords[:, 0] < h) & (coords[:, 1] >= 0) & (coords[:, 1] < w)] # boundary check
-    mask[coords[:, 0], coords[:, 1]] = True
-    coords = np.argwhere(mask)
-
-    # 3. Do non local mean with each classified patch group
-    n = np.sum(mask)
-    fpatches = np.reshape(patches[mask], (n, -1))       # flatten possible star patches (n, d²)
-    tab = p_stable_hash(fpatches, 10, l=2)              # lsh result
-    grays = img[mask]                                   # the gray values of selected pixels (n,)
-
-    if n < 5000:
-        weights = compute_nlm_weights(fpatches)
-        denoised_img[mask] = np.sum(weights * grays, axis=1)
-    else:
-        for key in tab:
-            idxs = tab[key]
-            if len(idxs) == 1:
-                continue
-
-            weights = compute_nlm_weights(fpatches[idxs])
-            denoised_img[coords[idxs, 0], coords[idxs, 1]] = np.sum(weights * grays[idxs], axis=1)
-
-    # 4. Do modified bilateral filter with other patches
-    denoised_img[~mask] = denoise_with_blf(img, 5, sigma_color, sigma_space, threshold)[~mask]
+    img = img.astype(float)
+    denoised_img = np.zeros_like(img)                                               # denoised image
+    padded_img = np.pad(img, ((d//2, d//2), (d//2, d//2)), mode='reflect')          # padded image
+    patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))          # patches (h, w, d, d)
     
+    mean = np.mean(patches, axis=(-1, -2))                                          # mean map
+    devi = np.sqrt(np.mean((patches-mean[..., None, None])**2, axis=(-1, -2)))      # deviation map
+
+    ## 2. Segment image
+    ot_mask = (img == nd.maximum_filter(img, size=d)) & (img > mean+devi)       # outlier mask / peper noise
+    fg_mask = (~ot_mask) & (img > 30)  # foreground mask / star pixels
+    bg_mask = (~ot_mask) & (img < 30)  # background mask / non-star pixels
+
+    ## 3. Process outliers
+    denoised_img[ot_mask] = 0
+    
+    ## 4. Process star pixels with NLM
+    fimg = img.reshape(-1)                                      # flatten image
+    fpatches = patches.reshape(-1, d**2)                        # flatten patches (h*w, d*d)
+    spatches = patches[fg_mask].reshape(-1, d**2)               # flatten star patches (n, d*d)
+    indexs = preselect_similar(mean, devi)[fg_mask].reshape(-1, k*k)    # similar patch indexs (n, k*k)
+    weights = compute_nlm_weights(fpatches, spatches, indexs)   # nlm weights (n, k*k)
+    denoised_img[fg_mask] = np.sum(fimg[indexs] * weights, axis=-1)
+
+    ## 5. Process non-star pixels with BLF
+    weights = compute_blf_weights(img, patches)
+    denoised_img[bg_mask] = np.sum(weights * patches, axis=(-1, -2))[bg_mask]
+
     return denoised_img.astype(np.uint8)
 
 
@@ -438,7 +448,7 @@ def denoise_image(img: np.ndarray, method: str):
         Denoise the image.
     '''
     if method == 'CNB': # combined nlm and blf
-        denoised_img = denoise_with_cnb(img, 3, sigma=10, sigma_color=2, sigma_space=np.inf)
+        denoised_img = denoise_with_cnb(img, 3, 7, sigma=10, sigma_color=20, sigma_space=3)
     elif method == 'CWM':
         denoised_img = denoise_with_cwm(img)
     elif method == 'CMG':
@@ -451,7 +461,7 @@ def denoise_image(img: np.ndarray, method: str):
         denoised_img = denoise_with_nlm(img, 3, 11) # cv2.addWeighted(denoise_with_nlm(img, 5, 11), 0.5, img, 0.5, 0)
         denoised_img = denoise_with_blf(denoised_img, 3, sigma_color=20, sigma_space=1)
     elif method == 'NLM': # non local mean
-        denoised_img = denoise_with_nlm(img, 7, 49)
+        denoised_img = denoise_with_nlm(img, 3, 7, sigma=10)
     elif method == 'MBLF': # modified bilateral filter
         denoised_img = denoise_with_blf(img, 7, sigma_color=20, sigma_space=1.5, threshold=200)
     elif method == 'WAVELET':
