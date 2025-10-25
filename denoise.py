@@ -359,7 +359,7 @@ def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sig
         Denoise with combined nlm and blf.
     '''
 
-    def preselect_similar(mean: np.ndarray, devi: np.ndarray, threshold: int=10):
+    def preselect_similar(mean: np.ndarray, threshold: int=10):
         '''
             Preselect the similar patches and return the indexs.
         '''
@@ -368,12 +368,13 @@ def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sig
         windows = np.lib.stride_tricks.sliding_window_view(padded_img, (k, k))              # search windows (h, w, k, k)
 
         padded_mean = np.pad(mean, ((k//2, k//2), (k//2, k//2)), constant_values=0)
-        padded_devi = np.pad(devi, ((k//2, k//2), (k//2, k//2)), constant_values=0)
-
         grouped_mean = np.lib.stride_tricks.sliding_window_view(padded_mean, (k, k))
-        grouped_devi = np.lib.stride_tricks.sliding_window_view(padded_devi, (k, k))  
 
-        mask = (np.abs(grouped_mean - mean[..., None, None]) < threshold) & (np.abs(grouped_devi - devi[..., None, None]) < threshold)  
+        # padded_devi = np.pad(devi, ((k//2, k//2), (k//2, k//2)), constant_values=0)
+        # grouped_devi = np.lib.stride_tricks.sliding_window_view(padded_devi, (k, k))  
+
+        mask = (np.abs(grouped_mean - mean[..., None, None]) < threshold) 
+            # & (np.abs(grouped_devi - devi[..., None, None]) < threshold)  
         indexs = np.where(mask, windows, -1)
 
         return indexs
@@ -417,22 +418,24 @@ def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sig
     padded_img = np.pad(img, ((d//2, d//2), (d//2, d//2)), mode='reflect')          # padded image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))          # patches (h, w, d, d)
     
-    mean = np.mean(patches, axis=(-1, -2))                                          # mean map
-    devi = np.sqrt(np.mean((patches-mean[..., None, None])**2, axis=(-1, -2)))      # deviation map
+    tmmap = np.mean(np.sort(patches.reshape(h, w, -1))[..., 1:-1], axis=-1)         # trimmed mean map
+    mean = np.mean(img)                                                             # mean
+    devi = np.std(img)                                                              # standard deviation
 
     ## 2. Segment image
-    ot_mask = (img == nd.maximum_filter(img, size=d)) & (img > mean+devi)       # outlier mask / peper noise
-    fg_mask = (~ot_mask) & (img > 30)  # foreground mask / star pixels
-    bg_mask = (~ot_mask) & (img < 30)  # background mask / non-star pixels
+    ot_mask = (img == nd.maximum_filter(img, size=d)) & (img > tmmap+5*devi)        # outlier mask / peper noise
+    fg_mask = (~ot_mask) & (img >= mean+3*devi)                                     # foreground mask / star pixels
+    bg_mask = (~ot_mask) & (img < mean+3*devi)                                      # background mask / non-star pixels
 
     ## 3. Process outliers
-    denoised_img[ot_mask] = 0
-    
+    denoised_img[ot_mask] = tmmap[ot_mask]
+    img[ot_mask] = tmmap[ot_mask]
+
     ## 4. Process star pixels with NLM
     fimg = img.reshape(-1)                                      # flatten image
     fpatches = patches.reshape(-1, d**2)                        # flatten patches (h*w, d*d)
     spatches = patches[fg_mask].reshape(-1, d**2)               # flatten star patches (n, d*d)
-    indexs = preselect_similar(mean, devi)[fg_mask].reshape(-1, k*k)    # similar patch indexs (n, k*k)
+    indexs = preselect_similar(tmmap)[fg_mask].reshape(-1, k*k) # similar patch indexs (n, k*k)
     weights = compute_nlm_weights(fpatches, spatches, indexs)   # nlm weights (n, k*k)
     denoised_img[fg_mask] = np.sum(fimg[indexs] * weights, axis=-1)
 
@@ -448,7 +451,7 @@ def denoise_image(img: np.ndarray, method: str):
         Denoise the image.
     '''
     if method == 'CNB': # combined nlm and blf
-        denoised_img = denoise_with_cnb(img, 3, 7, sigma=10, sigma_color=20, sigma_space=3)
+        denoised_img = denoise_with_cnb(img, 5, 7, sigma=10, sigma_color=20, sigma_space=3)
     elif method == 'CWM':
         denoised_img = denoise_with_cwm(img)
     elif method == 'CMG':
