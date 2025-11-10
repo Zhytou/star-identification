@@ -129,14 +129,14 @@ def denoise_with_morph(img: np.ndarray, size: int=3):
     pass
 
 
-def denoise_with_blf(img: np.ndarray, size: int, sigma_color: float, sigma_space: float, threshold: int=100):
+def denoise_with_blf(img: np.ndarray, size: int, sigma_g: float, sigma_s: float, threshold: int=100):
     '''
         Improved bilateral filter denoising.
     Args:
         img: the image to be processed
         size: the size of template
-        sigma_color: the standard deviation of the color space
-        sigma_space: the standard deviation of the coordinate space
+        sigma_g: the standard deviation of the color space
+        sigma_s: the standard deviation of the coordinate space
         threshold: the threshold for gray difference
     Returns:
         filtered_img: the image after filtering
@@ -163,10 +163,10 @@ def denoise_with_blf(img: np.ndarray, size: int, sigma_color: float, sigma_space
 
     # calculate the color and space weights
     color_diffs = custom_activation(np.abs(grays - patches), threshold)
-    color_weights = np.exp(-(color_diffs ** 2) / (2 * sigma_color ** 2))
+    color_weights = np.exp(-(color_diffs ** 2) / (2 * sigma_g ** 2))
 
     x, y = np.meshgrid(np.arange(-r, r + 1), np.arange(-r, r + 1))
-    space_weights = np.exp(-(x ** 2 + y ** 2) / (2 * sigma_space ** 2))
+    space_weights = np.exp(-(x ** 2 + y ** 2) / (2 * sigma_s ** 2))
 
     # apply bilateral filter    
     bilateral_weights = color_weights * space_weights
@@ -354,7 +354,7 @@ def denoise_with_cwm(img: np.ndarray, size: int=3):
     return denoised_img
 
 
-def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sigma_color: int=20, sigma_space: int=20):
+def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sigma_g: int=20, sigma_s: int=20, sigma_i: int=20, trim: int=2):
     '''
         Denoise with combined nlm and blf.
     '''
@@ -389,24 +389,37 @@ def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sig
             np.inf,                         
             np.mean((sp[:, None, :] - ssp)**2, axis=-1),
         )
-        w = np.exp(-sim/(sigma**2))             # weights (n, k*k)
-        ws = np.sum(w, axis=-1, keepdims=True)  # sum of weights (n, 1)
-        return w / ws
+        wt = np.exp(-sim/(sigma**2))            # weights (n, k*k)
+        ci = k**2//2                            # central pixel index
+        wt[ci] = np.maximum(                    # central pixel weight
+            np.max(wt[:ci]),
+            np.max(wt[ci+1:])
+        )
+        wts = np.sum(wt, axis=-1, keepdims=True) # sum of weights (n, 1)
+        return wt / wts
     
     def compute_blf_weights(g: np.ndarray, p: np.ndarray):
         '''
             Compute bilateral filter weights.
         '''
-        gw = np.exp(-(g[..., None, None] - p) ** 2 / (2 * sigma_color ** 2))    # gray weights
+        gwt = np.exp(-(g[..., None, None] - p) ** 2 / (2 * sigma_g ** 2))   # gray weights
 
         r = d // 2
         x, y = np.meshgrid(np.arange(-r, r + 1), np.arange(-r, r + 1))
-        sw = np.exp(-(x ** 2 + y ** 2) / (2 * sigma_space ** 2))                # spatial weights
+        swt = np.exp(-(x ** 2 + y ** 2) / (2 * sigma_s ** 2))               # spatial weights
 
-        w = gw*sw                                                               # bilateral weights (h, w, d, d)
-        ws = np.sum(w, axis=(-1, -2), keepdims=True)                            # sum of weights (h, w, 1, 1)
+        ad = np.abs(g[..., None, None] - p).reshape(h, w, -1)                   # absolute differences between center pixels and other pixels
+        road = np.sum(np.sort(ad, axis=-1)[..., :3], axis=-1)                   # rank ordered absolute differences
+        iwt = np.exp(- road**2 / (2 * sigma_i ** 2))                      # impulse weights
+        iwt = np.lib.stride_tricks.sliding_window_view(                         # (h, w) -> (h, w, d, d)
+            np.pad(iwt, ((r, r), (r, r))), 
+            (d, d)
+        )             
 
-        return w / ws
+        wt = gwt*swt*iwt                                                        # bilateral weights (h, w, d, d)
+        wts = np.sum(wt, axis=(-1, -2), keepdims=True)                          # sum of weights (h, w, 1, 1)
+
+        return wt / wts
 
     ## 1. Prepare data
     h, w = img.shape
@@ -418,28 +431,26 @@ def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sig
     padded_img = np.pad(img, ((d//2, d//2), (d//2, d//2)), mode='reflect')          # padded image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))          # patches (h, w, d, d)
     
-    tmmap = np.mean(np.sort(patches.reshape(h, w, -1))[..., 1:-1], axis=-1)         # trimmed mean map
+    tmmap = np.mean(np.sort(patches.reshape(h, w, -1))[..., trim:-trim], axis=-1)         # trimmed mean map
     mean = np.mean(img)                                                             # mean
     devi = np.std(img)                                                              # standard deviation
 
     ## 2. Segment image
-    ot_mask = (img == nd.maximum_filter(img, size=d)) & (img > tmmap+5*devi)        # outlier mask / peper noise
+    ot_mask = (img == nd.maximum_filter(img, size=d)) & (img > tmmap+5*devi) & (tmmap < mean+1.5*devi)       # outlier mask / peper noise
     fg_mask = (~ot_mask) & (img >= mean+3*devi)                                     # foreground mask / star pixels
-    bg_mask = (~ot_mask) & (img < mean+3*devi)                                      # background mask / non-star pixels
+    bg_mask = ~fg_mask                                                              # background mask / non-star pixels
 
-    ## 3. Process outliers
-    denoised_img[ot_mask] = tmmap[ot_mask]
-    img[ot_mask] = tmmap[ot_mask]
-
-    ## 4. Process star pixels with NLM
+    ## 3. Process star pixels with NLM
     fimg = img.reshape(-1)                                      # flatten image
     fpatches = patches.reshape(-1, d**2)                        # flatten patches (h*w, d*d)
     spatches = patches[fg_mask].reshape(-1, d**2)               # flatten star patches (n, d*d)
     indexs = preselect_similar(tmmap)[fg_mask].reshape(-1, k*k) # similar patch indexs (n, k*k)
     weights = compute_nlm_weights(fpatches, spatches, indexs)   # nlm weights (n, k*k)
+    print(indexs.dtype, np.sum(indexs!=-1, axis=-1))
+    print(fimg[indexs], weights)
     denoised_img[fg_mask] = np.sum(fimg[indexs] * weights, axis=-1)
 
-    ## 5. Process non-star pixels with BLF
+    ## 4. Process outliers and non-star pixels with BLF
     weights = compute_blf_weights(img, patches)
     denoised_img[bg_mask] = np.sum(weights * patches, axis=(-1, -2))[bg_mask]
 
@@ -451,7 +462,7 @@ def denoise_image(img: np.ndarray, method: str):
         Denoise the image.
     '''
     if method == 'CNB': # combined nlm and blf
-        denoised_img = denoise_with_cnb(img, 5, 7, sigma=10, sigma_color=20, sigma_space=3)
+        denoised_img = denoise_with_cnb(img, 5, 7, sigma=10, sigma_g=20, sigma_s=3)
     elif method == 'CWM':
         denoised_img = denoise_with_cwm(img)
     elif method == 'CMG':
@@ -462,11 +473,11 @@ def denoise_image(img: np.ndarray, method: str):
         denoised_img = denoise_with_emf(img, 5, 10)
     elif method == 'NLM_BLF':
         denoised_img = denoise_with_nlm(img, 3, 11) # cv2.addWeighted(denoise_with_nlm(img, 5, 11), 0.5, img, 0.5, 0)
-        denoised_img = denoise_with_blf(denoised_img, 3, sigma_color=20, sigma_space=1)
+        denoised_img = denoise_with_blf(denoised_img, 3, sigma_g=20, sigma_s=1)
     elif method == 'NLM': # non local mean
         denoised_img = denoise_with_nlm(img, 3, 7, sigma=10)
     elif method == 'MBLF': # modified bilateral filter
-        denoised_img = denoise_with_blf(img, 7, sigma_color=20, sigma_space=1.5, threshold=200)
+        denoised_img = denoise_with_blf(img, 7, sigma_g=20, sigma_s=1.5, threshold=200)
     elif method == 'WAVELET':
         denoised_img = denoise_with_wavelet(img, 'sym4', threshold=40)
     elif method in ['MEAN', 'GAUSSIAN', 'MEDIAN', 'BLF', 'GLF']:
