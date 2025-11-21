@@ -398,25 +398,29 @@ def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sig
         wts = np.sum(wt, axis=-1, keepdims=True) # sum of weights (n, 1)
         return wt / wts
     
-    def compute_blf_weights(g: np.ndarray, p: np.ndarray):
+    def compute_blf_weights(g: np.ndarray, p: np.ndarray, f: bool=False):
         '''
             Compute bilateral filter weights.
         '''
-        gwt = np.exp(-(g[..., None, None] - p) ** 2 / (2 * sigma_g ** 2))   # gray weights
+        gwt = np.exp(-(g[..., None, None] - p) ** 2 / (2 * sigma_g ** 2))       # gray weights
 
-        r = d // 2
         x, y = np.meshgrid(np.arange(-r, r + 1), np.arange(-r, r + 1))
-        swt = np.exp(-(x ** 2 + y ** 2) / (2 * sigma_s ** 2))               # spatial weights
+        swt = np.exp(-(x ** 2 + y ** 2) / (2 * sigma_s ** 2))                   # spatial weights
 
-        ad = np.abs(g[..., None, None] - p).reshape(h, w, -1)                   # absolute differences between center pixels and other pixels
-        road = np.sum(np.sort(ad, axis=-1)[..., :3], axis=-1)                   # rank ordered absolute differences
-        iwt = np.exp(- road**2 / (2 * sigma_i ** 2))                      # impulse weights
+        if f:                                                                   # calculate impulse weights with similarity scores
+            ad = np.abs(g[..., None, None] - p).reshape(h, w, -1)               # absolute differences between center pixels and other pixels
+            k = 4                                                               # minimum number of pixel that need to set the score 1
+            iwt = np.minimum(np.sum(1.0/(k + ad**10), axis=-1)-1.0/k, 1)        # impulse weights
+        else:                                                                   # calculate impulse weights with road
+            ad = np.abs(g[..., None, None] - p).reshape(h, w, -1)               # absolute differences between center pixels and other pixels
+            road = np.sum(np.sort(ad, axis=-1)[..., :3], axis=-1)               # rank ordered absolute differences
+            iwt = np.exp(- road**2 / (2 * sigma_i ** 2))                        # impulse weights
         iwt = np.lib.stride_tricks.sliding_window_view(                         # (h, w) -> (h, w, d, d)
             np.pad(iwt, ((r, r), (r, r))), 
             (d, d)
         )             
-
-        wt = gwt*swt*iwt                                                        # bilateral weights (h, w, d, d)
+        
+        wt = swt*gwt*iwt                                                        # bilateral weights (h, w, d, d)
         wts = np.sum(wt, axis=(-1, -2), keepdims=True)                          # sum of weights (h, w, 1, 1)
 
         return wt / wts
@@ -425,34 +429,36 @@ def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sig
     h, w = img.shape
     d = size                                    # the diameter of image patch
     k = wind                                    # the diameter of search window
+    r = d // 2                                  # the radius of image patch
 
     img = img.astype(float)
-    denoised_img = np.zeros_like(img)                                               # denoised image
-    padded_img = np.pad(img, ((d//2, d//2), (d//2, d//2)), mode='reflect')          # padded image
+    denoised_img = np.copy(img)                                                     # denoised image
+    padded_img = np.pad(img, ((r, r), (r, r)), mode='reflect')                      # padded image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))          # patches (h, w, d, d)
-    
-    tmmap = np.mean(np.sort(patches.reshape(h, w, -1))[..., trim:-trim], axis=-1)         # trimmed mean map
+
+    tmmap = np.mean(np.sort(patches.reshape(h, w, -1))[..., trim:-trim], axis=-1)   # trimmed mean map
     mean = np.mean(img)                                                             # mean
     devi = np.std(img)                                                              # standard deviation
 
     ## 2. Segment image
-    ot_mask = (img == nd.maximum_filter(img, size=d)) & (img > tmmap+5*devi) & (tmmap < mean+1.5*devi)       # outlier mask / peper noise
-    fg_mask = (~ot_mask) & (img >= mean+3*devi)                                     # foreground mask / star pixels
-    bg_mask = ~fg_mask                                                              # background mask / non-star pixels
+    ot_mask = (img == nd.maximum_filter(img, size=d)) & (img > tmmap+5*devi) & (tmmap < mean+1.5*devi)  # outlier mask / peper noise
+    fg_mask = (~ot_mask) & (img >= mean+3*devi)                                                         # foreground mask / star pixels
 
-    ## 3. Process star pixels with NLM
+    ## 3. Process outlier
+    # denoised_img[ot_mask] = tmmap[ot_mask]
+
+    ## 4. Process star pixels with NLM
     fimg = img.reshape(-1)                                      # flatten image
     fpatches = patches.reshape(-1, d**2)                        # flatten patches (h*w, d*d)
     spatches = patches[fg_mask].reshape(-1, d**2)               # flatten star patches (n, d*d)
     indexs = preselect_similar(tmmap)[fg_mask].reshape(-1, k*k) # similar patch indexs (n, k*k)
     weights = compute_nlm_weights(fpatches, spatches, indexs)   # nlm weights (n, k*k)
-    print(indexs.dtype, np.sum(indexs!=-1, axis=-1))
-    print(fimg[indexs], weights)
     denoised_img[fg_mask] = np.sum(fimg[indexs] * weights, axis=-1)
 
-    ## 4. Process outliers and non-star pixels with BLF
-    weights = compute_blf_weights(img, patches)
-    denoised_img[bg_mask] = np.sum(weights * patches, axis=(-1, -2))[bg_mask]
+    ## 5. Process outliers and non-star pixels with BLF
+    padded_img[r:-r, r:-r] = denoised_img
+    weights = compute_blf_weights(denoised_img, patches)
+    denoised_img = np.sum(weights * patches, axis=(-1, -2))
 
     return denoised_img.astype(np.uint8)
 
@@ -462,7 +468,7 @@ def denoise_image(img: np.ndarray, method: str):
         Denoise the image.
     '''
     if method == 'CNB': # combined nlm and blf
-        denoised_img = denoise_with_cnb(img, 5, 7, sigma=10, sigma_g=20, sigma_s=3)
+        denoised_img = denoise_with_cnb(img, 3, 7, sigma=10, sigma_g=20, sigma_s=3)
     elif method == 'CWM':
         denoised_img = denoise_with_cwm(img)
     elif method == 'CMG':
