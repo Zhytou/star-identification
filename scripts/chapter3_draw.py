@@ -98,16 +98,16 @@ if False:
 
 
 # 第三章末尾测试参数
-ra, de, roll = radians(29.2104), radians(-12.0386), radians(0) # 可能每个测试拍摄视角不同
-h, w = 512, 512
-fov = 12
-limit_mag = 6
-background = 9
-psf = 0.7
-
+ra, de, roll=radians(29.2104), radians(-12.0386), radians(0) # 可能每个测试拍摄视角不同
+h, w=512, 512
+fov=12
+limit_mag=6
+background=9
+psf=0.7
+roi=2
 
 # 星图降噪效果测试（质量指标比较）
-if False:
+if True:
     img0, stars = create_star_image(
         ra, de, roll, 
         w=w, 
@@ -120,11 +120,18 @@ if False:
     )
 
     dir = f'res/chapter3/denoise'
-    for (g, p) in [(0.05, 0.005)]:
+    for (g, p) in [
+        # (0.02, 0.002), 
+        (0.05, 0.005), 
+        # (0.08, 0.008)
+    ]:
         os.makedirs(f'{dir}/{g}_{p}', exist_ok=True)
 
         img1 = add_gaussian_and_pepper_noise(img0, g, p)
-        for method in ['NOISED', 'ORINGINAL', 'GAUSSIAN', 'MEDIAN', 'BLF', 'MBLF']:
+        for method in [
+            'NOISED', 'CNB', 
+            'BLF', 'NLM', 'NLM_BLF', 'WAVELET', 'CWM', 'CMG'
+        ]:
             if method == 'ORINGINAL':
                 img2 = img0
             elif method == 'NOISED':
@@ -137,11 +144,9 @@ if False:
             mse, psnr, ssim = cal_mse_psnr_ssim(img0, img2)
             print(
                 method,
-                '\nSigma of gaussian noise:', g, 
-                '\nProbability of pepper noise', p, 
-                '\nMSE:', mse, 
-                '\nPSNR:', psnr, 
-                '\nSSIM:', ssim,
+                # '\nSigma of gaussian noise:', g, 
+                # '\nProbability of pepper noise', p, 
+                '\nMSE:', mse, 'PSNR:', psnr, 'SSIM:', ssim,
                 '\n--------------------------------'
             )
 
@@ -289,7 +294,7 @@ background = 9
 
 
 # 星点检测作图
-if True:
+if False:
     dir = 'res/chapter3/detect'
     
     img0, stars = create_star_image(
@@ -308,12 +313,12 @@ if True:
         # ('MEDIAN', 'Liebe3', 'CCL', 5),
         # ('MEDIAN', 'Liebe3', 'RG_LY', 5),
         # ('NONE', 'Liebe3', 'RG_SOBEL', 3),
-        # ('NONE', 'Liebe3', 'RG_DOH', 3),
-        # ('NONE', 'Liebe3', 'RG_DOH', 3),
-        # ('NLM_BLF', 'Liebe3', 'RG_DOH', 5)
+        ('CNB', 'Liebe3', 'RG_DOH', 5),
+        ('CNB', 'Liebe3', 'RG_LY', 5),
+        ('CNB', 'Liebe3', 'RG_SOBEL', 5),
     ]:
         for (g, p) in [
-            # (0.00, 0.000), 
+            (0.00, 0.000), 
             (0.02, 0.002), 
             (0.05, 0.005), 
             (0.08, 0.008), 
@@ -333,6 +338,8 @@ if True:
             img1 = label_image(img1, coords2, (255, 0, 0))
             img1 = label_image(img1, coords3, (0, 0, 255))
 
+            print(coords2)
+
             print(
                 '-----------------------------',
                 '\nSigma of gaussian noise:', g, 
@@ -350,7 +357,7 @@ if True:
 
 # 星点检测数量对比
 if False:
-    num_test = 20
+    num_test = 2
 
     img0, stars = create_star_image(
         ra, de, roll,
@@ -379,31 +386,28 @@ if False:
     )
 
     for den_meth, thr_meth, seg_meth, pixel_num in [
-        ('GAUSSIAN', 'Otsu', 'DCCL', 5),
-        # ('MEDIAN', 'Liebe3', 'CCL', 5),
-        # ('NONE', 'Liebe3', 'RG_LY', 3),
-        # ('NONE', 'Liebe3', 'RG_SOBEL', 3),
-        # ('NONE', 'Liebe3', 'RG_DOH', 3),
-        # ('NONE', 'Liebe3', 'RG_DOH', 3),
-        # ('NLM_BLF', 'Liebe3', 'RG_DOH', 5)
-        ]:
+        ('GAUSSIAN', 'Otsu', 'DCCL', 12),
+        ('NONE', 'Liebe3', 'RG_LY', 5),
+        ('NONE', 'Liebe3', 'RG_SOBEL', 5),
+        ('CNB', 'Liebe3', 'RG_DOH', 3),
+    ]:
         
         avg_cnts = []
         avg_err = []
         for (g, p) in [
-            # (0.01, 0.001), 
-            # (0.02, 0.002), 
-            # (0.03, 0.003), 
-            # (0.04, 0.004), 
-            # (0.05, 0.005),
-            # (0.06, 0.006), 
-            # (0.07, 0.007), 
-            # (0.08, 0.008),
-            # (0.09, 0.009),
-
+            (0.01, 0.001), 
             (0.02, 0.002), 
+            (0.03, 0.003), 
+            (0.04, 0.004), 
             (0.05, 0.005),
-            (0.08, 0.008)
+            (0.06, 0.006), 
+            (0.07, 0.007), 
+            (0.08, 0.008),
+            (0.09, 0.009),
+
+            # (0.02, 0.002), 
+            # (0.05, 0.005),
+            # (0.08, 0.008)
         ]:
             
             cnts = []
@@ -462,7 +466,7 @@ if False:
 
     # time test result
     res = {
-        'RG': [],
+        'RG_DOH': [],
         'CCL': [],
         'DCCL': [],
         'RLC': [],
