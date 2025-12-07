@@ -23,22 +23,25 @@ def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float
     # maximum value for the image type
     max_value = 255 if img.dtype == np.uint8 else 1.0
 
-    # initilize noised_img for result and normalize image if needed
-    noised_img = np.copy(img)
+    # initilize and normalize noised_img
+    noised_img = np.copy(img).astype(np.float64) / max_value
 
     # add pepper noise
     if prob_p > 0:
         mask = np.random.random((h, w))
         noised_img[mask < prob_p/2] = 0.0
-        noised_img[(mask >= prob_p/2) & (mask < prob_p)] = max_value
+        noised_img[(mask >= prob_p/2) & (mask < prob_p)] = 1.0
 
     # add gaussian noise
     if sigma_g > 0:
         noised_img += np.random.normal(0, sigma_g, (h, w))
 
-    # clip and denormalize the image if needed
+    # clip the image if needed
     if clipped:
-        noised_img = np.clip(noised_img, 0, max_value)
+        noised_img = np.clip(noised_img, 0, 1.0)
+
+    # denormalize the image
+    noised_img = (noised_img * max_value).astype(img.dtype)
 
     return noised_img
 
@@ -73,7 +76,7 @@ def gen_false_stars(num: int, pos: np.array, min_d: int=6, mag_range: tuple=(3, 
     return np.array(false_stars)
 
 
-def get_stellar_intensity(magnitude: float, dtype: type=np.uint8) -> float:
+def get_stellar_intensity(magnitude: float, dtype: type) -> float:
     """
         Get the stellar intensity from the stellar magnitude.
     Args:
@@ -82,7 +85,7 @@ def get_stellar_intensity(magnitude: float, dtype: type=np.uint8) -> float:
         H: the stellar intensity
     """
     # intensity for 6.0 Mv
-    A = 101 if dtype == np.uint8 else 0.5
+    A = 101 if dtype == np.uint8 else 0.4
 
     # stellar magnitude to intensity
     H = A * 2.512 ** (6 - magnitude)
@@ -105,7 +108,7 @@ def draw_star(img: np.ndarray, position: tuple[float, float], magnitude: float, 
     """
     h, w = img.shape
 
-    H = get_stellar_intensity(magnitude)
+    H = get_stellar_intensity(magnitude, img.dtype)
 
     x, y = position
     top, bottom = int(max(0, x-roi)), int(min(h, x+roi+1))
@@ -325,9 +328,10 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
 
     # background intensity
     if background == np.inf:
-        img = np.zeros((h,w), dtype)
+        img = np.zeros((h, w), dtype)
     else:
-        img = get_stellar_intensity(background, dtype) * np.ones((h,w), dtype)
+        bval = get_stellar_intensity(background, dtype)
+        img = np.full((h, w), bval, dtype)
 
     stars_within_fov.rename(columns={'X': 'Col', 'Y': 'Row'}, inplace=True)
     stars_within_fov = stars_within_fov[['Star ID', 'Row', 'Col', 'Ra', 'De','Magnitude']].reset_index(drop=True)
