@@ -14,51 +14,31 @@ cata['Y'] = np.sin(cata['Ra'])*np.cos(cata['De'])
 cata['Z'] = np.sin(cata['De'])
 
 
-def add_stary_light_noise(img: np.ndarray, center: tuple[float, float], sigma: float, mag: float) -> np.ndarray:
-    '''
-        Add stary light noise to the image.
-    '''
-    h, w = img.shape
-
-    y = np.arange(w).reshape(-1, 1) - center[0]
-    x = np.arange(h).reshape(1, -1) - center[1]
-
-    intensity = get_stellar_intensity(mag)
-    stary = intensity * np.exp(-(y**2 + x**2) / (2 * sigma**2))
-
-    print(intensity, stary.shape)
-    noised_img = np.clip(img + stary, 0, 255).astype(np.uint8)
-
-    return noised_img
-
-
-def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float) -> np.ndarray:
+def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float, clipped: bool=True) -> np.ndarray:
     """
-        Adds white noise to an image.
+        Adds gaussian and pepper-salt noise to an image.
     """
     h, w = img.shape
 
-    # initilize noised_img for result
-    noised_img = img.copy().astype(float)
-    
-    # normalize image
-    noised_img = noised_img / 255.0
+    # maximum value for the image type
+    max_value = 255 if img.dtype == np.uint8 else 1.0
+
+    # initilize noised_img for result and normalize image if needed
+    noised_img = np.copy(img)
 
     # add pepper noise
     if prob_p > 0:
-        num_pepper = int(prob_p * noised_img.size / 2)
-        for pepper in [0.0, 1.0]:
-            for _ in range(num_pepper):
-                x, y = np.random.randint(0, h), np.random.randint(0, w)
-                noised_img[x, y] = pepper
+        mask = np.random.random((h, w))
+        noised_img[mask < prob_p/2] = 0.0
+        noised_img[(mask >= prob_p/2) & (mask < prob_p)] = max_value
 
     # add gaussian noise
     if sigma_g > 0:
-        noise = np.random.normal(0, sigma_g, noised_img.shape)
-        np.clip(noised_img+noise, 0, 1.0, out=noised_img)
+        noised_img += np.random.normal(0, sigma_g, (h, w))
 
-    # denormalize image
-    noised_img = (noised_img * 255).astype(np.uint8)
+    # clip and denormalize the image if needed
+    if clipped:
+        noised_img = np.clip(noised_img, 0, max_value)
 
     return noised_img
 
@@ -93,7 +73,7 @@ def gen_false_stars(num: int, pos: np.array, min_d: int=6, mag_range: tuple=(3, 
     return np.array(false_stars)
 
 
-def get_stellar_intensity(magnitude: float) -> float:
+def get_stellar_intensity(magnitude: float, dtype: type=np.uint8) -> float:
     """
         Get the stellar intensity from the stellar magnitude.
     Args:
@@ -101,8 +81,12 @@ def get_stellar_intensity(magnitude: float) -> float:
     Returns:
         H: the stellar intensity
     """
+    # intensity for 6.0 Mv
+    A = 101 if dtype == np.uint8 else 0.5
+
     # stellar magnitude to intensity
-    H = 101 * 2.512 ** (6 - magnitude)
+    H = A * 2.512 ** (6 - magnitude)
+
     return H
 
 
@@ -240,7 +224,7 @@ def cal_zxz_euler(R: np.ndarray, method: int=1) -> tuple[float, float, float]:
     return ra, de, roll
 
 
-def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0, prob_fs: float=0, prob_ms: float=0, background: float=np.inf, limit_mag: float=7.0, fovy: float=10, fovx: float=10, h: int=512, w: int=512, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False, rot_meth: int=1) -> tuple[np.ndarray, np.ndarray]:
+def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0, prob_fs: float=0, prob_ms: float=0, background: float=np.inf, limit_mag: float=7.0, fovy: float=10, fovx: float=10, h: int=512, w: int=512, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False, rot_meth: int=1, dtype: type=np.uint8) -> tuple[np.ndarray, np.ndarray]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
@@ -341,9 +325,9 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
 
     # background intensity
     if background == np.inf:
-        img = np.zeros((h,w))
+        img = np.zeros((h,w), dtype)
     else:
-        img = get_stellar_intensity(background) * np.ones((h,w))
+        img = get_stellar_intensity(background, dtype) * np.ones((h,w), dtype)
 
     stars_within_fov.rename(columns={'X': 'Col', 'Y': 'Row'}, inplace=True)
     stars_within_fov = stars_within_fov[['Star ID', 'Row', 'Col', 'Ra', 'De','Magnitude']].reset_index(drop=True)
@@ -384,15 +368,15 @@ if __name__ == '__main__':
 
     # test 2
     # picdata.mat
-    R = np.array([
-        [-0.4330, 0.8251, -0.3630],
-        [-0.8218, -0.1958, 0.5350],
-        [0.3703, 0.5300, 0.7629]
-    ])
-    h, w = 1024, 1280
-    f = 35269.52
-    pixel = 5.5
-    limit_mag = 6
+    # R = np.array([
+    #     [-0.4330, 0.8251, -0.3630],
+    #     [-0.8218, -0.1958, 0.5350],
+    #     [0.3703, 0.5300, 0.7629]
+    # ])
+    # h, w = 1024, 1280
+    # f = 35269.52
+    # pixel = 5.5
+    # limit_mag = 6
 
     # test 3
     # xie/20161227224732.bmp
@@ -444,11 +428,11 @@ if __name__ == '__main__':
 
     # test 4
     # Tsinghua 3P0/00001010_00000000019CFBA2.bmp
-    R = np.array([
-        [0.6223, 0.0902, -0.7776],
-        [-0.2887, 0.9498, -0.1208],
-        [0.7276, 0.2997, 0.6171],
-    ])
+    # R = np.array([
+    #     [0.6223, 0.0902, -0.7776],
+    #     [-0.2887, 0.9498, -0.1208],
+    #     [0.7276, 0.2997, 0.6171],
+    # ])
     # Tsinghua 3P0/00001051_00000000019D162E.bmp
     # R = np.array([
     #     [0.6261, 0.0830, -0.7753],
@@ -462,11 +446,11 @@ if __name__ == '__main__':
     #     [0.7791, -0.0278, 0.6263]
     # ])
     # Tsinghua 3P0/00001173_00000000019D6548.bmp
-    R = np.array([
-        [0.6230, 0.0925, -0.7767],
-        [-0.2335, 0.9697, -0.0717],
-        [0.7465, 0.2260, 0.6258],
-    ])
+    # R = np.array([
+    #     [0.6230, 0.0925, -0.7767],
+    #     [-0.2335, 0.9697, -0.0717],
+    #     [0.7465, 0.2260, 0.6258],
+    # ])
     # Tsinghua 0P0/00000001_00000000019880C8.bmp
     # R = np.array([
     #     [0.6268, 0.0666, -0.7763],
@@ -479,16 +463,16 @@ if __name__ == '__main__':
     #     [-0.3311, 0.9407, -0.0731],
     #     [0.7190, 0.3017, 0.6260],
     # ])
-    h, w = 1040, 1288
-    f = 18500
-    pixel = 4.8
-    limit_mag = 5.5
+    # h, w = 1040, 1288
+    # f = 18500
+    # pixel = 4.8
+    # limit_mag = 5.5
 
-    fovx = degrees(2 * atan(w * pixel / (2 * f)))
-    fovy = degrees(2 * atan(h * pixel / (2 * f)))
-    ra, de, roll = cal_zxz_euler(R, 1)
-    M = get_rotation_matrix(ra, de, roll, 1)
-    assert np.allclose(M, R, atol=1e-3), f"Rotation matrix is not correct. {M} != {R}"
+    # fovx = degrees(2 * atan(w * pixel / (2 * f)))
+    # fovy = degrees(2 * atan(h * pixel / (2 * f)))
+    # ra, de, roll = cal_zxz_euler(R, 1)
+    # M = get_rotation_matrix(ra, de, roll, 1)
+    # assert np.allclose(M, R, atol=1e-3), f"Rotation matrix is not correct. {M} != {R}"
 
     print(
         'Simulation',
