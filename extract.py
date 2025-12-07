@@ -105,10 +105,6 @@ def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, m
     return center
 
 
-def cal_compensate(esti_x):
-    return -2.4194299127361094*np.sin(0.014439263775565864*esti_x-0.007147436746119124)
-
-
 def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: str, cen_meth: str | list[str], pixel_limit: int=5, connectivity=4, num_esti: int=1, need_gray: bool=False, save_path:str=None) -> list[tuple[float, float]] | list[tuple[float, float, int]] | dict[str, list[tuple[float, float]]]:
     '''
         Get the centroids of the stars in the image.

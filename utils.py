@@ -105,6 +105,11 @@ def find_overlap_and_unique(A: np.ndarray, B: np.ndarray, eps: float=2):
     '''
         Find the overlap parts of two point sets.
     '''
+    if A.size == 0:
+        return np.array([]), np.array([]), np.array([]), B
+    if B.size == 0:
+        return np.array([]), np.array([]), A, np.array([])
+
     assert A.shape[1] == 2 and B.shape[1] == 2
 
     # calculate the L2 distance between each points in both A and B
@@ -396,14 +401,19 @@ def cal_mse_psnr_ssim(img: np.ndarray, filtered_img: np.ndarray):
         psnr: the peak signal-to-noise ratio
         mssim: the mean structural similarity
     '''
+    assert(img.dtype == filtered_img.dtype and (img.dtype == np.uint8 or img.dtype == np.float32))
+
+    # max value
+    mv = 255 if img.dtype == np.uint8 else 1.0
+
     # caculate the MSE
     mse = np.mean((img - filtered_img)**2)
     
     # caculate the PSNR
-    psnr = 10 * np.log10(255**2 / mse) if mse > 0 else np.inf
+    psnr = 10 * np.log10(mv**2 / mse) if mse > 0 else np.inf
     
     # caculate the SSIM
-    mssim = structural_similarity(img, filtered_img, data_range=255)
+    mssim = structural_similarity(img, filtered_img, data_range=1)
 
     mse, psnr, mssim = round(mse, 2), round(psnr, 2), round(mssim, 2)
 
