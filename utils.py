@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from astropy import units as u
 from astropy.coordinates import SkyCoord
-from skimage.metrics import structural_similarity
+from skimage.metrics import mean_squared_error, peak_signal_noise_ratio, structural_similarity
 
 
 def get_offsets(connectivity: int, roi: int=1):
@@ -391,29 +391,32 @@ def cal_snr(img: np.ndarray, noised_img: np.ndarray):
     return snr
 
 
-def cal_mse_psnr_ssim(img: np.ndarray, filtered_img: np.ndarray):
+def cal_mse_psnr_ssim(img1: np.ndarray, img2: np.ndarray):
     '''
         Calculate peak signal-to-noise ratio and the structural similarity between the original image and the filtered image.
     Args:
-        img: the original image
-        filtered_img: the image after filtering
+        img1: the original image
+        img2: the image after filtering
     Returns:
+        mse: the mean sqaure error
         psnr: the peak signal-to-noise ratio
         mssim: the mean structural similarity
     '''
-    assert(img.dtype == filtered_img.dtype and (img.dtype == np.uint8 or img.dtype == np.float32))
+    assert(img1.dtype == img2.dtype and (img1.dtype == np.uint8 or img1.dtype == np.float32))
 
     # max value
-    mv = 255 if img.dtype == np.uint8 else 1.0
+    mv = 255 if img1.dtype == np.uint8 else 1.0
 
     # caculate the MSE
-    mse = np.mean((img - filtered_img)**2)
+    mse = mean_squared_error(img1, img2)
+    # print(mse, np.mean((img1 - img2)**2))
     
     # caculate the PSNR
-    psnr = 10 * np.log10(mv**2 / mse) if mse > 0 else np.inf
+    psnr = peak_signal_noise_ratio(img1, img2, data_range=mv)
+    print(psnr, 10 * np.log10(mv**2 / mse) if mse > 0 else np.inf)
     
     # caculate the SSIM
-    mssim = structural_similarity(img, filtered_img, data_range=1)
+    mssim = structural_similarity(img1, img2, data_range=mv)
 
     mse, psnr, mssim = round(mse, 2), round(psnr, 2), round(mssim, 2)
 
