@@ -135,6 +135,32 @@ def find_overlap_and_unique(A: np.ndarray, B: np.ndarray, eps: float=2):
     return overlap_A, overlap_B, unique_A, unique_B
 
 
+def find_close_pair(coords: np.ndarray, threshold: int=7, method: str='L1'):
+    '''
+        Find the close pair of coordinates whose distance is less than the threshold.
+    '''
+    assert(coords.shape[1] == 2)
+
+    n, _ = coords.shape
+
+    if method == 'L1':
+        diff = np.abs(coords[:, np.newaxis, :] - coords[np.newaxis, :, :])
+        dist = np.sum(diff, axis=2)            
+    else: #method == 'L2':
+        diff = coords[:, np.newaxis, :] - coords[np.newaxis, :, :]
+        dist = np.sqrt(np.sum(diff**2, axis=2))
+
+    # triangle upper mask
+    mask = np.triu(np.ones((n, n), dtype=bool), k=1)
+    # indexs of close pair
+    i, j = np.where((dist < threshold) & mask)
+
+    if len(i) > 0:
+        return coords[i[0]], coords[j[0]]
+    
+    return None
+
+
 def are_collinear(a: np.ndarray, b: np.ndarray, eps: float=1e-5):
     '''
         Determine whether vectors are collinear.
@@ -412,8 +438,8 @@ def cal_mse_psnr_ssim(img1: np.ndarray, img2: np.ndarray):
     # print(mse, np.mean((img1 - img2)**2))
     
     # caculate the PSNR
-    psnr = peak_signal_noise_ratio(img1, img2, data_range=mv)
-    print(psnr, 10 * np.log10(mv**2 / mse) if mse > 0 else np.inf)
+    psnr = peak_signal_noise_ratio(img1, img2, data_range=mv) if mse > 0 else np.inf
+    # print(psnr, 10 * np.log10(mv**2 / mse) if mse > 0 else np.inf)
     
     # caculate the SSIM
     mssim = structural_similarity(img1, img2, data_range=mv)
