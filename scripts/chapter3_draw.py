@@ -4,7 +4,7 @@ import numpy as np
 import timeit
 from math import radians
 
-from simulate import create_star_image, add_gaussian_and_pepper_noise, add_stary_light_noise, get_stellar_intensity
+from simulate import create_star_image, add_gaussian_and_pepper_noise, get_stellar_intensity
 from denoise import denoise_image, denoise_with_blf
 from detect import group_star, cal_threshold
 from extract import get_star_centroids
@@ -16,7 +16,7 @@ if False:
     img = cv2.imread(f'example/lena/lena.png', cv2.IMREAD_GRAYSCALE)
 
     imgs = {}
-    imgs['noised'] = add_gaussian_and_pepper_noise(img, 0.00, 0.001)
+    imgs['noised'] = add_gaussian_and_pepper_noise(img, 0.00, 0.001, clipped=True)
     imgs['nlm'] = denoise_with_nlm(imgs['noised'])
     imgs['gaussian'] = filter_image(imgs['noised'], 'gaussian')
     imgs['median'] = filter_image(imgs['noised'], 'median')
@@ -28,14 +28,14 @@ if False:
         print(key, mse, psnr, ssim)
 
 
-ra, de, roll = radians(29.2104), radians(-12.0386), radians(0)
-d = 64
-h, w = 512, 512
-x, y = 188, 169*2
-fov = 12
-limit_mag = 6
-background = 9
-psf = 1
+ra, de, roll=radians(29.2104), radians(-12.0386), radians(0)
+d=64
+h, w=512, 512
+x, y=188, 169*2
+fov=12
+limit_mag=6
+background=9
+psf=1
 
 
 # 各种基础方法的降噪效果
@@ -53,7 +53,7 @@ if False:
         sigma_psf=psf,
         background=background
     )
-    img1 = add_gaussian_and_pepper_noise(img0, 0.05, 0.005)
+    img1 = add_gaussian_and_pepper_noise(img0, 0.05, 0.005, clipped=True)
 
     for method in ['ORINGINAL', 'NOISED', 'MEAN', 'MEDIAN', 'GLF', 'WAVELET', 'NLM']:
         if method == 'ORINGINAL':
@@ -84,7 +84,7 @@ if False:
         sigma_psf=psf,
         background=background
     )
-    img1 = add_gaussian_and_pepper_noise(img0, 0.05, 0.001)
+    img1 = add_gaussian_and_pepper_noise(img0, 0.05, 0.001, clipped=False)
 
     for method in ['NLM', 'BLF', 'MBLF']:
         if method == 'NLM':
@@ -103,8 +103,9 @@ h, w=512, 512
 fov=12
 limit_mag=6
 background=9
-psf=0.7
-roi=2
+psf=1
+roi=3
+save=True
 
 # 星图降噪效果测试（质量指标比较）
 if True:
@@ -116,21 +117,40 @@ if True:
         fovy=fov, 
         limit_mag=limit_mag, 
         sigma_psf=psf,
-        background=background
+        roi=roi,
+        background=background,
+        dtype=np.float32
     )
 
     dir = f'res/chapter3/denoise'
     for (g, p) in [
-        # (0.02, 0.002), 
-        (0.05, 0.005), 
-        # (0.08, 0.008)
+        (0.03, 0.003),
+        (0.06, 0.006), 
+        (0.09, 0.009), 
     ]:
-        os.makedirs(f'{dir}/{g}_{p}', exist_ok=True)
+        print(
+            'DENOISE TEST'
+            '\nSigma of gaussian noise:', g, 
+            '\nProbability of pepper noise', p, 
+            '\n--------------------------------'
+        )
 
-        img1 = add_gaussian_and_pepper_noise(img0, g, p)
+        if save:
+            os.makedirs(f'{dir}/{g}_{p}', exist_ok=True)
+            os.makedirs(f'{dir}/{g}_{p}/scale', exist_ok=True)
+
+        img1 = add_gaussian_and_pepper_noise(img0, g, p, clipped=False)
         for method in [
-            'NOISED', 'CNB', 
-            'BLF', 'NLM', 'NLM_BLF', 'WAVELET', 'CWM', 'CMG'
+            # 'ORINGINAL',
+            'NOISED', 
+            # 'MEDIAN', 'MEAN', 'GAUSSIAN,
+            # 'BLF', 'NLM', 'AMF', 'WAVELET',
+            # 'NLM',
+            # 'NLM_BLF',
+            # 'EMF',
+            # 'CWM', 
+            # 'CMG',
+            'CNB', 
         ]:
             if method == 'ORINGINAL':
                 img2 = img0
@@ -138,17 +158,19 @@ if True:
                 img2 = img1
             else:
                 img2 = denoise_image(img1, method)
-            cv2.imwrite(f'{dir}/{g}_{p}/{method}.png', img2)
-            
+
             # 计算降噪前后图像质量指标
             mse, psnr, ssim = cal_mse_psnr_ssim(img0, img2)
             print(
                 method,
-                # '\nSigma of gaussian noise:', g, 
-                # '\nProbability of pepper noise', p, 
-                '\nMSE:', mse, 'PSNR:', psnr, 'SSIM:', ssim,
-                '\n--------------------------------'
+                '\nPSNR:', psnr, 'SSIM:', ssim,
+                '\n',
             )
+
+            if save:
+                img3 = img2 if img2.dtype == np.uint8 else 255*img2
+                cv2.imwrite(f'{dir}/{g}_{p}/{method}.png', img3)
+                cv2.imwrite(f'{dir}/{g}_{p}/scale/{method}.png', img3[y-d:y+d, x-d:x+d])
 
 
 def cal_centroid_error(coords1: np.ndarray, coords2: np.ndarray):
@@ -243,7 +265,7 @@ if False:
         [11, 16, 94, 147, 95, 12, 5],
         [0, 0, 6, 38, 0, 3, 0],
         [7, 0, 12, 6, 7, 8, 0]
-    ], dtype=np.uint8)
+    ])
 
     x, y = np.arange(1, 6), np.arange(1, 6)
     xx, yy = np.meshgrid(x, y)
@@ -259,7 +281,7 @@ if False:
         [7, 129, 248, 252, 255, 134, 7],
         [5, 30, 147, 220, 142, 22, 16],
         [17, 6, 5, 23, 12, 4, 2]
-    ], dtype=np.uint8)
+    ])
     x, y = np.arange(1, 6), np.arange(1, 6)
     xx, yy = np.meshgrid(x, y)
     print(img)
@@ -279,7 +301,7 @@ if False:
         [14, 14, 20, 13, 7, 0, 2],
         [0, 0, 7, 8, 0, 2, 6],
         [4, 6, 12, 0, 16, 3, 2]
-    ], dtype=np.uint8)
+    ])
     x, y = np.arange(1, 6), np.arange(1, 6)
     xx, yy = np.meshgrid(x, y)
     print(img)
@@ -287,10 +309,13 @@ if False:
 
 
 # 选择一处恒星数量多、星等差异大的视场，从而说明检测算法针对不同星等的恒星均能有限检测
-ra, de, roll = radians(25.0588), radians(-21.7205), radians(0)
-limit_mag = 5.9
-fov = 20
-background = 9
+ra, de, roll=radians(25.0588), radians(-21.7205), radians(0)
+limit_mag=5.9
+fov=20
+background=9
+psf=1
+roi=3
+save=False
 
 
 # 星点检测作图
@@ -304,12 +329,14 @@ if False:
         fovx=fov, 
         fovy=fov, 
         limit_mag=limit_mag, 
-        background=background
+        background=background,
+        sigma_psf=psf,
+        roi=roi
     )
     real_coords = stars[:, 1:3]
 
     for den_meth, thr_meth, seg_meth, pixel_num in [
-        # ('GAUSSIAN', 'Otsu', 'DCCL', 12),
+        ('GAUSSIAN', 'Otsu', 'DCCL', 12),
         # ('MEDIAN', 'Liebe3', 'CCL', 5),
         # ('MEDIAN', 'Liebe3', 'RG_LY', 5),
         # ('NONE', 'Liebe3', 'RG_SOBEL', 3),
@@ -323,10 +350,10 @@ if False:
             (0.05, 0.005), 
             (0.08, 0.008), 
         ]:
-            os.makedirs(f'res/chapter3/detect/{g}_{p}', exist_ok=True)
+            if save:
+                os.makedirs(f'res/chapter3/detect/{g}_{p}', exist_ok=True)
             
             img1 = add_gaussian_and_pepper_noise(img0, sigma_g=g, prob_p=p)
-
             esti_coords = np.array(get_star_centroids(img1, den_meth, thr_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num))
 
             # coords1: correct match
@@ -338,21 +365,18 @@ if False:
             img1 = label_image(img1, coords2, (255, 0, 0))
             img1 = label_image(img1, coords3, (0, 0, 255))
 
-            print(coords2)
-
             print(
-                '-----------------------------',
-                '\nSigma of gaussian noise:', g, 
-                '\nProbability of pepper noise:', p, 
                 # '\nMiss coordinates:\n', coords2
                 # '\nFalse coordinates:\n', coords3
             )
 
-            cv2.imwrite(f'res/chapter3/detect/{g}_{p}/{den_meth}_{thr_meth}_{seg_meth}.png', img1)
+            if save:
+                cv2.imwrite(f'res/chapter3/detect/{g}_{p}/{den_meth}_{thr_meth}_{seg_meth}.png', img1)
 
-    img0 = cv2.cvtColor(img0, cv2.COLOR_GRAY2BGR)
-    img0 = label_image(img0, real_coords)
-    cv2.imwrite(f'res/chapter3/detect/clean.png', img0)
+    if save:
+        img0 = cv2.cvtColor(img0, cv2.COLOR_GRAY2BGR)
+        img0 = label_image(img0, real_coords)
+        cv2.imwrite(f'res/chapter3/detect/clean.png', img0)
 
 
 # 星点检测数量对比
@@ -367,7 +391,8 @@ if False:
         fovy=fov, 
         sigma_psf=psf,
         limit_mag=limit_mag, 
-        background=background
+        background=background,
+        roi=roi
     )
     real_coords = stars[:, 1:3]
     mags = stars[:, -1]
@@ -395,15 +420,15 @@ if False:
         avg_cnts = []
         avg_err = []
         for (g, p) in [
-            (0.01, 0.001), 
-            (0.02, 0.002), 
-            (0.03, 0.003), 
-            (0.04, 0.004), 
-            (0.05, 0.005),
-            (0.06, 0.006), 
-            (0.07, 0.007), 
-            (0.08, 0.008),
-            (0.09, 0.009),
+            # (0.01, 0.001), 
+            # (0.02, 0.002), 
+            # (0.03, 0.003), 
+            # (0.04, 0.004), 
+            # (0.05, 0.005),
+            # (0.06, 0.006), 
+            # (0.07, 0.007), 
+            # (0.08, 0.008),
+            # (0.09, 0.009),
 
             # (0.02, 0.002), 
             # (0.05, 0.005),
