@@ -5,27 +5,6 @@ from denoise import denoise_image
 from detect import cal_threshold, group_star
 
 
-def cal_wind_boundary(center: tuple[int, int], wind_size: int, h: int, w: int) -> tuple[int, int, int, int]:
-    '''
-        Calculate the boundary of the window.
-    Args:
-        center: the center of the window
-        wind_size: the size of the window
-    Returns:
-        t: the top boundary of the window
-        b: the bottom boundary of the window
-        l: the left boundary of the window
-        r: the right boundary of the window
-    '''
-    # construct window
-    t = max(0, center[0] - wind_size//2)
-    b = min(h-1, center[0] + wind_size//2)
-    l = max(0, center[1] - wind_size//2)
-    r = min(w-1, center[1] + wind_size//2)
-
-    return t, b, l, r
-
-
 def cal_center_of_guassian_curve(img: np.ndarray, rows, cols) -> tuple[float, float]:
     '''
         Calculate the centroid of the star using the gaussian fitting.

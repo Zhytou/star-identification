@@ -46,7 +46,7 @@ class UnionSet:
         return self.cnt
 
 
-def cal_threshold(img: np.ndarray, method: str, factor: float=0.1, wind_size: int=5, gray_diff: int=4) -> int:
+def cal_threshold(img: np.ndarray, method: str, wind_size: int=5) -> int:
     """
         Calculate the threshold for image segmentation.
     Args:
@@ -62,8 +62,6 @@ def cal_threshold(img: np.ndarray, method: str, factor: float=0.1, wind_size: in
                 https://www.sciencedirect.com/science/article/abs/pii/0734189X89900510?via%3Dihub
             'Xiao': entropic thresholding based on GLSC 2D histogram
                 https://ieeexplore.ieee.org/document/4761626/?arnumber=4761626
-        wind_size: the size of the window used to calculate the threshold in 'Abutaleb'/'Xiao' method
-        gray_diff: the max difference of the gray value to count the similarity in 'Xiao' method
     Returns:
         T: the threshold of the image
     """
@@ -135,43 +133,6 @@ def cal_threshold(img: np.ndarray, method: str, factor: float=0.1, wind_size: in
                     T = t
                     S = s
                 print('T', t, 'S', s, 'entropy', entropy)
-    elif method == 'Xiao':
-        # # !still error, and need to be fixed
-        # # gray similarity matrix for each pixel
-        # sim = np.zeros_like(img)
-        # for i in range(h):
-        #     for j in range(w):
-        #         # window
-        #         t, b, l, r = cal_wind_boundary((i, j), wind_size, h, w)
-        #         wind = img[t:b + 1, l:r + 1]
-        #         sim[i, j] = np.sum(np.abs(wind - img[i, j]) <= gray_diff)
-        
-        # # get the 2d histogram
-        # hist = np.zeros((256, wind_size**2), dtype=np.float64)
-        # for i in range(h):
-        #     for j in range(w):
-        #         hist[img[i, j], sim[i, j]-1] += 1
-        # hist /= h*w
-
-        # max_entropy = 0
-        # weights = np.exp(-9 * (np.arange(wind_size ** 2) + 1) / (wind_size ** 2))
-        # weights = (1 + weights) / (1 - weights)
-        # # iterate to get the threshold with max entropy
-        # for t in range(256):
-        #     Pb = np.sum(hist[:t, :])
-        #     if Pb == 0.0 or Pb == 1.0:
-        #         continue
-        #     Pf = 1 - Pb
-        #     # background and foreground entropy
-        #     Hb = -np.sum(hist[:t, :]/Pb * np.log(hist[:t, :]/Pb, where=(hist[:t, :]/Pb>= 1e-7)) * weights)
-        #     Hf = -np.sum(hist[t:, :]/Pf * np.log(hist[t:, :]/Pf, where=(hist[t:, :]/Pf>= 1e-7)) * weights)
-        #     entropy = Hb + Hf
-        #     if entropy < 0:
-        #         print('error', entropy, Hb, Hf)
-        #     if entropy > max_entropy:
-        #         max_entropy = entropy
-        #         T = t
-        pass
     else:
         print('Invalid threshold method!')
     
@@ -207,7 +168,7 @@ def get_seeds_with_doh(img: np.ndarray, threshold: int, connectivity: int=4) -> 
     doh2 = cal_doh(padded_img, neighbors[..., 0]+d, neighbors[..., 1]+d, 2)
 
     # select seeds with determination of hessian operator
-    mask = (np.argmax(doh1, axis=1) == 0) & (np.argmax(doh2, axis=1) == 0)
+    mask = (np.argmax(doh1, axis=1) == 0) | (np.argmax(doh2, axis=1) == 0)
     coords = coords[mask]
 
     # save to seeds(row, col, label) and make sure seeds are separate
@@ -241,7 +202,7 @@ def get_seeds_with_ly(img: np.ndarray, threshold: int):
     acoords = coords[:, None, :] + offsets[None, ...]
     _, weights = cal_ly(padded_img, acoords[..., 0].ravel()+d, acoords[..., 1].ravel()+d, d)
     weights = weights.reshape(-1, d**2)
-    mask = np.argmax(weights, axis=1) == r**2
+    mask = np.argmax(weights, axis=1) == d**2//2
     
     # 3. Save
     coords = coords[mask]
