@@ -4,6 +4,7 @@ import pandas as pd
 from itertools import combinations
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
+from mpl_toolkits.mplot3d import Axes3D
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 from skimage.metrics import mean_squared_error, peak_signal_noise_ratio, structural_similarity
@@ -382,6 +383,37 @@ def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, 
         plt.savefig(output_path, format='png', bbox_inches='tight', pad_inches=1, dpi=300)
     
     plt.close()
+
+
+def plot_gray_3d(img: np.ndarray, title: str=''):
+    '''
+        Plot gray image in 3 dimensions.
+    '''
+
+    h, w = img.shape
+    x, y = np.linspace(0, h-1, h), np.linspace(0, w-1, w)
+    x, y = np.meshgrid(x, y)
+
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+
+    surf = ax.plot_surface(
+        x, y, img,
+        linewidth=0,     
+        antialiased=True, 
+        alpha=0.8         
+    )
+
+    ax.set_title(title, fontsize=14, pad=20)
+    ax.set_xlabel('Pixel X (Column)', fontsize=12, labelpad=10)
+    ax.set_ylabel('Pixel Y (Row)', fontsize=12, labelpad=10)
+    ax.set_zlabel('Gray Value', fontsize=12, labelpad=10)
+    # ax.set_zlim(0, 1)
+
+    fig.colorbar(surf, ax=ax, shrink=0.6, aspect=10, label='Gray Value')
+
+    plt.tight_layout()
+    plt.show()
 
 
 def describe_database(db: pd.DataFrame):
