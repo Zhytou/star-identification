@@ -14,9 +14,39 @@ cata['Y'] = np.sin(cata['Ra'])*np.cos(cata['De'])
 cata['Z'] = np.sin(cata['De'])
 
 
+def add_nonlinear_stellar_noise(img: np.ndarray, method: str='Gaussian', background: float=5.5, position: tuple[int, int]=(0, 0), sigma: int=100, clipped: bool=True):
+    '''
+        Add nonlinear stellar noise.
+    '''
+    h, w = img.shape
+    x, y = np.linspace(0, h-1, h), np.linspace(0, w-1, w)
+    x, y = np.meshgrid(x, y)
+
+    I_max = 255 if img.dtype == np.uint8 else 1.0
+    I0 = get_stellar_intensity(background, I_max)
+    x0, y0 = position
+
+    if method == 'None':
+        return img
+    elif method == 'Linear_X':
+        noise = (1 - (x - x0) / (h - x0)) * I0
+    elif method == 'Linear_Y':
+        noise = (1 - (y - y0) / (w - y0)) * I0
+    else: #method == 'Gaussian'
+        d2 = (x - x0)**2 + (y - y0)**2
+        noise = I0 * np.exp(- d2 / (2 * sigma**2))
+    
+    if clipped:
+        noised_img = np.clip(img + noise, 0, I_max).astype(img.dtype)
+    else:
+        noised_img = (img + noise).astype(img.dtype)
+
+    return noised_img
+
+
 def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float, clipped: bool=True) -> np.ndarray:
     """
-        Adds gaussian and pepper-salt noise to an image.
+        Add gaussian and pepper-salt noise to an image.
     """
     h, w = img.shape
 
@@ -495,6 +525,8 @@ if __name__ == '__main__':
     
     ids = stars[:, 0].astype(int)
     coords = stars[:, 1:3].astype(int)
+
+    img = add_nonlinear_stellar_noise(img)
 
     label_star_image(img, coords, ids)
 
