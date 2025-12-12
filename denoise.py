@@ -17,15 +17,15 @@ def basic_filter(img: np.ndarray, method: str='GAUSSIAN', size: int=3) -> np.nda
     Returns:
         filtered_img: the image after filtering
     '''
-    if method == 'GAUSSIAN':
+    if method == 'Gaussian':
         filtered_img = ndi.gaussian_filter(img, sigma=0.7, truncate=(size//2)/0.7)
-    elif method == 'MEAN':
+    elif method == 'Mean':
         filtered_img = ndi.uniform_filter(img, size=size)
-    elif method == 'MEDIAN':
+    elif method == 'Median':
         # d = size//2
         # padded_img = np.pad(img, ((d, d), (d, d)), mode='constant')
         filtered_img = ndi.median_filter(img, size)
-    elif method == 'BLF':
+    elif method == 'Bilateral':
         filtered_img = skr.denoise_bilateral(img, 7, 20, 1.5)
     elif method == 'GLF':
         f = np.fft.fft2(img)
@@ -48,22 +48,22 @@ def basic_filter(img: np.ndarray, method: str='GAUSSIAN', size: int=3) -> np.nda
     return filtered_img
 
 
-def morph_filter(img: np.ndarray, size: int=3, method: str='erode', selem: str='rect') -> np.ndarray:
+def morph_filter(img: np.ndarray, size: int=3, method: str='Erode', selem: str='Rect') -> np.ndarray:
     '''
         Morphology filter.
     '''
-    if selem == 'disk':
+    if selem == 'Disk':
         kernel = skm.disk(size//2)
     else:
         kernel = skm.rectangle(size, size)
     
-    if method == 'erode':
+    if method == 'Erode':
         filtered_img = skm.erosion(img, kernel)
-    elif method == 'dilate':
+    elif method == 'Dilate':
         filtered_img = skm.dilation(img, kernel)
-    elif method == 'open':
+    elif method == 'Open':
         filtered_img = skm.opening(img, kernel)
-    elif method == 'close':
+    elif method == 'Close':
         filtered_img = skm.closing(img, kernel)
     else:
         print('Invalid morph method')
@@ -340,7 +340,6 @@ def denoise_with_cmg(img: np.ndarray, size: int=5, sigma: float=1):
     vals = np.sum(patches[S1][:, None, ...] * weights[None, ...], axis=(-2, -1))    # swf all possible outputs
     idxs = np.argmin(np.abs(vals - denoised_img[S1][:, None]), axis=1)              # indexs of minimum sub sliding windows (n, )
     denoised_img[S1] = vals[np.arange(n), idxs]
-    denoised_img[~S1] = 0
 
     # 4. apply attenuation for S2
     denoised_img[S2] = denoised_img[S2] * Atten
@@ -530,9 +529,9 @@ def denoise_image(img: np.ndarray, method: str):
         denoised_img = denoise_with_nlm(img, 5, 21, sigma=0.1*max_val)
     elif method == 'MBLF': # modified bilateral filter
         denoised_img = denoise_with_blf(img, 7, sigma_g=0.05*max_val, sigma_s=1.5, threshold=0.6*max_val)
-    elif method == 'WAVELET':
+    elif method == 'Wavelet':
         denoised_img = denoise_with_wavelet(img, 'sym4', threshold=40)
-    elif method in ['MEAN', 'GAUSSIAN', 'MEDIAN', 'BLF', 'GLF']:
+    elif method in ['Mean', 'Gaussian', 'Median', 'Bilateral', 'GLF']:
         denoised_img = basic_filter(img, method)
     else:
         denoised_img = img
