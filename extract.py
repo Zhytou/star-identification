@@ -84,14 +84,13 @@ def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, m
     return center
 
 
-def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: str, cen_meth: str | list[str], pixel_limit: int=5, connectivity=4, num_esti: int=1, need_gray: bool=False, save_path:str=None) -> list[tuple[float, float]] | list[tuple[float, float, int]] | dict[str, list[tuple[float, float]]]:
+def get_star_centroids(img: np.ndarray, den_meth: str, seg_meth: list['str'], cen_meth: str | list[str], pixel_limit: int=5, connectivity=4, num_esti: int=1, need_gray: bool=False, save_path:str=None) -> list[tuple[float, float]] | list[tuple[float, float, int]] | dict[str, list[tuple[float, float]]]:
     '''
         Get the centroids of the stars in the image.
     Args:
         img: the image to be processed
         den_method: denoising method
-        thr_method: threshold calculation method
-        seg_method: segmentation method
+        seg_method: segmentation method list
         cen_method: centroid algorithm
         pixel_limit: the minimum number of connected pixels
         T1/T2/T3: optional threshold used in RG segmentation method
@@ -108,12 +107,8 @@ def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: 
     if type(save_path) is str:
         cv2.imwrite(save_path, filtered_img)
 
-    # calaculate the threshold
-    T =  cal_threshold(filtered_img, thr_meth)
-    # print(thr_meth, T)
-
     # rough group star using connectivity
-    group_coords = group_star(filtered_img, seg_meth, T, connectivity=connectivity, pixel_limit=pixel_limit)
+    group_coords = group_star(filtered_img, seg_meth, connectivity=connectivity, pixel_limit=pixel_limit)
 
     # calculate the centroid coordinate with threshold and weight
     centroids = {}
@@ -136,7 +131,7 @@ def get_star_centroids(img: np.ndarray, den_meth: str, thr_meth: str, seg_meth: 
             graysum = np.sum(vals)
 
             # calculate the centroid
-            avg_centroid = np.mean([cal_center_of_gravity(filtered_img, rows, cols, method, T, brightest) for _ in range(num_esti)], axis=0)
+            avg_centroid = np.mean([cal_center_of_gravity(filtered_img, rows, cols, method, center=brightest) for _ in range(num_esti)], axis=0)
 
             if need_gray:
                 centroids[method].append((avg_centroid[0], avg_centroid[1], graysum))

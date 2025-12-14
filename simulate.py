@@ -26,15 +26,15 @@ def add_nonlinear_stellar_noise(img: np.ndarray, method: str='Gaussian', backgro
     I0 = get_stellar_intensity(background, I_max)
     x0, y0 = position
 
-    if method == 'None':
-        return img
+    if method == 'Gaussian':
+        d2 = (x - x0)**2 + (y - y0)**2
+        noise = I0 * np.exp(- d2 / (2 * sigma**2))
     elif method == 'Linear_X':
         noise = (1 - (x - x0) / (h - x0)) * I0
     elif method == 'Linear_Y':
         noise = (1 - (y - y0) / (w - y0)) * I0
-    else: #method == 'Gaussian'
-        d2 = (x - x0)**2 + (y - y0)**2
-        noise = I0 * np.exp(- d2 / (2 * sigma**2))
+    else: # method == 'None':
+        return img
     
     if clipped:
         noised_img = np.clip(img + noise, 0, I_max).astype(img.dtype)
