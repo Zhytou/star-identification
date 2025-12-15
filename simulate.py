@@ -1,4 +1,3 @@
-import cv2
 from math import radians, degrees, sin, cos, tan, sqrt, exp, atan
 import numpy as np
 import pandas as pd
@@ -17,22 +16,28 @@ cata['Z'] = np.sin(cata['De'])
 def add_nonlinear_stellar_noise(img: np.ndarray, method: str='Gaussian', background: float=5.5, position: tuple[int, int]=(0, 0), sigma: int=100, clipped: bool=True):
     '''
         Add nonlinear stellar noise.
+    Args:
+        img: the input image
+        method: the simulation method
+        position: the center of stellar noise (row, column)
+        magnitude: the stellar magnitude
+        sigma: the standard deviation
     '''
     h, w = img.shape
-    x, y = np.linspace(0, h-1, h), np.linspace(0, w-1, w)
-    x, y = np.meshgrid(x, y)
+    y, x = np.linspace(0, h-1, h), np.linspace(0, w-1, w)
+    y, x = np.meshgrid(y, x, indexing='ij')
 
     I_max = 255 if img.dtype == np.uint8 else 1.0
     I0 = get_stellar_intensity(background, I_max)
-    x0, y0 = position
+    y0, x0 = position
 
     if method == 'Gaussian':
         d2 = (x - x0)**2 + (y - y0)**2
-        noise = I0 * np.exp(- d2 / (2 * sigma**2))
-    elif method == 'Linear_X':
-        noise = (1 - (x - x0) / (h - x0)) * I0
-    elif method == 'Linear_Y':
-        noise = (1 - (y - y0) / (w - y0)) * I0
+        noise = np.clip(I0 * np.exp(- d2 / (2 * sigma**2)), 0, I_max)
+    elif method == 'Linear_X': # column direction
+        noise = np.clip((1 - (x - x0) / (w - x0)) * I0, 0, I_max)
+    elif method == 'Linear_Y': # row direction
+        noise = np.clip((1 - (y - y0) / (h - y0)) * I0, 0, I_max)
     else: # method == 'None':
         return img
     
@@ -128,9 +133,9 @@ def draw_star(img: np.ndarray, position: tuple[float, float], magnitude: float, 
     """
         Draw star at position[0](row) and position[1](column) in the image.
     Args:
-        position: (starting from top to bottom, starting from left to right)
-        magnitude: the stellar magnitude
-        img: background image
+        img: the input image
+        position: the central position(row, column) of star
+        magnitude: the magnitude of star
         sigma: the standard deviation of the point spread function
         roi: the region of interest
     Returns:
@@ -139,20 +144,20 @@ def draw_star(img: np.ndarray, position: tuple[float, float], magnitude: float, 
     h, w = img.shape
 
     I_max = 255 if img.dtype == np.uint8 else 1.0
-    I = get_stellar_intensity(magnitude, I_max)
+    I0 = get_stellar_intensity(magnitude, I_max)
 
-    x, y = position
-    t, b = int(max(0, x-roi)), int(min(h, x+roi+1)) # top, bottom
-    l, r = int(max(0, y-roi)), int(min(w, y+roi+1)) # left, right
+    y, x = position
+    t, b = int(max(0, y-roi)), int(min(h, y+roi+1)) # top, bottom
+    l, r = int(max(0, x-roi)), int(min(w, x+roi+1)) # left, right
 
     # print(x, y, t, b, l, r)
     u = np.arange(t, b ).reshape(-1, 1)             # (2roi, 1)
     v = np.arange(l, r).reshape(1, -1)              # (1, 2roi)
 
-    dy = (u + 0.5 - x)                              # (2roi, 1)
-    dx = (v + 0.5 - y)                              # (1, 2roi)
+    dy = (u + 0.5 - y)                              # (2roi, 1)
+    dx = (v + 0.5 - x)                              # (1, 2roi)
     dd = dy**2 + dx**2 
-    star = I * np.exp(-dd / (2 * sigma ** 2))
+    star = I0 * np.exp(-dd / (2 * sigma ** 2))
 
     img[t:b, l:r] = np.clip(img[t:b, l:r] + star, 0, I_max)
 
