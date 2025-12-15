@@ -113,6 +113,7 @@ if True:
     ids = stars[:, 0].astype(np.int64)
     coords = stars[:, 1:3]
 
+
 if False:
     # positional noise
     img, _ = create_star_image(
@@ -123,6 +124,7 @@ if False:
         sigma_pos=10
     )
     cv2.imwrite('res/chapter2/sim/pos.png', img)
+
 
 if True:
     # magnititude noise
@@ -139,6 +141,7 @@ if True:
     img = label_image(img, coords1, (255, 0, 0)) # miss
     img = label_image(img, coords2, (0, 0, 255)) # false
     cv2.imwrite('res/chapter2/sim/mag.png', img)
+
 
 if False:
     # false star noise

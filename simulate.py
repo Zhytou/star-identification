@@ -13,9 +13,9 @@ cata['Y'] = np.sin(cata['Ra'])*np.cos(cata['De'])
 cata['Z'] = np.sin(cata['De'])
 
 
-def add_nonlinear_stellar_noise(img: np.ndarray, method: str='Gaussian', background: float=5.5, position: tuple[int, int]=(0, 0), sigma: int=100, clipped: bool=True):
+def add_stellar_noise(img: np.ndarray, method: str='Gaussian', background: float=5.5, position: tuple[int, int]=(0, 0), sigma: int=100, clipped: bool=True):
     '''
-        Add nonlinear stellar noise.
+        Add stellar noise.
     Args:
         img: the input image
         method: the simulation method
@@ -31,7 +31,9 @@ def add_nonlinear_stellar_noise(img: np.ndarray, method: str='Gaussian', backgro
     I0 = get_stellar_intensity(background, I_max)
     y0, x0 = position
 
-    if method == 'Gaussian':
+    if method == 'Constant':
+        noise = np.full((h, w), I0)
+    elif method == 'Gaussian':
         d2 = (x - x0)**2 + (y - y0)**2
         noise = np.clip(I0 * np.exp(- d2 / (2 * sigma**2)), 0, I_max)
     elif method == 'Linear_X': # column direction
@@ -357,7 +359,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     # print(f"Found {len(stars_within_fov)} stars within the field of view after pos filtering.")
 
     # background intensity
-    if background == np.inf:
+    if background == np.inf or np.isnan(background):
         img = np.zeros((h, w), dtype)
     else:
         I_max = 255 if dtype == np.uint8 else 1.0
@@ -531,7 +533,7 @@ if __name__ == '__main__':
     ids = stars[:, 0].astype(int)
     coords = stars[:, 1:3].astype(int)
 
-    img = add_nonlinear_stellar_noise(img)
+    img = add_stellar_noise(img)
 
     label_star_image(img, coords, ids)
 

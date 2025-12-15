@@ -79,6 +79,7 @@ def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, m
         print('Invalid gravity method!')
         return 0.0, 0.0
     
+    gs = np.maximum(gs, 1e-10)
     center = xgs/gs, ygs/gs
 
     return center

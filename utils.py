@@ -49,7 +49,10 @@ def cal_derivative(img: np.ndarray, order: tuple[int, int], sigma: float):
     '''
     assert img.ndim == 2 or img.ndim == 3
 
-    return gaussian_filter(img, sigma=sigma, order=order, axes=(-2, -1))
+    # change image data type to avoid overflow
+    fimg = img.astype(np.float64)
+
+    return gaussian_filter(fimg, sigma=sigma, order=order, axes=(-2, -1))
 
 
 def cal_doh(img: np.ndarray, sigma: float):
@@ -58,13 +61,10 @@ def cal_doh(img: np.ndarray, sigma: float):
     '''
     assert img.ndim == 2 or img.ndim == 3
 
-    # change image data type to avoid overflow
-    fimg = img.astype(np.float64)
-
     # use gaussian filter to get second derivative
-    dxx = cal_derivative(fimg, order=(0, 2), sigma=sigma)
-    dyy = cal_derivative(fimg, order=(2, 0), sigma=sigma)
-    dxy = cal_derivative(fimg, order=(1, 1), sigma=sigma)
+    dxx = cal_derivative(img, order=(0, 2), sigma=sigma)
+    dyy = cal_derivative(img, order=(2, 0), sigma=sigma)
+    dxy = cal_derivative(img, order=(1, 1), sigma=sigma)
 
     # retun determination
     return dxx * dyy - dxy**2
@@ -76,12 +76,9 @@ def cal_ly(img: np.ndarray, sigma: float):
     '''
     assert img.ndim == 2 or img.ndim == 3
 
-    # change image data type to avoid overflow
-    fimg = img.astype(np.float64)
-
     # construct gradient covariance matrix with first derivatives
-    dx = cal_derivative(fimg, order=(0, 1), sigma=sigma)
-    dy = cal_derivative(fimg, order=(1, 0), sigma=sigma)
+    dx = cal_derivative(img, order=(0, 1), sigma=sigma)
+    dy = cal_derivative(img, order=(1, 0), sigma=sigma)
 
     dx2 = dx * dx
     dy2 = dy * dy

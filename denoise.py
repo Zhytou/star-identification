@@ -2,8 +2,8 @@ import cv2
 import numpy as np
 import pywt
 import scipy.ndimage as ndi
-import skimage.morphology as skm
-import skimage.restoration as skr
+import skimage.morphology as morph
+import skimage.restoration as restoration
 
 from utils import get_offsets, find_close_pair
 
@@ -26,7 +26,7 @@ def basic_filter(img: np.ndarray, method: str='GAUSSIAN', size: int=3) -> np.nda
         # padded_img = np.pad(img, ((d, d), (d, d)), mode='constant')
         filtered_img = ndi.median_filter(img, size)
     elif method == 'Bilateral':
-        filtered_img = skr.denoise_bilateral(img, 7, 20, 1.5)
+        filtered_img = restoration.denoise_bilateral(img, 7, 20, 1.5)
     elif method == 'GLF':
         f = np.fft.fft2(img)
         fshift = np.fft.fftshift(f)
@@ -53,18 +53,18 @@ def morph_filter(img: np.ndarray, size: int=3, method: str='Erode', selem: str='
         Morphology filter.
     '''
     if selem == 'Disk':
-        kernel = skm.disk(size//2)
+        kernel = morph.disk(size//2)
     else:
-        kernel = skm.rectangle(size, size)
+        kernel = morph.rectangle(size, size)
     
     if method == 'Erode':
-        filtered_img = skm.erosion(img, kernel)
+        filtered_img = morph.erosion(img, kernel)
     elif method == 'Dilate':
-        filtered_img = skm.dilation(img, kernel)
+        filtered_img = morph.dilation(img, kernel)
     elif method == 'Open':
-        filtered_img = skm.opening(img, kernel)
+        filtered_img = morph.opening(img, kernel)
     elif method == 'Close':
-        filtered_img = skm.closing(img, kernel)
+        filtered_img = morph.closing(img, kernel)
     else:
         print('Invalid morph method')
         return None
@@ -92,7 +92,7 @@ def denoise_with_nlm(img: np.ndarray, patch_size: int=7, wind_size: int=21, sigm
             searchWindowSize=wind_size
         )
     else:
-        denoised_img = skr.denoise_nl_means(
+        denoised_img = restoration.denoise_nl_means(
             img,
             patch_size=patch_size,
             patch_distance=wind_size//2,
@@ -124,7 +124,7 @@ def denoise_with_wavelet(img: np.ndarray, wavelet: str, level: int=3, threshold:
     
     # denoised_image = pywt.waverec2(denoised_coeffs, wavelet)
 
-    denoised_image = skr.denoise_wavelet(img, wavelet=wavelet, wavelet_levels=level)
+    denoised_image = restoration.denoise_wavelet(img, wavelet=wavelet, wavelet_levels=level)
 
     return denoised_image
 

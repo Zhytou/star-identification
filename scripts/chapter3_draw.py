@@ -333,8 +333,8 @@ if False:
 
 # 选择一处恒星数量多、星等差异大的视场，从而说明检测算法针对不同星等的恒星均能有限检测
 ra, de, roll=radians(25.0588), radians(-21.7205), radians(0)
-limit_mag=5.9
-fov=20
+limit_mag=5.5
+fov=25
 psf=1
 roi=3
 save=True
@@ -357,67 +357,76 @@ if True:
     )
     real_coords = stars[:, 1:3]
 
-    for den_meth, seg_meth, pixel_num in [
-        # CCL-Based
-        ('None', ['LCM',  'Liebe3', 'CCL', 'None'], 3),
-        # ('None', ['ILCM',  'Liebe3', 'CCL', 'None'], 3),
-        # ('None', ['NLCM',  'Liebe3', 'CCL', 'None'], 3),
-        # ('None', ['GCM',  'Liebe3', 'CCL', 'None'], 3),
+    for (g, p, s, y, x, lum, roi) in [
+        ## Constant stellar background
+        # (0.00, 0.000, 'Constant', 0, 0, 9, 0),
+        # (0.00, 0.000, 'Constant', 0, 0, 8, 0),
+        # (0.00, 0.000, 'Constant', 0, 0, 7, 0),
 
-        # RG-Based
-        # ('None', ['None', 'Liebe3', 'RG',  'DOH'], 3),
-        ('None', ['LCM',  'Liebe3', 'RG',  'DOH'], 3),
-        # ('None', ['SDM',  'Liebe3', 'RG',  'DOH'], 3),
-        # ('None', ['GCM',  'Liebe3', 'RG', 'DOH'], 3),
+        # (0.05, 0.000, 'Constant', 0, 0, 9, 0),
+        # (0.05, 0.000, 'Constant', 0, 0, 8, 0),
+        # (0.05, 0.000, 'Constant', 0, 0, 7, 0),
+
+        # (0.05, 0.005, 'Constant', 0, 0, 9, 0),
+        # (0.05, 0.005, 'Constant', 0, 0, 8, 0),
+        (0.05, 0.005, 'Constant', 0, 0, 7, 0),
+
+        ## Gasussian stellar background
+        # (0.00, 0.000, 'Gaussian', h//2, w//4, 5.5, 128), 
+        # (0.00, 0.005, 'Gaussian', h//2, w//4, 5, 128), 
+        # (0.05, 0.000, 'Gaussian', h//2, w//4, 5, 128),
+        # (0.05, 0.005, 'Gaussian', h//2, w//4, 5, 128), 
+
+        ## Linear stellar background
+        # (0.00, 0.000, 'Linear_X', 0, 0, 5.3, 128), 
     ]:
-        for (g, p, s, y, x, lum, roi) in [
-            # Constant stellar background
-            # (0.00, 0.000, 'Constant', 0, 0, 0, 0),
-            (0.05, 0.000, 'Constant', 0, 0, 7, 0),
-            (0.05, 0.000, 'Constant', 0, 0, 8, 0),
-            (0.05, 0.000, 'Constant', 0, 0, 9, 0),
+        if save:
+            os.makedirs(f'{dir}/{g}_{p}_{s}_{x}_{y}_{lum}_{roi}', exist_ok=True)
 
-            # Gasussian stellar background
-            # (0.00, 0.000, 'Gaussian', h//2, w//4, 5.5, 128), 
-            # (0.00, 0.005, 'Gaussian', h//2, w//4, 5, 128), 
-            # (0.05, 0.000, 'Gaussian', h//2, w//4, 5.5, 128),
-            # (0.05, 0.005, 'Gaussian', h//2, w//4, 5, 128), 
+        img1 = add_stellar_noise(img0, method=s, position=(y, x), background=lum, sigma=roi)
+        img2 = add_gaussian_and_pepper_noise(img1, sigma_g=g, prob_p=p)
 
-            # Linear stellar background
-            # (0.00, 0.000, 'Linear_X', 0, 0, 5.3, 128), 
+        for den_meth, seg_meth, pixel_num in [
+            # CCL-Based
+            ('None', ['LCM',  'Liebe3', 'CCL', 'None'], 3),
+            # ('None', ['ILCM',  'Liebe3', 'CCL', 'None'], 3),
+            # ('None', ['NLCM',  'Liebe3', 'CCL', 'None'], 3),
+            # ('None', ['GCM',  'Liebe3', 'CCL', 'None'], 3),
+
+            # RG-Based
+            # ('None', ['None', 'Liebe3', 'RG',  'DOH'], 3),
+            ('None', ['LCM',  'Liebe3', 'RG',  'DOH'], 3),
+            # ('None', ['SDM',  'Liebe3', 'RG',  'DOH'], 3),
+            # ('None', ['GCM',  'Liebe3', 'RG', 'DOH'], 3),
         ]:
-            if save:
-                os.makedirs(f'{dir}/{g}_{p}_{s}_{x}_{y}_{lum}_{roi}', exist_ok=True)
-
-            img1 = add_stellar_noise(img0, method=s, position=(y, x), background=lum, sigma=roi)
-            img2 = add_gaussian_and_pepper_noise(img1, sigma_g=g, prob_p=p)
-            esti_coords = np.array(get_star_centroids(img2, den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num))
+            esti_coords = np.array(get_star_centroids(img2.copy(), den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num))
 
             # coords1: correct match
             # coords2: miss match
             # coords3: false match
             _, coords1, coords2, coords3 = find_overlap_and_unique(real_coords, esti_coords, 4)       
-            img2 = cv2.cvtColor(img2, cv2.COLOR_GRAY2BGR)
-            img2 = label_image(img2, coords1, (0, 255, 0))
-            img2 = label_image(img2, coords2, (255, 0, 0))
-            img2 = label_image(img2, coords3, (0, 0, 255))
+            img3 = cv2.cvtColor(img2, cv2.COLOR_GRAY2BGR)
+            img3 = label_image(img3, coords1, (0, 255, 0))
+            img3 = label_image(img3, coords2, (255, 0, 0))
+            img3 = label_image(img3, coords3, (0, 0, 255))
 
             miss_idxs = find_miss_idxs(real_coords, coords2)
             print(
                 'Deviation of Gaussian Noise:', g,
-                'Probability of Salt-Pepper Noise:', p,
+                '\tProbability of Salt-Pepper Noise:', p,
+                '\tLuminosity of Background:', lum,
                 '\nSegmentation Method:', seg_meth,
                 '\nNumber of Miss Stars:', len(coords2),
-                '\nNumber of False Stars:', len(coords3)
-                # '\nMiss:\n', 
-                # stars[miss_idxs, :3].astype(int),
+                '\nNumber of False Stars:', len(coords3),
+                '\nMiss:\n', 
+                stars[miss_idxs, :3].astype(int),
                 # '\nFalse:\n', 
                 # coords3.astype(int)
             )
 
             if save:
                 seg_meth_full = '_'.join(seg_meth)
-                cv2.imwrite(f'{dir}/{g}_{p}_{s}_{x}_{y}_{lum}_{roi}/{den_meth}_{seg_meth_full}.png', img2)
+                cv2.imwrite(f'{dir}/{g}_{p}_{s}_{x}_{y}_{lum}_{roi}/{den_meth}_{seg_meth_full}.png', img3)
 
     if save:
         img0 = cv2.cvtColor(img0, cv2.COLOR_GRAY2BGR)
@@ -437,7 +446,6 @@ if False:
         fovy=fov, 
         sigma_psf=psf,
         limit_mag=limit_mag, 
-        background=background,
         roi=roi
     )
     real_coords = stars[:, 1:3]
@@ -452,49 +460,44 @@ if False:
         '\nNumber of test:', num_test,
         '\nRA:', ra, 'DE:', de,
         '\nMag info:', np.sort(mags), #np.histogram(mags, range=(0, limit_mag), bins=int(limit_mag)),
-        '\nBackgroud intensity:', get_stellar_intensity(background),
         '\n-----------------------------',
     )
 
-    for den_meth, thr_meth, seg_meth, pixel_num in [
-        ('GAUSSIAN', 'Otsu', 'DCCL', 12),
-        ('NONE', 'Liebe3', 'RG_LY', 5),
-        ('NONE', 'Liebe3', 'RG_SOBEL', 5),
-        ('CNB', 'Liebe3', 'RG_DOH', 3),
+    for den_meth, seg_meth, pixel_num in [
+        # CCL-Based
+        ('None', ['LCM',  'Liebe3', 'CCL', 'None'], 3),
+        # ('None', ['ILCM',  'Liebe3', 'CCL', 'None'], 3),
+        # ('None', ['NLCM',  'Liebe3', 'CCL', 'None'], 3),
+        # ('None', ['GCM',  'Liebe3', 'CCL', 'None'], 3),
+
+        # RG-Based
+        # ('None', ['None', 'Liebe3', 'RG',  'DOH'], 3),
+        ('None', ['LCM',  'Liebe3', 'RG',  'DOH'], 3),
+        # ('None', ['SDM',  'Liebe3', 'RG',  'DOH'], 3),
+        # ('None', ['GCM',  'Liebe3', 'RG', 'DOH'], 3),
     ]:
-        
         avg_cnts = []
         avg_err = []
-        for (g, p) in [
-            # (0.01, 0.001), 
-            # (0.02, 0.002), 
-            # (0.03, 0.003), 
-            # (0.04, 0.004), 
-            # (0.05, 0.005),
-            # (0.06, 0.006), 
-            # (0.07, 0.007), 
-            # (0.08, 0.008),
-            # (0.09, 0.009),
+        for (g, p, s, y, x, lum, roi) in [
+            # Constant stellar background
+            # (0.00, 0.000, 'Constant', 0, 0, 0, 0),
+            # (0.05, 0.000, 'Constant', 0, 0, 7, 0),
+            # (0.05, 0.000, 'Constant', 0, 0, 8, 0),
+            # (0.05, 0.000, 'Constant', 0, 0, 9, 0),
 
-            # (0.02, 0.002), 
-            # (0.05, 0.005),
-            # (0.08, 0.008)
+            # Gasussian stellar background
+            # (0.00, 0.000, 'Gaussian', h//2, w//4, 5.5, 128), 
+            # (0.00, 0.005, 'Gaussian', h//2, w//4, 5, 128), 
+            # (0.05, 0.000, 'Gaussian', h//2, w//4, 5.5, 128),
+            # (0.05, 0.005, 'Gaussian', h//2, w//4, 5, 128), 
         ]:
-            
+    
             cnts = []
             err = []
             for _ in range(num_test):
-                img1 = add_gaussian_and_pepper_noise(img0, sigma_g=g, prob_p=p)
-
-                esti_coords = np.array(get_star_centroids(
-                    img1, 
-                    den_meth=den_meth, 
-                    thr_meth=thr_meth, 
-                    seg_meth=seg_meth, 
-                    cen_meth='CoG',
-                    pixel_limit=pixel_num,
-                    connectivity=8
-                ))
+                img1 = add_stellar_noise(img0, method=s, position=(y, x), background=lum, sigma=roi)
+                img2 = add_gaussian_and_pepper_noise(img1, sigma_g=g, prob_p=p)
+                esti_coords = np.array(get_star_centroids(img2, den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num))
 
                 # coords1: correct match
                 # coords2: miss match
@@ -515,7 +518,7 @@ if False:
 
         avg_cnts, avg_err = np.array(avg_cnts), np.array(avg_err)
         print(
-            'Method:', den_meth, seg_meth, thr_meth, pixel_num,
+            'Method:', den_meth, seg_meth, pixel_num,
             # '\nTotal number of stars in test image:', len(real_coords),
             # '\nDetect result:', avg_cnts,
             '\nAverage correct rate:', avg_cnts[:, 0] / len(real_coords) * 100.0,
