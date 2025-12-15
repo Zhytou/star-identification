@@ -2,7 +2,8 @@ import cv2
 import bisect as bis
 import numpy as np
 import scipy.ndimage as ndi
-import skimage.feature as skf
+import skimage.filters as skf
+import skimage.morphology as skm
 
 from utils import get_offsets, cal_doh, cal_ly, cal_sobel, cal_derivative
 
@@ -47,7 +48,7 @@ class UnionSet:
         return self.cnt
 
 
-def cal_threshold(img: np.ndarray, method: str, wind_size: int=5) -> int:
+def cal_threshold(img: np.ndarray, method: str) -> int:
     """
         Calculate the threshold for image segmentation.
     Args:
@@ -68,45 +69,14 @@ def cal_threshold(img: np.ndarray, method: str, wind_size: int=5) -> int:
     """
     h, w = img.shape
 
-    # initialize threshold
-    T = 0
-
     if method == 'Otsu':
-        # use cv2 threshold function to get otsu threshold
-        T, _ = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    elif method == 'Liebe1.8':
-        # calculate the threshold using the mean and standard deviation of multiple windows
+        T = skf.threshold_otsu(img)
+    elif method == 'Liebe3' or method == 'Liebe5':
         mean = np.mean(img)
         std = np.std(img)
-        T = mean + 1.8 * std
-    elif method == 'Liebe2':
-        # calculate the threshold using the mean and standard deviation of multiple windows
-        mean = np.mean(img)
-        std = np.std(img)
-        T = mean + 2 * std
-    elif method == 'Liebe2.5':
-        # calculate the threshold using the mean and standard deviation of multiple windows
-        mean = np.mean(img)
-        std = np.std(img)
-        T = mean + 2.5 * std
-    elif method == 'Liebe3':
-        # calculate the threshold using the mean and standard deviation of multiple windows
-        mean = np.mean(img)
-        std = np.std(img)
-        T = mean + 3 * std
-    elif method == 'Liebe4':
-        # calculate the threshold using the mean and standard deviation of multiple windows
-        mean = np.mean(img)
-        std = np.std(img)
-        T = mean + 4 * std
-    elif method == 'Liebe5':
-        # calculate the threshold using the mean and standard deviation of multiple windows
-        mean = np.mean(img)
-        std = np.std(img)
-        T = mean + 5 * std
+        T = mean + 3 * std if method == 'Liebe3' else mean + 5 * std
     elif method == 'Abutaleb':
-        # average gray level matrix for each pixel's window
-        avg_img = cv2.medianBlur(img, wind_size)
+        avg_img = ndi.uniform_filter(img, size=3)
         
         # get the 2d histogram
         hist = np.zeros((256, 256), dtype=np.float64)
@@ -135,7 +105,7 @@ def cal_threshold(img: np.ndarray, method: str, wind_size: int=5) -> int:
                     S = s
                 print('T', t, 'S', s, 'entropy', entropy)
     else:
-        print('Invalid threshold method!')
+        return np.nan
     
     return T
 
@@ -146,9 +116,9 @@ def enhance_image(img: np.ndarray, method: str, patch_size: int=3):
     Args:
         img: the input image.
         method: the method used to enhance the image.
-            'LCM': local contrast measure
-            'SD': structural difference
-            'GC': gradient concentration
+            'LCM': local contrast measure and other upgraded versions
+            'SDM': structural difference measure
+            'GCM': gradient directional consistency measure
         patch_size: the size of patch
     Return:
         enhanced_img
@@ -156,12 +126,14 @@ def enhance_image(img: np.ndarray, method: str, patch_size: int=3):
     epsilon = 1e-10
 
     h, w = img.shape
+    img = img.astype(np.float64)                                                                # change data type to avoid overflow
     d = patch_size                                                                              # patch size
     r = patch_size // 2                                                                         # half of patch size
     
     padded_img = np.pad(img, ((r, r), (r, r)))                                                  # padded raw image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d)).reshape(h, w, -1)    # raw patches (h, w, d²)
-
+    sorted_patches = np.sort(patches, axis=-1)                                                  # sorted patches (h, w, d²)
+    
     i, j =  np.indices((h, w))
     shift_mask = np.stack(
         [i >= d, i < h - d, j >= d, j < w - d, 
@@ -169,92 +141,176 @@ def enhance_image(img: np.ndarray, method: str, patch_size: int=3):
         (i < h - d) & (j >= d), (i >= d) & (j < w - d),], axis=0)                               # valid shift mask
     shitfs = [(d, 0), (-d, 0), (0, d), (0, -d), (d, d), (-d, -d), (-d, d), (d, -d)]             # shift offsets 
 
-    kth = 1
-    kmax_map = np.partition(patches, d**2 - kth, axis=-1)[..., d**2 - kth]                      # kth max map (h, w)
-    max_map = np.max(patches, axis=-1)                                                          # max map (h, w)
-    mean_map = np.mean(patches, axis=-1)                                                        # mean map (h, w)
-    # dx = cal_derivative(img.astype(float), order=(0, 1), sigma=1)                               # gradient x map (h, w)
-    # dy = cal_derivative(img.astype(float), order=(1, 0), sigma=1)                               # gradient y map (h, w)
-    dx = ndi.sobel(img.astype(float), axis=1)
-    dy = ndi.sobel(img.astype(float), axis=0)
+    kth = 3
+    kmax_map = sorted_patches[..., d**2 - kth]                                                  # kth max map (h, w)
+    max_map = sorted_patches[..., -1]                                                           # max map (h, w)
 
-    smean_map = np.stack([np.roll(mean_map, shift, axis=(0, 1)) for shift in shitfs])           # shifted mean map(neighbor patches' mean) (8, h, w)
-    spatches = np.stack([np.roll(patches, shift, axis=(0, 1)) for shift in shitfs])             # shifted patches (8, h, w, d²)
+    trim = 2
+    tmean_map = np.mean(sorted_patches[..., trim:-trim], axis=-1)                               # trimmed mean map
+    mean_map = np.mean(patches, axis=-1)                                                        # mean map (h, w)
+    
+    # dx = cal_derivative(img, order=(0, 1), sigma=1)                                           # gradient x map (h, w)
+    # dy = cal_derivative(img, order=(1, 0), sigma=1)                                           # gradient y map (h, w)
+    dx = ndi.sobel(img, axis=1)
+    dy = ndi.sobel(img, axis=0)
+
+    shifted_mean_map = np.stack([np.roll(mean_map, shift, axis=(0, 1)) for shift in shitfs])    # shifted mean map(neighbor patches' mean) (8, h, w)
+    shifted_mean_map = np.maximum(shifted_mean_map, epsilon)
+    shifted_tmean_map = np.stack([np.roll(tmean_map, shift, axis=(0, 1)) for shift in shitfs])  # shifted trimmed mean map(neighbor patches' mean) (8, h, w)
+    shifted_tmean_map = np.maximum(shifted_tmean_map, epsilon)
+    shifted_patches = np.stack([np.roll(patches, shift, axis=(0, 1)) for shift in shitfs])      # shifted patches (8, h, w, d²)
 
     enhanced_img = np.zeros_like(img, dtype=np.float64)
-    if method == 'LCM':        
-        local_contrast = np.where(shift_mask, max_map[None, ...] / smean_map, np.nan)           # local contrast measure
-        enhanced_img = np.nanmin(local_contrast, axis=0)                                        # enhanced image based on local contrast measure
-    elif method == 'SD':         
-        similarity = np.where(shift_mask, np.linalg.norm(patches[None, ...] - spatches, axis=-1) / smean_map, np.nan) # euclidean difference (8, h, w)
-        enhanced_img = np.nanmax(similarity, axis=0)                                            # enhanced image based on structural difference
-    elif method == 'GC':
-        x, y = np.indices((d, d))                                                           
-        radial = np.stack([x - r, y - r], axis=-1)                                              # radial vectors (d, d, 2)
-        radial = radial / np.maximum(np.linalg.norm(radial, axis=-1, keepdims=True), epsilon)   # normalized radial vectors, namely radial directional vectors (d, d, 2)
+    if method == 'LCM':
+        'A Local Contrast Method for Small  Infrared Target Detection http://ieeexplore.ieee.org/document/6479296/'
+        measure = max_map[None, ...]**2 / shifted_mean_map                                      # local contrast measure (8, h, w)
+        enhanced_img = np.nanmin(np.where(shift_mask, measure, np.nan),axis=0)                  # enhanced image based on local contrast measure
+    elif method == 'ILCM':
+        'A Robust Infrared Small Target Detection Algorithm  Based on Human Visual System https://ieeexplore.ieee.org/document/6819810/'
+        measure = max_map[None, ...] * mean_map[None, ...] / shifted_mean_map                   # improved local contrast measure (8, h, w)
+        enhanced_img = np.nanmin(np.where(shift_mask, measure, np.nan),axis=0)                  # enhanced image based on improved local contrast measure
+    elif method == 'NLCM':
+        'Effective Infrared Small Target Detection Utilizing a Novel Local Contrast Method http://ieeexplore.ieee.org/document/7725517/'
+        kmean_map = np.mean(sorted_patches[..., -kth:], axis=-1)                                 # kth mean map (h, w)
+        kvar_map = np.sum((sorted_patches[..., -kth:] - kmean_map[..., None])**2, axis=-1)       # kth variance map (h, w)
+        shifted_kmean_map = np.stack([np.roll(kmean_map, shift, axis=(0, 1)) for shift in shitfs]) # shifted kth mean map(neighbor patches' mean) (8, h, w)
+        measure = kmean_map[None, ...] * kvar_map[None, ...] / np.maximum(shifted_kmean_map, epsilon)
+        enhanced_img = np.nanmin(np.where(shift_mask, measure, np.nan),axis=0)                  # enhanced image based on novel local contrast measure
+    elif method == 'SDM':         
+        measure = np.linalg.norm(patches[None, ...] - shifted_patches, axis=-1) / shifted_mean_map # euclidean difference measure (8, h, w)
+        enhanced_img = np.nanmin(np.where(shift_mask, measure, np.nan),axis=0)                  # enhanced image based on structural difference measure
+    elif method == 'GCM':
+        y, x = np.indices((d, d))                                                               # !careful first row index, then column index
+        radial = np.stack([r - x, r - y], axis=-1)                                              # radial vectors (d, d, 2)
+        rnorm = np.linalg.norm(radial, axis=-1, keepdims=True)                                  # radial vectors' norm
+        radial = radial / np.maximum(rnorm, epsilon)                                            # normalized radial vectors, namely radial directional vectors (d, d, 2)
 
         peak_mask = max_map == img                                                              # mask of peak values
         pdx, pdy = np.pad(dx, ((r, r), (r, r))), np.pad(dy, ((r, r), (r, r)))                   # padded gradient x and gradient y map (h, w, d, d)
         tdx = np.lib.stride_tricks.sliding_window_view(pdx, (d, d))[peak_mask]                  # gradient x map of possible targets (n, d, d)    
         tdy = np.lib.stride_tricks.sliding_window_view(pdy, (d, d))[peak_mask]                  # gradient y map of possible targets (n, d, d)    
-        tdx[:, x < r], tdy[:, y < r] = -tdx[:, x < r], -tdy[:, y < r]
         gradient = np.stack([tdx, tdy], axis=-1)                                                # gradient map of possible targets (n, d, d, 2)
-        gradient = gradient / np.maximum(np.linalg.norm(gradient, axis=-1, keepdims=True), epsilon) # normalized gradient vectors, namely gradient directional vectors (n, d, d, 2)
-
+        gnorm = np.linalg.norm(gradient, axis=-1, keepdims=True)                                # gradient norm
+        gradient = gradient / np.maximum(gnorm, epsilon)                                        # normalized gradient vectors, namely gradient directional vectors (n, d, d, 2)
         dot_product = np.sum(gradient * radial[None, ...], axis=-1)                             # dot product (n, d, d)
-        concentration = np.sum(dot_product, axis=(-1, -2))
-        enhanced_img[peak_mask] = concentration 
+        
+        measure = np.zeros_like(img, dtype=np.float64)                                          # gradient consistency measure
+        measure[peak_mask] = np.sum(dot_product, axis=(-1, -2)) / (d**2 - 1)                                           
+        measure = skm.dilation(measure, footprint=np.ones((d, d)))
+        enhanced_img = measure * np.nanmin(np.where(shift_mask, kmax_map[None, ...] / shifted_tmean_map, np.nan), axis=0)
+    elif method == 'Top-Hat':
+        selem = skm.rectangle(d, d)                                                             # structural element
+        enhanced_img = skm.white_tophat(img, footprint=selem)                                   # enhanced image based on white top-hat
     else: # method == 'None'
         enhanced_img = img
     
     return enhanced_img
 
 
-def gen_seeds(img: np.ndarray, method: str, threshold: int=0, size: int=5, connectivity: int=4) -> tuple[int, np.ndarray]:
+def enhance_image_multiscale(img: np.ndarray, method: str, patch_sizes: list[int]):
     '''
-        Generate seeds for region growth algorithm.
-    Args:
-        img: the image to be processed
-        threshold: the threshold for operator results
-    Returns:
-        seeds: the coordinates and labels of the seeds
+        Enhance the image under multiscale.
     '''
+    enhanced_imgs = np.stack([enhance_image(img, method, size) for size in patch_sizes])
 
-    d = size
-    r = size // 2
-    padded_img = np.pad(img, ((r, r), (r, r)), mode='constant')                 # padded image
+    return np.max(enhanced_imgs, axis=0)
+
+
+def region_grow(img1: np.ndarray, img2: np.ndarray, opt_meth: str, thr_meth: str, threshold: int=0, patch_size: int=5, wind_size: int=25, connectivity: int=4, steps: int=4) -> tuple[int, np.ndarray]:
+    '''
+        Do region grow .
+    Args:
+        img1: the input image for seed detection
+        img2: the input image for region growing 
+        opt_meth: the method of operator
+        thr_meth: the method of threshol
+        threshold: the threshold for operator results
+        patch_size: the size used for operator calculation
+        wind_size: the size used for local threshold calculation
+    Returns:
+        n: number of seeds
+        seeds: the coordinates and labels of the seeds
+        bimg: binary image
+    '''
+    assert img1.shape == img2.shape
+
+    h, w = img1.shape
+    d = patch_size
+    r = patch_size // 2
+    padded_img = np.pad(img1, ((r, r), (r, r)), mode='constant')                # padded image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))      # image patches (h, w, d, d)
 
     ## 1. Preselect
     #! only use maximum_filter, because the background threshold might be too high under starry light interference
-    mask = img == ndi.maximum_filter(img, size=5)                               # possible seed mask (h, w)
+    mask = np.max(patches, axis=(-2, -1)) == img1                               # possible seed mask (h, w)
+    if d >= 5:                                                                  # check the mean gray of inner ring is higher than the outter one
+        rr = d // 4
+        inner = np.zeros((d, d), dtype=bool)
+        inner[r-rr:r+rr+1, r-rr:r+rr+1] = True
+        
+        omean = np.mean(patches[..., ~inner], axis=-1)                          # outer ring mean map
+        inner[r, r] = False                                                     # exclude central pixel
+        imean = np.mean(patches[..., inner], axis=-1)                           # inner ring mean map 
+        
+        mask = mask & (imean - 1.2 * omean > 0)
     coords = np.argwhere(mask)                                                  # coordinates of possible seed (n, 2)
 
-    # test
-    # x, y = 402, 279
-    # idx = np.where(np.flatnonzero(mask) == x*512+y)[0]
-    # mask = coords[:, 0] == 402
-    # print(seeds[mask])
-
     ## 2. Double check with different operators 
-    if method == 'DOH':
+    if opt_meth == 'DOH':
         doh = cal_doh(patches[mask], sigma=1)                                   # determination of hessian results (n, d, d)
-        off = get_offsets(connectivity)                                         # offsets (4, 2)
+        off = get_offsets(connectivity)                                         # offsets (4, 2) or (8, 2)
         max_val = np.max(doh[:, r + off[:, 0], r + off[:, 1]], axis=-1)         # maximum of neighbors (n, )
         valid = doh[:, r, r] > max_val
-    elif method == 'LY':
+    elif opt_meth == 'LY':
         # https://doi.org/10.16251/j.cnki.1009-2307.2012.01.033
         pass
-    else: # method == 'SOBEL' 
+    else: # opt_meth == 'SOBEL' 
         # https://doi.org/10.27060/d.cnki.ghbcu.2020.001632
         pass
 
     ## 3. Generate unique label for each seed
-    coords = coords[valid]
-    labels = np.arange(1, len(coords)+1).reshape(-1, 1)
-    n, seeds = merge_seeds(np.hstack([coords, labels]))
+    coords = coords[valid]                                                      # coordinates of selected seeds (_, 2)
+    labels = np.arange(1, len(coords)+1).reshape(-1, 1)                         # initilize labels for each seeds (_, 1)
+    n, seeds = merge_seeds(np.hstack([coords, labels]))                         # merge the label of connected seeds (_, 3)
 
-    return n, seeds
+    ## 4. Gnerate binary image for later growth
+    binary_img = np.zeros((h, w), dtype=np.uint32)
+    if wind_size >= 5 * patch_size: # use local threshold if flag is True
+        rr = wind_size // 2
+
+        y, x = coords[:, 0], coords[:, 1]
+        ymin, ymax = np.maximum(0, y - rr), np.minimum(h, y + rr + 1)           # top and bottom boundary
+        xmin, xmax = np.maximum(0, x - rr), np.minimum(w, x + rr + 1)           # left and right boundary
+
+        for y1, y2, x1, x2 in zip(ymin, ymax, xmin, xmax):    
+            threshold = cal_threshold(img2[y1:y2, x1:x2], thr_meth)
+            binary_img[y1:y2, x1:x2] = img2[y1:y2, x1:x2] > threshold
+    else:
+        threshold = cal_threshold(img2, thr_meth)
+        binary_img[img2 > threshold] = 1
+
+    ## 5. Retain only foreground seeds
+    mask = binary_img[seeds[:, 0], seeds[:, 1]] == 1
+    seeds = seeds[mask]
+
+    ## 6. Do region growth on binary image, namely breadth first search
+    trace = [seeds]
+    off = np.hstack([get_offsets(connectivity), np.zeros((connectivity, 1), dtype=int)])  # offsets (4, 3) or (8, 3)
+    while steps > 0:                                                            # maximum search steps
+        assert np.all(binary_img[seeds[:, 0], seeds[:, 1]] == 1)                # must be foreground seeds
+        binary_img[seeds[:, 0], seeds[:, 1]] = 0                                # set to visited
+
+        seeds = np.reshape(seeds[:, None, :] + off, (-1, 3))                    # get the neighboring seeds (4 * n, 3) or (8 * n, 3)
+        mask = (seeds[:, 0] >= 0) & (seeds[:, 0] < h) & (seeds[:, 1] >= 0) & (seeds[:, 1] < w) # boundary check
+        seeds = seeds[mask]
+
+        mask = binary_img[seeds[:, 0], seeds[:, 1]] == 1                        # !careful must validate foreground pixels only after bounds check; otherwise, binary_img[seeds] may raise IndexError for out-of-range coordinates.
+        seeds = seeds[mask]
+
+        trace.append(seeds)                                                     # add current seeds to search trace
+        steps -= 1
+
+    return n, np.concatenate(trace)
 
 
 def merge_seeds(seeds: np.ndarray):
@@ -262,8 +318,8 @@ def merge_seeds(seeds: np.ndarray):
         Merge possible connected seeds.
     '''
 
-    n = len(seeds)
-    tab = UnionSet(n)
+    tot = len(seeds)
+    tab = UnionSet(tot)
 
     for seed in seeds:
         x, y, _ = seed
@@ -300,51 +356,6 @@ def merge_seeds(seeds: np.ndarray):
     return cnt, seeds
 
 
-def region_grow(img: np.ndarray, seeds: np.ndarray, connectivity: int=4, steps: int=4) -> np.ndarray:
-    '''
-        Region grow the image.(Careful, binary image will change)
-    '''
-    assert seeds.shape[1] == 3
-
-    # img size
-    h, w = img.shape
-
-    # offsets
-    offsets = get_offsets(connectivity)                                     # (connectivity, 2)
-    offsets = np.hstack([offsets, np.zeros((connectivity, 1), dtype=int)])  # (connectivity, 3)
-
-    mask = img[seeds[:, 0], seeds[:, 1]] == 1
-    seeds = seeds[mask]
-
-    # breadth first search
-    trace = [seeds]
-    
-    # maximum search steps
-    while steps > 0 and len(seeds) > 0:
-        # set to visited
-        assert np.all(img[seeds[:, 0], seeds[:, 1]] == 1)
-        img[seeds[:, 0], seeds[:, 1]] = 0
-
-        # get the neighboring seeds
-        seeds = seeds[:, None, :] + offsets # (n, 4, 3)
-        seeds = seeds.reshape(-1, 3) # (4*n, 3)
-
-        # boundary check
-        mask = (seeds[:, 0] >= 0) & (seeds[:, 0] < h) & (seeds[:, 1] >= 0) & (seeds[:, 1] < w) #(4*n, )
-        seeds = seeds[mask]
-
-        # candidate check
-        mask = img[seeds[:, 0], seeds[:, 1]] == 1
-        seeds = seeds[mask]
-
-        # add to search trace
-        trace.append(seeds)
-
-        steps -= 1
-
-    return np.concatenate(trace)
-
-
 def connected_components_label(img: np.ndarray, connectivity: int=4) -> tuple[int, np.ndarray]:
     '''
         Label the connected components in the image.
@@ -353,7 +364,7 @@ def connected_components_label(img: np.ndarray, connectivity: int=4) -> tuple[in
 
     # initialize the label image
     # avoid using int8(overflow)
-    label_img = np.zeros_like(img, dtype=np.int32)
+    label_img = np.zeros_like(img, dtype=np.uint32)
     label_cnt = 0
     label_tab = UnionSet()
 
@@ -526,20 +537,20 @@ def group_star(img: np.ndarray, method: list[str], connectivity: int=4, pixel_li
         group_coords: the coordinates of the grouped pixels(which are the potential stars)
     """
     ehc_meth, thr_meth, lab_meth, opt_meth = method
-
-    binary_img = np.zeros_like(img, dtype=np.uint8)
-    enhanced_img = enhance_image(img, ehc_meth, patch_size=7)
+    
+    binary_img = np.zeros_like(img, dtype=np.uint32)
+    enhanced_img = enhance_image(img, ehc_meth, patch_size=5)
+    # enhanced_img = enhance_image_multiscale(img, ehc_meth, patch_sizes=[3, 5, 7, 9])
+    
     ethreshold = cal_threshold(enhanced_img, thr_meth)
-    binary_img[enhanced_img > ethreshold] = 1
-
-    print(ethreshold, enhanced_img[402-2:402+3, 279-2:279+3])
+    binary_img[enhanced_img > ethreshold] = 1 # except RG-based methods might use local thresholds                              
+    print('The global threshold of enhanced image:', ethreshold)
 
     group_coords = []
     # label connected regions of the same value in the binary image
-    if lab_meth == 'RG' or lab_meth == 'RGE':
+    if lab_meth == 'RG':
         # region growth on enhanced image
-        n, seeds = gen_seeds(enhanced_img, opt_meth) if lab_meth == 'RGE' else gen_seeds(img, opt_meth)
-        trace = region_grow(binary_img, seeds)
+        n, trace = region_grow(img, enhanced_img, opt_meth, thr_meth, patch_size=5, wind_size=25)
 
         # get group coords for each root seed
         for i in range(1, n+1): 
