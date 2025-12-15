@@ -4,7 +4,7 @@ import numpy as np
 import timeit
 from math import radians
 
-from simulate import create_star_image, add_gaussian_and_pepper_noise, get_stellar_intensity
+from simulate import create_star_image, add_gaussian_and_pepper_noise, add_stellar_noise, get_stellar_intensity
 from denoise import denoise_image, denoise_with_blf
 from detect import group_star, cal_threshold
 from extract import get_star_centroids
@@ -106,9 +106,10 @@ background=9
 psf=1
 roi=3
 save=True
+d=128
 
 # 星图降噪效果测试（质量指标比较）
-if True:
+if False:
     img0, stars = create_star_image(
         ra, de, roll, 
         w=w, 
@@ -139,18 +140,17 @@ if True:
             os.makedirs(f'{dir}/{g}_{p}', exist_ok=True)
             os.makedirs(f'{dir}/{g}_{p}/scale', exist_ok=True)
 
-        img1 = add_gaussian_and_pepper_noise(img0, g, p, clipped=False)
+        img1 = add_gaussian_and_pepper_noise(img0, g, p, clipped=True)
         for method in [
             # 'ORINGINAL',
             'NOISED', 
             # 'MEDIAN', 'MEAN', 'GAUSSIAN,
-            # 'BLF', 'NLM', 'AMF', 'WAVELET',
-            # 'NLM',
+            'BLF', 'NLM', 'AMF', 'WAVELET',
             # 'NLM_BLF',
             # 'EMF',
             # 'CWM', 
             # 'CMG',
-            'CNB', 
+            # 'CNB', 
         ]:
             if method == 'ORINGINAL':
                 img2 = img0
@@ -255,6 +255,29 @@ def label_image(img: np.ndarray, coords: np.ndarray, color: tuple=(0, 255, 0),  
     return img
 
 
+def find_miss_idxs(coords: np.ndarray, miss_coords: np.ndarray, atol: float=1e-8, rtol: float=1e-5):
+    '''
+        Find the indexs of missing coordinates.
+    '''
+    # broadcast comparison
+    mask = np.isclose(
+        coords[:, None, :],             # shape (n, 1, 2)
+        miss_coords[None, :, :],        # shape (1, m, 2)
+        atol=atol,                      # absolute error
+        rtol=rtol                       # relative error
+    )                                   # shape (n, m, 2)
+    
+    # a match exists if both x and y are close
+    mask = np.all(mask, axis=-1)    # shape (n, m)
+    matched = np.any(mask, axis=0)  # shape (m, )
+    
+    # return the indexs of miss_coords in the coods
+    idxs = np.full(len(miss_coords), -1)
+    idxs[matched] = np.argmax(mask[:, matched], axis=0)
+
+    return idxs
+
+
 # DoH算子效果
 if False:
     img = np.array([
@@ -312,16 +335,15 @@ if False:
 ra, de, roll=radians(25.0588), radians(-21.7205), radians(0)
 limit_mag=5.9
 fov=20
-background=9
 psf=1
 roi=3
-save=False
+save=True
 
 
 # 星点检测作图
-if False:
+if True:
     dir = 'res/chapter3/detect'
-    
+
     img0, stars = create_star_image(
         ra, de, roll,
         h=h,
@@ -329,49 +351,73 @@ if False:
         fovx=fov, 
         fovy=fov, 
         limit_mag=limit_mag, 
-        background=background,
+        background=np.nan,
         sigma_psf=psf,
         roi=roi
     )
     real_coords = stars[:, 1:3]
 
-    for den_meth, thr_meth, seg_meth, pixel_num in [
-        ('GAUSSIAN', 'Otsu', 'DCCL', 12),
-        # ('MEDIAN', 'Liebe3', 'CCL', 5),
-        # ('MEDIAN', 'Liebe3', 'RG_LY', 5),
-        # ('NONE', 'Liebe3', 'RG_SOBEL', 3),
-        ('CNB', 'Liebe3', 'RG_DOH', 5),
-        ('CNB', 'Liebe3', 'RG_LY', 5),
-        ('CNB', 'Liebe3', 'RG_SOBEL', 5),
+    for den_meth, seg_meth, pixel_num in [
+        # CCL-Based
+        ('None', ['LCM',  'Liebe3', 'CCL', 'None'], 3),
+        # ('None', ['ILCM',  'Liebe3', 'CCL', 'None'], 3),
+        # ('None', ['NLCM',  'Liebe3', 'CCL', 'None'], 3),
+        # ('None', ['GCM',  'Liebe3', 'CCL', 'None'], 3),
+
+        # RG-Based
+        # ('None', ['None', 'Liebe3', 'RG',  'DOH'], 3),
+        ('None', ['LCM',  'Liebe3', 'RG',  'DOH'], 3),
+        # ('None', ['SDM',  'Liebe3', 'RG',  'DOH'], 3),
+        # ('None', ['GCM',  'Liebe3', 'RG', 'DOH'], 3),
     ]:
-        for (g, p) in [
-            (0.00, 0.000), 
-            (0.02, 0.002), 
-            (0.05, 0.005), 
-            (0.08, 0.008), 
+        for (g, p, s, y, x, lum, roi) in [
+            # Constant stellar background
+            # (0.00, 0.000, 'Constant', 0, 0, 0, 0),
+            (0.05, 0.000, 'Constant', 0, 0, 7, 0),
+            (0.05, 0.000, 'Constant', 0, 0, 8, 0),
+            (0.05, 0.000, 'Constant', 0, 0, 9, 0),
+
+            # Gasussian stellar background
+            # (0.00, 0.000, 'Gaussian', h//2, w//4, 5.5, 128), 
+            # (0.00, 0.005, 'Gaussian', h//2, w//4, 5, 128), 
+            # (0.05, 0.000, 'Gaussian', h//2, w//4, 5.5, 128),
+            # (0.05, 0.005, 'Gaussian', h//2, w//4, 5, 128), 
+
+            # Linear stellar background
+            # (0.00, 0.000, 'Linear_X', 0, 0, 5.3, 128), 
         ]:
             if save:
-                os.makedirs(f'res/chapter3/detect/{g}_{p}', exist_ok=True)
-            
-            img1 = add_gaussian_and_pepper_noise(img0, sigma_g=g, prob_p=p)
-            esti_coords = np.array(get_star_centroids(img1, den_meth, thr_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num))
+                os.makedirs(f'{dir}/{g}_{p}_{s}_{x}_{y}_{lum}_{roi}', exist_ok=True)
+
+            img1 = add_stellar_noise(img0, method=s, position=(y, x), background=lum, sigma=roi)
+            img2 = add_gaussian_and_pepper_noise(img1, sigma_g=g, prob_p=p)
+            esti_coords = np.array(get_star_centroids(img2, den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num))
 
             # coords1: correct match
             # coords2: miss match
             # coords3: false match
             _, coords1, coords2, coords3 = find_overlap_and_unique(real_coords, esti_coords, 4)       
-            img1 = cv2.cvtColor(img1, cv2.COLOR_GRAY2BGR)
-            img1 = label_image(img1, coords1, (0, 255, 0))
-            img1 = label_image(img1, coords2, (255, 0, 0))
-            img1 = label_image(img1, coords3, (0, 0, 255))
+            img2 = cv2.cvtColor(img2, cv2.COLOR_GRAY2BGR)
+            img2 = label_image(img2, coords1, (0, 255, 0))
+            img2 = label_image(img2, coords2, (255, 0, 0))
+            img2 = label_image(img2, coords3, (0, 0, 255))
 
+            miss_idxs = find_miss_idxs(real_coords, coords2)
             print(
-                # '\nMiss coordinates:\n', coords2
-                # '\nFalse coordinates:\n', coords3
+                'Deviation of Gaussian Noise:', g,
+                'Probability of Salt-Pepper Noise:', p,
+                '\nSegmentation Method:', seg_meth,
+                '\nNumber of Miss Stars:', len(coords2),
+                '\nNumber of False Stars:', len(coords3)
+                # '\nMiss:\n', 
+                # stars[miss_idxs, :3].astype(int),
+                # '\nFalse:\n', 
+                # coords3.astype(int)
             )
 
             if save:
-                cv2.imwrite(f'res/chapter3/detect/{g}_{p}/{den_meth}_{thr_meth}_{seg_meth}.png', img1)
+                seg_meth_full = '_'.join(seg_meth)
+                cv2.imwrite(f'{dir}/{g}_{p}_{s}_{x}_{y}_{lum}_{roi}/{den_meth}_{seg_meth_full}.png', img2)
 
     if save:
         img0 = cv2.cvtColor(img0, cv2.COLOR_GRAY2BGR)
