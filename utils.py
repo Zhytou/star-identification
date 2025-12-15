@@ -7,6 +7,7 @@ from matplotlib.patches import Circle
 from mpl_toolkits.mplot3d import Axes3D
 from astropy import units as u
 from astropy.coordinates import SkyCoord
+from scipy.ndimage import gaussian_filter
 from skimage.metrics import mean_squared_error, peak_signal_noise_ratio, structural_similarity
 
 
@@ -42,64 +43,80 @@ def gen_combos(n: int, k: int):
     return combos
 
 
-def cal_doh(img: np.ndarray, x: np.ndarray|int, y: np.ndarray|int, d: int):
+def cal_derivative(img: np.ndarray, order: tuple[int, int], sigma: float):
+    '''
+        Calculate derivative of an image with gaussian filter.
+    '''
+    assert img.ndim == 2 or img.ndim == 3
+
+    return gaussian_filter(img, sigma=sigma, order=order, axes=(-2, -1))
+
+
+def cal_doh(img: np.ndarray, sigma: float):
     '''
         Calculate determination of hessian.
     '''
-    img = img.astype(float)
+    assert img.ndim == 2 or img.ndim == 3
 
-    dxx = (img[x-d, y] + img[x+d, y] - 2*img[x, y]) / d
-    dyy = (img[x, y-d] + img[x, y+d] - 2*img[x, y]) / d
-    dxy = (img[x-d, y-d] + img[x+d, y+d] - img[x-d, y+d] - img[x+d, y-d]) / d
+    # change image data type to avoid overflow
+    fimg = img.astype(np.float64)
 
-    return dxx*dyy-dxy**2
+    # use gaussian filter to get second derivative
+    dxx = cal_derivative(fimg, order=(0, 2), sigma=sigma)
+    dyy = cal_derivative(fimg, order=(2, 0), sigma=sigma)
+    dxy = cal_derivative(fimg, order=(1, 1), sigma=sigma)
 
-
-def cal_robert(img: np.ndarray, x: np.ndarray|int, y: np.ndarray|int):
-    '''
-        Calculate robert operator result.
-    '''
-    img = img.astype(float)
-
-    dx = img[x+1, y]-img[x, y]
-    dy = img[x, y+1]-img[x, y]
-    
-    return dx, dy
+    # retun determination
+    return dxx * dyy - dxy**2
 
 
-def cal_ly(img: np.ndarray, x: np.ndarray|int, y: np.ndarray|int, d: int):
+def cal_ly(img: np.ndarray, sigma: float):
     '''
         Calculate the ly operator result.
     '''
-    r = d//2
+    assert img.ndim == 2 or img.ndim == 3
 
-    xx, yy = np.meshgrid(np.arange(-r, r+1), np.arange(-r, r+1))    # (r, r)
-    x, y = x[:, None, None]+xx[None, ...], y[:, None, None]+yy[None, ...]         # (n, r, r)
-    dx, dy = cal_robert(img, x, y)                               
+    # change image data type to avoid overflow
+    fimg = img.astype(np.float64)
 
-    det = np.sum(dx**2, axis=(1, 2))*np.sum(dy**2, axis=(1, 2))-np.sum(dx*dy, axis=(1, 2))**2
-    tr = np.maximum(np.sum(dx**2 + dy**2, axis=(1, 2)), 1e-10)
+    # construct gradient covariance matrix with first derivatives
+    dx = cal_derivative(fimg, order=(0, 1), sigma=sigma)
+    dy = cal_derivative(fimg, order=(1, 0), sigma=sigma)
 
-    q = 4*det/(tr**2)
-    w = det/tr
+    dx2 = dx * dx
+    dy2 = dy * dy
+    dxy = dx * dy
+    
+    # sum up dx2, dy2, dxy of area by gaussian filter
+    # gcm = np.array([[adx2, adxy], [adxy, ady2]])
+    adx2 = gaussian_filter(dx2, sigma=sigma, axes=(-2, -1))
+    ady2 = gaussian_filter(dy2, sigma=sigma, axes=(-2, -1))
+    adxy = gaussian_filter(dxy, sigma=sigma, axes=(-2, -1))
+
+    # compute trace and determinant of the 2x2 structure tensor at every pixel
+    tr = adx2 + ady2
+    det = adx2 * ady2 - adxy * adxy
+
+    # avoid division by zero
+    eps = np.finfo(np.float64).eps  # ~2.2e-16
+
+    # compute LY features
+    q = 4.0 * det / (tr * tr + eps) # anisotropy measure
+    w = det / (tr + eps)            # strength of the local structure
 
     return q, w
 
 
-def cal_sobel(img: np.ndarray, x: np.ndarray|int, y: np.ndarray|int):
+def cal_sobel(img: np.ndarray, sigma: float):
     '''
-        Calculate the sobel operator result.
+        Calculate the ly operator result.
     '''
-    d0 = img[x+1, y-1]+2*img[x+1, y]+img[x+1, y+1] - (img[x-1, y-1]+2*img[x-1, y]+img[x-1, y+1])
-    d45 = img[x, y+1]+2*img[x+1, y+1]+img[x+1, y] - (img[x, y-1]+2*img[x-1, y-1]+img[x-1, y])
-    d90 = img[x-1, y+1]+2*img[x, y+1]+img[x+1, y+1] - (img[x-1, y-1]+2*img[x, y-1]+img[x+1, y-1])
-    d135 = img[x-1, y]+2*img[x-1, y+1]+img[x, y+1] - (img[x+1, y]+2*img[x+1, y-1]+img[x, y-1])
-    d180 = img[x-1, y-1]+2*img[x-1, y]+img[x-1, y+1] - (img[x+1, y-1]+2*img[x+1, y]+img[x+1, y+1])
-    d225 = img[x, y-1]+2*img[x-1, y-1]+img[x-1, y] - (img[x, y+1]+2*img[x+1, y+1]+img[x+1, y])
-    d270 = img[x-1, y-1]+2*img[x, y-1]+img[x+1, y-1] - (img[x-1, y+1]+2*img[x, y+1]+img[x+1, y+1])
-    d315 = img[x+1, y]+2*img[x+1, y-1]+img[x, y-1] - (img[x-1, y]+2*img[x-1, y+1]+img[x, y+1])
+    assert img.ndim == 2 or img.ndim == 3
+    
+    dx = cal_derivative(img, order=(0, 1), sigma=1)
+    dy = cal_derivative(img, order=(1, 0), sigma=1)
 
-    return np.vstack([d0, d45, d90, d135, d180, d225, d270, d315]).transpose()
+    return np.hypot(dx, dy)
 
 
 def find_overlap_and_unique(A: np.ndarray, B: np.ndarray, eps: float=2):
@@ -294,7 +311,7 @@ def convert_rade2deg(ra: float, dec: float):
 
 def draw_gray_3d(img: np.ndarray):
     '''
-        Draw the 3D gray image.
+        Draw the gray image in 3 dimension.
     Args:
         img: the image to be processed
     '''

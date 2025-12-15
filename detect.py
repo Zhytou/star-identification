@@ -256,17 +256,16 @@ def region_grow(img1: np.ndarray, img2: np.ndarray, opt_meth: str, thr_meth: str
     coords = np.argwhere(mask)                                                  # coordinates of possible seed (n, 2)
 
     ## 2. Double check with different operators 
-    if opt_meth == 'DOH':
-        doh = cal_doh(patches[mask], sigma=1)                                   # determination of hessian results (n, d, d)
-        off = get_offsets(connectivity)                                         # offsets (4, 2) or (8, 2)
-        max_val = np.max(doh[:, r + off[:, 0], r + off[:, 1]], axis=-1)         # maximum of neighbors (n, )
-        valid = doh[:, r, r] > max_val
-    elif opt_meth == 'LY':
+    off = get_offsets(connectivity)                                             # offsets (4, 2) or (8, 2)
+    if opt_meth == 'DOH' or opt_meth == 'LY':
         # https://doi.org/10.16251/j.cnki.1009-2307.2012.01.033
-        pass
+        vals = cal_doh(patches[mask], sigma=1) if opt_meth == 'DOH' else cal_ly(patches[mask], sigma=1)[0] # operator results (n, d, d)
+        max_val = np.max(vals[:, r + off[:, 0], r + off[:, 1]], axis=-1)        # maximum of neighbors (n, )
+        valid = vals[:, r, r] > max_val
     else: # opt_meth == 'SOBEL' 
         # https://doi.org/10.27060/d.cnki.ghbcu.2020.001632
-        pass
+        vals = cal_sobel(patches[mask], sigma=1)
+        valid = vals[:, r, r] > threshold
 
     ## 3. Generate unique label for each seed
     coords = coords[valid]                                                      # coordinates of selected seeds (_, 2)
