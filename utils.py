@@ -7,32 +7,8 @@ from matplotlib.patches import Circle
 from mpl_toolkits.mplot3d import Axes3D
 from astropy import units as u
 from astropy.coordinates import SkyCoord
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import maximum_filter, gaussian_filter
 from skimage.metrics import mean_squared_error, peak_signal_noise_ratio, structural_similarity
-
-
-def get_offsets(connectivity: int, roi: int=1):
-    '''
-        Get neighbor offsets based on connectivity (4 or 8).
-    '''
-    if connectivity == 4 and roi == 1:
-        offsets = np.array([[0, 1], [0, -1], [1, 0], [-1, 0]], dtype=int)
-    elif connectivity == 8 and roi ==1:
-        offsets = np.array([[0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [1, -1], [-1, 1], [-1, -1]], dtype=int)
-    elif connectivity == 4 and roi == 2:
-        offsets = np.array([[0, 1], [0, -1], [1, 0], [-1, 0],
-                            [0, 2], [0, -2], [2, 0], [-2, 0]], dtype=int)
-    elif connectivity == 8 and roi ==2:
-        offsets = np.array([[0, 1], [0, -1], [1, 0], [-1, 0],
-                            [0, 2], [0, -2], [2, 0], [-2, 0],
-                            [1, 1], [1, -1], [-1, 1], [-1, -1],
-                            [2, 2], [2, -2], [-2, 2], [-2, -2],
-                            [2, 1], [2, -1], [-2, 1], [-2, -1],
-                            [1, 2], [-1, 2], [1, -2], [-1, -2]], dtype=int)
-    else:
-        print('wrong connectivity!')
-    
-    return offsets
 
 
 def gen_combos(n: int, k: int):
@@ -70,6 +46,20 @@ def cal_doh(img: np.ndarray, sigma: float):
     return dxx * dyy - dxy**2
 
 
+def cal_log(img: np.ndarray, sigma: float):
+    '''
+        Calculate laplacian of gaussian.
+    '''
+    assert img.ndim == 2 or img.ndim == 3
+
+    # use gaussian filter to get second derivative
+    dxx = cal_derivative(img, order=(0, 2), sigma=sigma)
+    dyy = cal_derivative(img, order=(2, 0), sigma=sigma)
+
+    # retun determination
+    return dxx + dyy
+
+
 def cal_ly(img: np.ndarray, sigma: float):
     '''
         Calculate the ly operator result.
@@ -85,7 +75,7 @@ def cal_ly(img: np.ndarray, sigma: float):
     dxy = dx * dy
     
     # sum up dx2, dy2, dxy of area by gaussian filter
-    # gcm = np.array([[adx2, adxy], [adxy, ady2]])
+    # gradient covariance matrix = np.array([[adx2, adxy], [adxy, ady2]])
     adx2 = gaussian_filter(dx2, sigma=sigma, axes=(-2, -1))
     ady2 = gaussian_filter(dy2, sigma=sigma, axes=(-2, -1))
     adxy = gaussian_filter(dxy, sigma=sigma, axes=(-2, -1))
@@ -114,6 +104,36 @@ def cal_sobel(img: np.ndarray, sigma: float):
     dy = cal_derivative(img, order=(1, 0), sigma=1)
 
     return np.hypot(dx, dy)
+
+
+def cal_gcm(img: np.ndarray, size: int=5):
+    '''
+        Calculate gradient consistency measure.
+    '''
+    eps = 1e-10
+    d = size
+    r = size // 2
+
+    y, x = np.indices((d, d))                                                               # !careful first row index, then column index
+    radial = np.stack([r - x, r - y], axis=-1)                                              # radial vectors (d, d, 2)
+    rnorm = np.linalg.norm(radial, axis=-1, keepdims=True)                                  # radial vectors' norm
+    radial = radial / np.maximum(rnorm, eps)                                                # normalized radial vectors, namely radial directional vectors (d, d, 2)
+
+    dx = cal_derivative(img, order=(0, 1), sigma=0.2)                                       # gradient x map (h, w)
+    dy = cal_derivative(img, order=(1, 0), sigma=0.2)                                       # gradient y map (h, w)
+
+    pdx, pdy = np.pad(dx, ((r, r), (r, r))), np.pad(dy, ((r, r), (r, r)))                   # padded gradient x and gradient y map (h, w, d, d)
+    
+    gradient = np.stack([
+        np.lib.stride_tricks.sliding_window_view(pdx, (d, d)), 
+        np.lib.stride_tricks.sliding_window_view(pdy, (d, d))
+    ], axis=-1)                                                                             # gradient map (h, w, d, d, 2)
+    gnorm = np.linalg.norm(gradient, axis=-1, keepdims=True)                                # gradient norm (h, w, d, d)
+    gradient = gradient / np.maximum(gnorm, eps)                                            # normalized gradient vectors, namely gradient directional vectors (h, w, d, d, 2)
+    dot_product = np.sum(gradient * radial[None, None, ...], axis=-1)                       # dot product (h, w, d, d)
+    measure = np.clip(np.sum(dot_product, axis=(-2, -1)) / (d**2 - 1), 0, 1)                # gradient consistency measure
+    
+    return measure
 
 
 def find_overlap_and_unique(A: np.ndarray, B: np.ndarray, eps: float=2):
@@ -186,6 +206,21 @@ def are_collinear(a: np.ndarray, b: np.ndarray, eps: float=1e-5):
         return True
     
     return np.linalg.norm(np.cross(a, b)) < eps
+
+
+def is_local_max(img: np.ndarray, mask: np.ndarray, connectivity: int=4):
+    '''
+        Determine whether each masked location is a local maximum in its neighborhood.
+    '''
+    if connectivity == 4:
+        footprint = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
+    else:  # connectivity == 8
+        footprint = np.ones((3, 3), dtype=bool)
+
+    local_max = maximum_filter(img, footprint=footprint, mode='constant', cval=-np.inf)
+    is_max = (img == local_max)
+
+    return mask & is_max
 
 
 def con_orthogonal_basis(a: np.ndarray, b: np.ndarray):
