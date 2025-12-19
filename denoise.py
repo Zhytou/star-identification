@@ -26,7 +26,7 @@ def basic_filter(img: np.ndarray, method: str='Gaussian', size: int=3) -> np.nda
         # padded_img = np.pad(img, ((d, d), (d, d)), mode='constant')
         filtered_img = ndi.median_filter(img, size)
     elif method == 'Bilateral':
-        filtered_img = restoration.denoise_bilateral(img, 7, 20, 1.5)
+        filtered_img = restoration.denoise_bilateral(img, win_size=9, sigma_color=20, sigma_spatial=1.5)
     elif method == 'GLF':
         f = np.fft.fft2(img)
         fshift = np.fft.fftshift(f)
@@ -362,7 +362,7 @@ def denoise_with_cwm(img: np.ndarray, size: int=3):
     img1 = denoise_with_wavelet(img, 'sym4', level=4, threshold=40)
     img2 = morph_filter(morph_filter(img, size, 'Open'), size, 'Close')
 
-    frac = 0.9
+    frac = 0.85
     denoised_img = frac * img1 + (1 - frac) * img2
 
     return denoised_img
@@ -535,7 +535,7 @@ def denoise_image(img: np.ndarray, method: str):
     elif method == 'MBLF': # modified bilateral filter
         denoised_img = denoise_with_blf(img, 7, sigma_g=0.05*max_val, sigma_s=1.5, threshold=0.6*max_val)
     elif method == 'Wavelet':
-        denoised_img = denoise_with_wavelet(img, 'sym4', threshold=40)
+        denoised_img = denoise_with_wavelet(img, 'db4', threshold=10)
     elif method in ['Mean', 'Gaussian', 'Median', 'Bilateral', 'GLF']:
         denoised_img = basic_filter(img, method)
     else:

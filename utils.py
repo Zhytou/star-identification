@@ -106,7 +106,7 @@ def cal_sobel(img: np.ndarray, sigma: float):
     return np.hypot(dx, dy)
 
 
-def cal_gcm(img: np.ndarray, size: int=5):
+def cal_gcm(img: np.ndarray, size: int=5, sigma: float=0.2):
     '''
         Calculate gradient consistency measure.
     '''
@@ -123,7 +123,6 @@ def cal_gcm(img: np.ndarray, size: int=5):
     dy = cal_derivative(img, order=(1, 0), sigma=0.2)                                       # gradient y map (h, w)
 
     pdx, pdy = np.pad(dx, ((r, r), (r, r))), np.pad(dy, ((r, r), (r, r)))                   # padded gradient x and gradient y map (h, w, d, d)
-    
     gradient = np.stack([
         np.lib.stride_tricks.sliding_window_view(pdx, (d, d)), 
         np.lib.stride_tricks.sliding_window_view(pdy, (d, d))
@@ -523,7 +522,7 @@ def cal_mse_psnr_ssim(img1: np.ndarray, img2: np.ndarray):
     # print(psnr, 10 * np.log10(mv**2 / mse) if mse > 0 else np.inf)
     
     # caculate the SSIM
-    mssim = structural_similarity(img1, img2, data_range=mv)
+    mssim = structural_similarity(img1, img2, win_size=3, data_range=mv)
 
     mse, psnr, mssim = round(mse, 2), round(psnr, 2), round(mssim, 2)
 

@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 from denoise import denoise_image
-from detect import cal_threshold, group_star
+from detect import group_star
 
 
 def cal_center_of_guassian_curve(img: np.ndarray, rows, cols) -> tuple[float, float]:
