@@ -140,32 +140,55 @@ def cal_lcm(img: np.ndarray, method: str, size: int):
     return measure
 
 
-def cal_gcm(img: np.ndarray, size: int=5, sigma: float=0.2):
+def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=0.2):
     '''
         Calculate gradient consistency measure.
     '''
-    eps = 1e-10
+    h, w = img.shape
     d = size
     r = size // 2
 
-    y, x = np.indices((d, d))                                                               # !careful first row index, then column index
-    radial = np.stack([r - x, r - y], axis=-1)                                              # radial vectors (d, d, 2)
-    rnorm = np.linalg.norm(radial, axis=-1, keepdims=True)                                  # radial vectors' norm
-    radial = radial / np.maximum(rnorm, eps)                                                # normalized radial vectors, namely radial directional vectors (d, d, 2)
+    padded_img = np.pad(img, ((r, r), (r, r)))                                                  # padded raw image
+    patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))                      # raw patches (h, w, d, d)
+    flatten_patches = np.reshape(patches, (h, w, -1))                                           # flatten patches (h, w, d²)
 
-    dx = cal_derivative(img, order=(0, 1), sigma=0.2)                                       # gradient x map (h, w)
-    dy = cal_derivative(img, order=(1, 0), sigma=0.2)                                       # gradient y map (h, w)
+    grad_x = cal_derivative(img, order=(0, 1), sigma=sigma)                                     # gradient x map (h, w)
+    grad_y = cal_derivative(img, order=(1, 0), sigma=sigma)                                     # gradient y map (h, w)
+    padded_grad_x, padded_grad_y = np.pad(grad_x, ((r, r), (r, r))), np.pad(grad_y, ((r, r), (r, r)))  # padded gradient x and gradient y map (h, w, d, d)
 
-    pdx, pdy = np.pad(dx, ((r, r), (r, r))), np.pad(dy, ((r, r), (r, r)))                   # padded gradient x and gradient y map (h, w, d, d)
-    gradient = np.stack([
-        np.lib.stride_tricks.sliding_window_view(pdx, (d, d)), 
-        np.lib.stride_tricks.sliding_window_view(pdy, (d, d))
-    ], axis=-1)                                                                             # gradient map (h, w, d, d, 2)
-    gnorm = np.linalg.norm(gradient, axis=-1, keepdims=True)                                # gradient norm (h, w, d, d)
-    gradient = gradient / np.maximum(gnorm, eps)                                            # normalized gradient vectors, namely gradient directional vectors (h, w, d, d, 2)
-    dot_product = np.sum(gradient * radial[None, None, ...], axis=-1)                       # dot product (h, w, d, d)
-    measure = np.clip(np.sum(dot_product, axis=(-2, -1)) / (d**2 - 1), 0, 1)                # gradient consistency measure
-    
+    grad = np.stack([
+        np.lib.stride_tricks.sliding_window_view(padded_grad_x, (d, d)), 
+        np.lib.stride_tricks.sliding_window_view(padded_grad_y, (d, d))
+    ], axis=-1)                                                                                 # gradient map (h, w, d, d, 2)
+    gnorm = np.maximum(np.linalg.norm(grad, axis=-1, keepdims=True), eps)
+    grad = grad / gnorm
+
+    if method == 'PGCM':
+        'Self-defined Pixel-wise GCM'
+        y, x = np.indices((d, d))                                                               # !careful first row index, then column index
+        radial = np.stack([r - x, r - y], axis=-1)                                              # radial vectors (d, d, 2)
+        rnorm = np.maximum(np.linalg.norm(radial, axis=-1, keepdims=True), eps)                 # radial vectors' norm
+        radial = radial / rnorm
+
+        dot_product = np.sum(grad * radial[None, None, ...], axis=-1)                           # dot product (h, w, d, d)
+        measure = np.clip(np.sum(dot_product, axis=(-2, -1)) / (d**2 - 1), 0, 1)                # gradient consistency measure (h, w)
+    elif method == 'BGCM': 
+        'Self-defined Block-wise GCM'
+        max_indexs = np.argmax(flatten_patches, axis=-1)                                        # the index of maximum values
+        y0, x0 = max_indexs // d, max_indexs % d                                                # the local coordinates(row, column) of each maximum values(h, w)
+        y, x = np.meshgrid(np.arange(d), np.arange(d), indexing='ij')
+        radial = np.stack([
+            x0[..., None, None] - x[None, None, ...],
+            y0[..., None, None] - y[None, None, ...]
+        ], axis=-1)                                                                             # radial vectors (h, w, d, d, 2)
+        rnorm = np.maximum(np.linalg.norm(radial, axis=-1, keepdims=True), eps)
+        radial = radial / rnorm
+
+        dot_product = np.sum(grad * radial, axis=-1)                                            # dot product (h, w, d, d)
+        measure = np.clip(np.sum(dot_product, axis=(-2, -1)) / (d**2 - 1), 0, 1)                # gradient consistency measure (h, w)
+    else:
+        measure = np.zeros_like(img)
+
     return measure
 
 
@@ -266,33 +289,12 @@ def enhance_image(img: np.ndarray, method: str, patch_size: int=3, preserve_dtyp
 
         median_map = np.stack([np.median(patches[:, :, mask], axis=-1) for mask in opt_mask], axis=-1)
         enhanced_img = img - np.max(median_map, axis=-1)
-    elif method == 'GCM': # different from utils.py cal_gcm
-        max_indexs = np.argmax(flatten_patches, axis=-1)                                        # the index of maximum values
-        y0, x0 = max_indexs // d, max_indexs % d                                                # the local coordinates(row, column) of each maximum values(h, w)
-        y, x = np.meshgrid(np.arange(d), np.arange(d), indexing='ij')
-        radial = np.stack([
-            x0[..., None, None] - x[None, None, ...],
-            y0[..., None, None] - y[None, None, ...]
-        ], axis=-1)                                                                             # radial vectors (h, w, d, d, 2)
-        rnorm = np.maximum(np.linalg.norm(radial, axis=-1, keepdims=True), eps)
-        radial = radial / rnorm
-
-        dx = cal_derivative(img, order=(0, 1), sigma=0.2)                                       # gradient x map (h, w)
-        dy = cal_derivative(img, order=(1, 0), sigma=0.2)                                       # gradient y map (h, w)
-        pdx, pdy = np.pad(dx, ((r, r), (r, r))), np.pad(dy, ((r, r), (r, r)))                   # padded gradient x and gradient y map (h, w, d, d)
-        gradient = np.stack([
-            np.lib.stride_tricks.sliding_window_view(pdx, (d, d)), 
-            np.lib.stride_tricks.sliding_window_view(pdy, (d, d))
-        ], axis=-1)                                                                             # gradient map (h, w, d, d, 2)
-        gnorm = np.maximum(np.linalg.norm(gradient, axis=-1, keepdims=True), eps)
-        gradient = gradient / gnorm                                                                       
-
-        dot_product = np.sum(gradient * radial, axis=-1)                                        # dot product (h, w, d, d)
-        enhanced_img = np.clip(np.sum(dot_product, axis=(-2, -1)) / (d**2 - 1), 0, 1)           # gradient consistency measure (h, w)
+    elif method in ['PGCM', 'BGCM']:
+        enhanced_img = cal_gcm(img, method, size=d)
     elif method == 'LIG':
         log = cal_log(img, sigma=1)
         lcm = cal_lcm(np.abs(log), 'LCM', size=d)
-        gcm = cal_gcm(img, size=5, sigma=0.2)
+        gcm = cal_gcm(img, 'BGCM', size=d)
         enhanced_img = lcm * gcm
     else: # method == 'None'
         enhanced_img = img
