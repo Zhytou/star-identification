@@ -4,19 +4,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 from math import radians, tan
 
-from simulate import create_star_image, draw_star
-from utils import get_angdist, find_overlap_and_unique
+from simulate import create_star_image, draw_star, add_stellar_noise, add_gaussian_and_pepper_noise
+from utils import get_angdist, find_overlap_and_unique, draw_gray_3d, label_star_image
 
 
 # 灰度分布模型
 if False:
     x, y = np.meshgrid(np.arange(7), np.arange(7))
     x, y = x.flatten() + 0.5, y.flatten() + 0.5
-    dx = dy = 0.8
+    dx = dy = 0.7
     
     mag = 3
     psf = 0.7
-    z = draw_star(np.zeros((7, 7), dtype=np.uint8), (3.5, 3.5), mag, sigma=psf)
+    z = draw_star(np.zeros((7, 7), dtype=np.uint8), (3.5, 3.5), mag, sigma=psf)    
     dz = z.flatten()
 
     fig = plt.figure(figsize=(6, 6))
@@ -37,6 +37,15 @@ h = w = 512
 fov = 10
 limit_mag = 6
 f = h/tan(radians(fov/2))
+
+
+# 无噪声仿真图
+if False:
+    img, stars = create_star_image(ra, de, roll, h=h, w=w, limit_mag=limit_mag, fovx=fov, fovy=fov, rot_meth=1)
+    ids = stars[:, 0].astype(int)
+    coords = stars[:, 1:3].astype(int)
+    label_star_image(img, coords, ids)
+
 
 # 角距验证
 if False:
@@ -86,75 +95,40 @@ if False:
             print(i, j, vagds[i, j], ragds[i, j])
 
 
-def label_image(img: np.ndarray, coords: np.ndarray, color: tuple=(0, 255, 0),  radius: int=5):
-    '''
-        Label image with colored circles.
-    '''
-    for coord in coords:
-        row, col = int(coord[0]), int(coord[1])
-        cv2.circle(img, (col, row), radius, color, 1)
-    return img
-
-
 # 噪声仿真测试
 os.makedirs('res/chapter2/sim', exist_ok=True)
 
-if True:
-    # backgroud noise
-    img, stars = create_star_image(
-        ra, de, roll, 
-        h=h, w=w, 
-        fovy=fov, fovx=fov, 
-        limit_mag=limit_mag, 
-        sigma_g=0.05, prob_p=0.001
-    )
-    cv2.imwrite('res/chapter2/sim/noise.png', img)
 
-    ids = stars[:, 0].astype(np.int64)
-    coords = stars[:, 1:3]
-
-
-if False:
-    # positional noise
-    img, _ = create_star_image(
-        ra, de, roll, 
-        h=h, w=w, 
-        fovy=fov, fovx=fov, 
-        limit_mag=limit_mag, 
-        sigma_pos=10
-    )
-    cv2.imwrite('res/chapter2/sim/pos.png', img)
-
-
-if True:
-    # magnititude noise
-    img, stars = create_star_image(
-        ra, de, roll, 
-        h=h, w=w, 
-        fovy=fov, fovx=fov, 
-        limit_mag=limit_mag, 
-        sigma_mag=0.3
-    )
-    _, _, coords1, coords2 = find_overlap_and_unique(coords, stars[:, 1:3])
-    
+def extract_rect(img, top_left: tuple[int, int], bot_right: tuple[int, int], line_color: tuple[int, int, int]=(0, 255, 255), line_width: int=2):
     img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    img = label_image(img, coords1, (255, 0, 0)) # miss
-    img = label_image(img, coords2, (0, 0, 255)) # false
-    cv2.imwrite('res/chapter2/sim/mag.png', img)
+    x1, y1 = top_left
+    x2, y2 = bot_right
+    crop_img = img[y1+line_width:y2-line_width, x1+line_width:x2-line_width]
+    cv2.rectangle(img, top_left, bot_right, line_color, line_width)
+
+    return img, crop_img
 
 
-if False:
-    # false star noise
-    img, stars = create_star_image(
+# 成像噪声/杂散光干扰
+if True:
+    img0, stars = create_star_image(
         ra, de, roll, 
         h=h, w=w, 
         fovy=fov, fovx=fov, 
         limit_mag=limit_mag, 
-        num_fs=2
     )
-    mask = stars[:, 0] == -1
-    coords = stars[mask, 1:3]
 
-    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    img = label_image(img, coords, (255, 0, 0)) # false
-    cv2.imwrite('res/chapter2/sim/fs.png', img)
+    row, col = 100, 200
+    d = 32
+    top_left = (col-d-1, row-d-1)
+    bot_right = (col+d+1, row+d+1)
+
+    # img1 = add_gaussian_and_pepper_noise(img0, sigma_g=0.07, prob_p=0.001)
+    # img1, crop_img1 = extract_rect(img1, top_left, bot_right)    
+    # cv2.imwrite('res/chapter2/sim/noise.png', img1)
+    # cv2.imwrite('res/chapter2/sim/noise_scale.png', crop_img1)
+
+    img2 = add_stellar_noise(img0, method='Gaussian', position=(h//2, w//3), background=4, sigma_x=64)
+    img2, crop_img2 = extract_rect(img2, top_left, bot_right)
+    cv2.imwrite('res/chapter2/sim/stellar.png', img2)
+    cv2.imwrite('res/chapter2/sim/stellar_scale.png', crop_img2)
