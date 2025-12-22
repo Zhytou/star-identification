@@ -13,29 +13,33 @@ cata['Y'] = np.sin(cata['Ra'])*np.cos(cata['De'])
 cata['Z'] = np.sin(cata['De'])
 
 
-def add_stellar_noise(img: np.ndarray, method: str='Gaussian', background: float=5.5, position: tuple[int, int]=(0, 0), sigma: int=100, clipped: bool=True):
+def add_stellar_noise(img: np.ndarray, method: str='Gaussian', luminosity: float=5.5, position: tuple[int, int]=(0, 0), sigma_x: int=100, sigma_y: int=-1, clipped: bool=True):
     '''
         Add stellar noise.
     Args:
         img: the input image
         method: the simulation method
         position: the center of stellar noise (row, column)
-        magnitude: the stellar magnitude
-        sigma: the standard deviation
+        luminosity: the stellar luminosity in Mv
+    Return:
+        noised_img
     '''
     h, w = img.shape
     y, x = np.linspace(0, h-1, h), np.linspace(0, w-1, w)
     y, x = np.meshgrid(y, x, indexing='ij')
 
     I_max = 255 if img.dtype == np.uint8 else 1.0
-    I0 = get_stellar_intensity(background, I_max)
+    I0 = get_stellar_intensity(luminosity, I_max)
     y0, x0 = position
+
+    if sigma_y == -1:
+        sigma_y = sigma_x
 
     if method == 'Constant':
         noise = np.full((h, w), I0)
     elif method == 'Gaussian':
-        d2 = (x - x0)**2 + (y - y0)**2
-        noise = np.clip(I0 * np.exp(- d2 / (2 * sigma**2)), 0, I_max)
+        x2, y2 = (x - x0)**2, (y - y0)**2
+        noise = np.clip(I0 * np.exp(- x2 / (2 * sigma_x**2) - y2 / (2 * sigma_y**2)), 0, I_max)
     elif method == 'Linear_X': # column direction
         noise = np.clip((1 - (x - x0) / (w - x0)) * I0, 0, I_max)
     elif method == 'Linear_Y': # row direction
@@ -259,7 +263,7 @@ def cal_zxz_euler(R: np.ndarray, method: int=1) -> tuple[float, float, float]:
     return ra, de, roll
 
 
-def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0, prob_fs: float=0, prob_ms: float=0, background: float=np.inf, limit_mag: float=7.0, fovy: float=10, fovx: float=10, h: int=512, w: int=512, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False, rot_meth: int=1, dtype: type=np.uint8) -> tuple[np.ndarray, np.ndarray]:
+def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, prob_p: float=0.0, sigma_pos: float=0.0, sigma_mag: float=0.0, num_fs: int=0, num_ms: int=0, prob_fs: float=0, prob_ms: float=0, background: float | np.ndarray=np.inf, limit_mag: float=7.0, fovy: float=10, fovx: float=10, h: int=512, w: int=512, roi: int=2, sigma_psf: float=1.0, coords_only: bool=False, rot_meth: int=1, dtype: type=np.uint8) -> tuple[np.ndarray, np.ndarray]:
     """
         Create a star image from the given right ascension, declination and roll angle.
     Args:
@@ -358,8 +362,10 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
 
     # print(f"Found {len(stars_within_fov)} stars within the field of view after pos filtering.")
 
-    # background intensity
-    if background == np.inf or np.isnan(background):
+    # set image background
+    if isinstance(background, np.ndarray):
+        img = np.copy(background).astype(dtype)
+    elif background == np.inf or np.isnan(background):
         img = np.zeros((h, w), dtype)
     else:
         I_max = 255 if dtype == np.uint8 else 1.0

@@ -546,29 +546,3 @@ def denoise_image(img: np.ndarray, method: str):
 
     return denoised_img
 
-
-def gen_laplacian_pyramid(img: np.ndarray, levels: int=3):
-    '''
-        Generate the Laplacian pyramid of the image.
-    Args:
-        img: the image to be processed
-        levels: the number of levels of the pyramid
-    Returns:
-        pyramid: the Laplacian pyramid
-    '''
-
-    gaussian_pyramid = [img]
-    for i in range(levels-1):
-        # down sample
-        img = cv2.pyrDown(gaussian_pyramid[i])
-        gaussian_pyramid.append(img)
-
-    laplacian_pyramid = []
-    for i in range(levels-1):
-        img = cv2.subtract(gaussian_pyramid[i], cv2.pyrUp(gaussian_pyramid[i+1]))
-        laplacian_pyramid.append(img)
-
-    # last level
-    laplacian_pyramid.append(gaussian_pyramid[-1])
-
-    return laplacian_pyramid

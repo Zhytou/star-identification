@@ -7,7 +7,7 @@ from matplotlib.patches import Circle
 from mpl_toolkits.mplot3d import Axes3D
 from astropy import units as u
 from astropy.coordinates import SkyCoord
-from scipy.ndimage import maximum_filter, gaussian_filter
+from scipy.ndimage import rank_filter, gaussian_filter, correlate
 from skimage.metrics import mean_squared_error, peak_signal_noise_ratio, structural_similarity
 
 
@@ -31,18 +31,52 @@ def cal_derivative(img: np.ndarray, order: tuple[int, int], sigma: float):
     return gaussian_filter(fimg, sigma=sigma, order=order, axes=(-2, -1))
 
 
+def cal_difference(img: np.ndarray, dir: int):
+    '''
+        Calculate directional finite difference of neighboring pixels.
+    '''
+    # change image data type to avoid overflow
+    fimg = img.astype(np.float64)
+
+    # calculate neighboring differences
+    dir %= 8
+    if dir == 0:      # ↓
+        kernel = np.array([[-1],
+                           [ 1]])
+    elif dir == 1:    # ↘
+        kernel = np.array([[-1,  0],
+                           [ 0,  1]])
+    elif dir == 2:    # →
+        kernel = np.array([[-1, 1]])
+    elif dir == 3:    # ↗
+        kernel = np.array([[ 0,  1],
+                           [-1,  0]])
+    elif dir == 4:    # ↑
+        kernel = np.array([[ 1],
+                           [-1]])
+    elif dir == 5:    # ↖
+        kernel = np.array([[ 1,  0],
+                           [ 0, -1]])
+    elif dir == 6:    # ←
+        kernel = np.array([[1, -1]])
+    elif dir == 7:    # ↙
+        kernel = np.array([[ 0, -1],
+                           [ 1,  0]])
+
+    diff = correlate(fimg, kernel, mode='constant')
+    return diff
+
+
 def cal_doh(img: np.ndarray, sigma: float):
     '''
         Calculate determination of hessian.
     '''
     assert img.ndim == 2 or img.ndim == 3
 
-    # use gaussian filter to get second derivative
     dxx = cal_derivative(img, order=(0, 2), sigma=sigma)
     dyy = cal_derivative(img, order=(2, 0), sigma=sigma)
     dxy = cal_derivative(img, order=(1, 1), sigma=sigma)
 
-    # retun determination
     return dxx * dyy - dxy**2
 
 
@@ -52,12 +86,25 @@ def cal_log(img: np.ndarray, sigma: float):
     '''
     assert img.ndim == 2 or img.ndim == 3
 
-    # use gaussian filter to get second derivative
     dxx = cal_derivative(img, order=(0, 2), sigma=sigma)
     dyy = cal_derivative(img, order=(2, 0), sigma=sigma)
 
-    # retun determination
     return dxx + dyy
+
+
+def cal_dog(img: np.ndarray, sigma1: float, sigma2: float):
+    '''
+        Calculate difference of gaussian.
+    '''
+    assert img.ndim == 2 or img.ndim == 3
+
+    if sigma1 > sigma2:
+        sigma1, sigma2 = sigma2, sigma1
+
+    img1 = gaussian_filter(img, sigma1)
+    img2 = gaussian_filter(img, sigma2)
+
+    return img2 - img1
 
 
 def cal_ly(img: np.ndarray, sigma: float):
@@ -178,19 +225,18 @@ def are_collinear(a: np.ndarray, b: np.ndarray, eps: float=1e-5):
     return np.linalg.norm(np.cross(a, b)) < eps
 
 
-def is_local_max(img: np.ndarray, mask: np.ndarray, connectivity: int=4):
+def is_local_topk(img: np.ndarray, mask: np.ndarray, k: int, connectivity: int=4):
     '''
-        Determine whether each masked location is a local maximum in its neighborhood.
+        Determine whether each masked location is among the top-k largest values in its neighborhood.
     '''
     if connectivity == 4:
         footprint = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
     else:  # connectivity == 8
         footprint = np.ones((3, 3), dtype=bool)
 
-    local_max = maximum_filter(img, footprint=footprint, mode='constant', cval=-np.inf)
-    is_max = (img == local_max)
+    local_topk = rank_filter(img, rank=k, footprint=footprint, mode='constant', cval=-np.inf)
 
-    return mask & is_max
+    return mask & (img >= local_topk)
 
 
 def con_orthogonal_basis(a: np.ndarray, b: np.ndarray):
@@ -311,7 +357,7 @@ def convert_rade2deg(ra: float, dec: float):
     return coord.to_string('hmsdms')
 
 
-def draw_gray_3d(img: np.ndarray):
+def draw_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gray'):
     '''
         Draw the gray image in 3 dimension.
     Args:
@@ -321,20 +367,40 @@ def draw_gray_3d(img: np.ndarray):
     h, w = img.shape
 
     # generate the coordinates
-    # x = np.linspace(-w/2, w/2, w)
-    x = np.linspace(0, w, w)
-    # y = np.linspace(-h/2, h/2, h)
-    y = np.linspace(0, h, h)
-    X, Y = np.meshgrid(x, y)
-
+    x, y = np.linspace(0, w-1, w), np.linspace(0, h-1, h)
+    
+    x, y = np.meshgrid(x, y)
+    z = img
+    
     # create 3D image
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
-    surf = ax.plot_surface(X, Y, img, cmap='gray')
+
+    if method == 'plot_surface':
+        ax.plot_surface(
+            x, y, z, 
+            cmap=color_map, 
+        )
+    elif method == 'bar3d':
+        x, y = x.flatten(), y.flatten()
+        dx = dy = 0.9       # bar width
+        dz = z.flatten()    # bar height
+        ax.bar3d(
+            x, y, 0, 
+            dx, dy, dz, 
+            color='gray',
+            linewidth=0.3,
+            alpha=0.9
+        )
+    else:
+        for i in range(h):
+            z_line = z[i, :]
+            ax.plot(x[i,:], [i] * len(x[i,:]), z_line, linewidth=1.5, alpha=0.7,
+                    color=plt.cm.viridis(z_line.max() / np.max(np.abs(img))))
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z (gray value)')
-    fig.colorbar(surf)
+    # ax.set_title(title)
     plt.show()
 
 
@@ -402,37 +468,6 @@ def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, 
         plt.savefig(output_path, format='png', bbox_inches='tight', pad_inches=1, dpi=300)
     
     plt.close()
-
-
-def plot_gray_3d(img: np.ndarray, title: str=''):
-    '''
-        Plot gray image in 3 dimensions.
-    '''
-
-    h, w = img.shape
-    x, y = np.linspace(0, h-1, h), np.linspace(0, w-1, w)
-    x, y = np.meshgrid(x, y)
-
-    fig = plt.figure(figsize=(10, 8))
-    ax = fig.add_subplot(111, projection='3d')
-
-    surf = ax.plot_surface(
-        x, y, img,
-        linewidth=0,     
-        antialiased=True, 
-        alpha=0.8         
-    )
-
-    ax.set_title(title, fontsize=14, pad=20)
-    ax.set_xlabel('Pixel X (Column)', fontsize=12, labelpad=10)
-    ax.set_ylabel('Pixel Y (Row)', fontsize=12, labelpad=10)
-    ax.set_zlabel('Gray Value', fontsize=12, labelpad=10)
-    # ax.set_zlim(0, 1)
-
-    fig.colorbar(surf, ax=ax, shrink=0.6, aspect=10, label='Gray Value')
-
-    plt.tight_layout()
-    plt.show()
 
 
 def describe_database(db: pd.DataFrame):
