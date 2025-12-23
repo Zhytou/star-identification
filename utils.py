@@ -143,7 +143,7 @@ def cal_ly(img: np.ndarray, sigma: float):
 
 def cal_sobel(img: np.ndarray, sigma: float):
     '''
-        Calculate the ly operator result.
+        Calculate the sobel operator result.
     '''
     assert img.ndim == 2 or img.ndim == 3
     
@@ -225,18 +225,19 @@ def are_collinear(a: np.ndarray, b: np.ndarray, eps: float=1e-5):
     return np.linalg.norm(np.cross(a, b)) < eps
 
 
-def is_local_topk(img: np.ndarray, mask: np.ndarray, k: int, connectivity: int=4):
+def is_local_topk(img: np.ndarray, k: int, connectivity: int=4, footprint: np.ndarray=None):
     '''
-        Determine whether each masked location is among the top-k largest values in its neighborhood.
+        Determine whether each pixel in the image is among the top-k largest values within its local neighborhood.
     '''
-    if connectivity == 4:
-        footprint = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
-    else:  # connectivity == 8
-        footprint = np.ones((3, 3), dtype=bool)
+    if footprint is None:
+        if connectivity == 4:
+            footprint = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
+        else:  # connectivity == 8
+            footprint = np.ones((3, 3), dtype=bool)
 
     local_topk = rank_filter(img, rank=k, footprint=footprint, mode='constant', cval=-np.inf)
 
-    return mask & (img >= local_topk)
+    return img >= local_topk
 
 
 def con_orthogonal_basis(a: np.ndarray, b: np.ndarray):
