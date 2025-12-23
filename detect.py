@@ -5,7 +5,7 @@ import scipy.ndimage as ndi
 import skimage.filters as filters
 import skimage.morphology as morph
 
-from utils import cal_derivative, cal_doh, cal_log, cal_ly, cal_sobel, is_local_max
+from utils import cal_derivative, cal_difference, cal_doh, cal_log, cal_ly, cal_sobel, is_local_topk, is_near_local_max
 
 eps = 1e-10
 
@@ -55,12 +55,11 @@ def cal_lcm(img: np.ndarray, method: str, size: int):
         Calculate local contrast measure.
     '''
     h, w = img.shape
-    img = img.astype(np.float64)                                                                # change data type to avoid overflow
     d = size                                                                                    # patch size
     r = size // 2                                                                               # half of patch size
     
-    img = img.astype(np.float64)                                                                # change data type to avoid overflow
-    padded_img = np.pad(img, ((r, r), (r, r)))                                                  # padded raw image
+    fimg = img.astype(np.float64)                                                               # change data type to avoid overflow
+    padded_img = np.pad(fimg, ((r, r), (r, r)))                                                 # padded raw image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))                      # raw patches (h, w, d, d)
     flatten_patches = np.reshape(patches, (h, w, -1))                                           # flatten patches (h, w, d²)
     sorted_patches = np.sort(flatten_patches, axis=-1)                                          # sorted flatten patches (h, w, d²)
@@ -125,6 +124,15 @@ def cal_lcm(img: np.ndarray, method: str, size: int):
                 np.nan
             ), axis=0
         )                                                                                       # relative local contrast measure (h, w)
+    elif method == 'MLCM':
+        'Self-defined Modified Local Contrast Measure'
+        measure = np.nanmin(
+            np.where(
+                shift_mask,                                                                     # (8, h, w)
+                np.clip(tmean_map[None, ...] / shifted_tmean_map - 1, 0, np.inf) * tmean_map,   # (8, h, w)
+                np.nan
+            ), axis=0
+        )     
     elif method == 'SDM':
         shifted_patches = np.stack([np.roll(patches, shift, axis=(0, 1)) for shift in shitfs])  # shifted patches (8, h, w, d, d)
         measure = np.nanmin(
@@ -152,8 +160,13 @@ def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=0.2):
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))                      # raw patches (h, w, d, d)
     flatten_patches = np.reshape(patches, (h, w, -1))                                           # flatten patches (h, w, d²)
 
-    grad_x = cal_derivative(img, order=(0, 1), sigma=sigma)                                     # gradient x map (h, w)
-    grad_y = cal_derivative(img, order=(1, 0), sigma=sigma)                                     # gradient y map (h, w)
+    diffs = np.stack([cal_difference(img, dir) for dir in range(8)], axis=0)                    # neighoring pixel difference map (8, h, w)
+    if True:
+        grad_y = cal_derivative(img, order=(1, 0), sigma=sigma)                                 # gradient y map (h, w)
+        grad_x = cal_derivative(img, order=(0, 1), sigma=sigma)                                 # gradient x map (h, w)
+    else:
+        grad_y = diffs[0]
+        grad_x = diffs[2]
     padded_grad_x, padded_grad_y = np.pad(grad_x, ((r, r), (r, r))), np.pad(grad_y, ((r, r), (r, r)))  # padded gradient x and gradient y map (h, w, d, d)
 
     grad = np.stack([
@@ -172,6 +185,7 @@ def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=0.2):
 
         dot_product = np.sum(grad * radial[None, None, ...], axis=-1)                           # dot product (h, w, d, d)
         measure = np.clip(np.sum(dot_product, axis=(-2, -1)) / (d**2 - 1), 0, 1)                # gradient consistency measure (h, w)
+        # measure[measure < 0.8] = 0
     elif method == 'BGCM': 
         'Self-defined Block-wise GCM'
         max_indexs = np.argmax(flatten_patches, axis=-1)                                        # the index of maximum values
@@ -208,10 +222,11 @@ def binarize_image(img: np.ndarray, method: str) -> int:
     if method == 'Otsu':
         T = filters.threshold_otsu(img)
         binary_img[img > T] = 1
-    elif method == 'Liebe3' or method == 'Liebe5':
+    elif method.startswith('Liebe'):
+        k = float(method[5:])
         mean = np.mean(img)
         std = np.std(img)
-        T = mean + 3 * std if method == 'Liebe3' else mean + 5 * std
+        T = mean + k * std
         binary_img[img > T] = 1
     elif method == 'Xiao':
         'Entropic thresholding based on gray-level spatial correlation histogram https://ieeexplore.ieee.org/document/4761626/?arnumber=4761626'
@@ -266,7 +281,6 @@ def enhance_image(img: np.ndarray, method: str, patch_size: int=3, preserve_dtyp
         enhanced_img
     '''
 
-    h, w = img.shape
     d = patch_size                                                                              # patch size
     r = patch_size // 2                                                                         # half of patch size
     max_val = 255 if img.dtype == np.uint8 else 1.0
@@ -274,12 +288,12 @@ def enhance_image(img: np.ndarray, method: str, patch_size: int=3, preserve_dtyp
     padded_img = np.pad(img, ((r, r), (r, r)))                                                  # padded raw image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))                      # raw patches (h, w, d, d)
 
-    if method in ['LCM', 'ILCM', 'NLCM', 'RLCM']:
+    if method in ['LCM', 'ILCM', 'NLCM', 'RLCM', 'MLCM']:
         enhanced_img = cal_lcm(img, method, size=d)
     elif method == 'Top-Hat':
         selem = np.ones((d, d), dtype=bool)                                                     # structural element
         enhanced_img = morph.white_tophat(img, footprint=selem)                                 # enhanced image based on white top-hat
-    elif method == 'Max-Median':
+    elif method == 'Max-Median' or method == 'Max-Mean':
         'Max-Mean and Max-Median filters for detection of small-targets http://proceedings.spiedigitallibrary.org/proceeding.aspx?articleid=905421'
         opt_mask = np.zeros((4, d, d), dtype=bool)                                              # operation mask
         opt_mask[0, :, r] = True                                                                # vertical line
@@ -287,20 +301,25 @@ def enhance_image(img: np.ndarray, method: str, patch_size: int=3, preserve_dtyp
         opt_mask[2, np.arange(0, d), np.arange(0, d),] = True                                   # main diagonal
         opt_mask[3, np.arange(0, d)[::-1], np.arange(0, d)] = True                              # anti-diagonal
 
-        median_map = np.stack([np.median(patches[:, :, mask], axis=-1) for mask in opt_mask], axis=-1)
-        enhanced_img = img - np.max(median_map, axis=-1)
+        if method == 'Max-Median':
+            median_map = np.stack([np.median(patches[:, :, mask], axis=-1) for mask in opt_mask], axis=-1)
+            enhanced_img = img - np.max(median_map, axis=-1)
+        else:
+            mean_map = np.stack([np.mean(patches[:, :, mask], axis=-1) for mask in opt_mask], axis=-1)
+            enhanced_img = img - np.max(mean_map, axis=-1)
+    elif method == 'MSobel':
+        enhanced_img = cal_sobel(img, sigma=1)
     elif method in ['PGCM', 'BGCM']:
-        enhanced_img = cal_gcm(img, method, size=d)
-    elif method == 'LIG':
-        log = cal_log(img, sigma=1)
-        lcm = cal_lcm(np.abs(log), 'LCM', size=d)
-        gcm = cal_gcm(img, 'BGCM', size=d)
+        enhanced_img = cal_gcm(img, method, size=d, sigma=1)
+    elif method == 'IGM':
+        lcm = cal_lcm(img, 'MLCM', size=d)
+        gcm = cal_gcm(img, 'BGCM', size=d, sigma=1)
         enhanced_img = lcm * gcm
     else: # method == 'None'
         enhanced_img = img
 
     if preserve_dtype:
-        enhanced_img = (enhanced_img / np.max(enhanced_img) * max_val).astype(img.dtype)
+        enhanced_img = (enhanced_img / np.maximum(np.max(enhanced_img), eps) * max_val).astype(img.dtype)
 
     return enhanced_img
 
@@ -339,17 +358,21 @@ def region_grow(img1: np.ndarray, img2: np.ndarray, opt_meth: str, thr_meth: str
     max_intensity = 255 if img1.dtype == 255 else 1.0                           # max intensity for image data type
 
     ## 1. Preselect
-    #! only use maximum_filter, because the background threshold might be too high under starry light interference
-    #! and the size of maximum_filter must be 3, otherwise stars mighbe be missing
-    mask = ndi.maximum_filter(img1, 3) == img1                                  # possible seed mask (h, w)
-    if d >= 5:                                                                  # check the mean gray of inner ring is higher than the outter one
-        rr = d // 4
-        inner = np.zeros((d, d), dtype=bool)
-        inner[r-rr:r+rr+1, r-rr:r+rr+1] = True
-        omean = np.maximum(np.mean(patches[..., ~inner], axis=-1), eps)         # outer ring mean map
-        inner[r, r] = False                                                     # exclude central pixel
-        imean = np.maximum(np.mean(patches[..., inner], axis=-1), eps)          # inner ring mean map 
-        mask = mask & ((img1 == max_intensity) | (img1 - 1.1 * imean >= 0)) & (imean - 1.1 * omean >= 0)
+    #! only use local rank_filter, because the global background threshold might be too high under starry light interference
+    #! also, avoid preselection when noise is relatively high
+    if True:
+        mask = is_local_topk(img1, k=-2, connectivity=connectivity) | is_near_local_max(img1, connectivity=connectivity) # possible seed mask (h, w)
+        if d >= 5:                                                              # check the mean gray of inner ring is higher than the outter one
+            rr = d // 4
+            inner = np.zeros((d, d), dtype=bool)
+            inner[r-rr:r+rr+1, r-rr:r+rr+1] = True
+            omean = np.maximum(np.mean(patches[..., ~inner], axis=-1), eps)     # outer ring mean map
+            inner[r, r] = False                                                 # exclude central pixel
+            imean = np.maximum(np.mean(patches[..., inner], axis=-1), eps)      # inner ring mean map 
+            mask = mask & ((img1 == max_intensity) | (img1 - 1. * imean >= 0)) & (imean - 1. * omean >= 0)
+    else:
+        mask = np.ones_like(img1, dtype=bool)
+    
     n = np.sum(mask)                                                            # number of possible seeds
 
     print('Number of seeds after preselection:', n)
@@ -358,14 +381,12 @@ def region_grow(img1: np.ndarray, img2: np.ndarray, opt_meth: str, thr_meth: str
     if opt_meth == 'DoH' or opt_meth == 'Ly':
         # https://doi.org/10.16251/j.cnki.1009-2307.2012.01.033
         res = cal_doh(img1, sigma=1) if opt_meth == 'DoH' else cal_ly(img1, sigma=1)[0] # operator results (h, w)
-        mask = is_local_max(res, mask, connectivity)
-    elif opt_meth == 'Sobel': 
-        # https://doi.org/10.27060/d.cnki.ghbcu.2020.001632
-        res = cal_sobel(img1, sigma=1)
-        mask = mask & (res > 0)
-    elif opt_meth == 'GCM':
-        res1, res2 = cal_gcm(img1, size=5), cal_doh(img1, sigma=0.2)
-        mask = (res1 > 0.35) & is_local_max(res2, mask, connectivity)
+        mask = mask & is_local_topk(res, k=-1, connectivity=connectivity)
+    elif opt_meth == 'CGC':
+        # combined gradient and curvature
+        res1, res2 = cal_gcm(img1, 'PGCM', size=patch_size, sigma=0.2), cal_doh(img1, sigma=1.5)
+        res2[mask] *= res1[mask]
+        mask = mask & (res1 > 0.3) & is_local_topk(res2, k=-2, connectivity=connectivity)
     else:
         pass
 
@@ -377,15 +398,16 @@ def region_grow(img1: np.ndarray, img2: np.ndarray, opt_meth: str, thr_meth: str
     print('Number of seeds after operator double check:', n)
 
     ## 4. Gnerate binary image for later growth
-    if False: # use local threshold if flag is True
+    if True: # use local threshold if flag is True
         rr = wind_size // 2
 
         y, x = coords[:, 0], coords[:, 1]
         ymin, ymax = np.maximum(0, y - rr), np.minimum(h, y + rr + 1)           # top and bottom boundary
         xmin, xmax = np.maximum(0, x - rr), np.minimum(w, x + rr + 1)           # left and right boundary
 
+        binary_img = np.zeros_like(img1, np.uint8)
         for y1, y2, x1, x2 in zip(ymin, ymax, xmin, xmax):    
-            binary_img[y1:y2, x1:x2] = binarize_image(img2[y1:y2, x1:x2], thr_meth)
+            binary_img[y1:y2, x1:x2] = binary_img[y1:y2, x1:x2] | binarize_image(img2[y1:y2, x1:x2], thr_meth) #! careful, maybe overlap must use union
     else:
         binary_img = binarize_image(img2, thr_meth)
 
