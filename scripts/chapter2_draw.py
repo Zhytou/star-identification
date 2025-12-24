@@ -128,7 +128,7 @@ if True:
     # cv2.imwrite('res/chapter2/sim/noise.png', img1)
     # cv2.imwrite('res/chapter2/sim/noise_scale.png', crop_img1)
 
-    img2 = add_stellar_noise(img0, method='Gaussian', position=(h//2, w//3), background=4, sigma_x=64)
+    img2 = add_stellar_noise(img0, method='Gaussian', position=(h//2, w//3), luminosity=4, sigma_x=64)
     img2, crop_img2 = extract_rect(img2, top_left, bot_right)
     cv2.imwrite('res/chapter2/sim/stellar.png', img2)
     cv2.imwrite('res/chapter2/sim/stellar_scale.png', crop_img2)
