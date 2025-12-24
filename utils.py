@@ -7,7 +7,7 @@ from matplotlib.patches import Circle
 from mpl_toolkits.mplot3d import Axes3D
 from astropy import units as u
 from astropy.coordinates import SkyCoord
-from scipy.ndimage import rank_filter, gaussian_filter, correlate
+from scipy.ndimage import rank_filter, maximum_filter, gaussian_filter, correlate
 from skimage.metrics import mean_squared_error, peak_signal_noise_ratio, structural_similarity
 
 
@@ -238,6 +238,26 @@ def is_local_topk(img: np.ndarray, k: int, connectivity: int=4, footprint: np.nd
     local_topk = rank_filter(img, rank=k, footprint=footprint, mode='constant', cval=-np.inf)
 
     return img >= local_topk
+
+
+def is_near_local_max(img: np.ndarray, connectivity: int=4, footprint: np.ndarray=None):
+    '''
+        Determine whether each pixel in the image is close to the maximum values in its local neighborhood.
+    '''
+
+    if footprint is None:
+        if connectivity == 4:
+            footprint = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
+        else:  # connectivity == 8
+            footprint = np.ones((3, 3), dtype=bool)
+
+    max_map = maximum_filter(img, footprint=footprint, mode='constant', cval=-np.inf)
+    
+    mean = np.mean(img)
+    std = np.std(img)
+    gap = min(15, 0.5 * mean, 0.5 * std)
+
+    return max_map - img < gap
 
 
 def con_orthogonal_basis(a: np.ndarray, b: np.ndarray):
