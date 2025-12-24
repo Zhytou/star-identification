@@ -147,44 +147,42 @@ def cal_sobel(img: np.ndarray, sigma: float):
     '''
     assert img.ndim == 2 or img.ndim == 3
     
-    dx = cal_derivative(img, order=(0, 1), sigma=1)
-    dy = cal_derivative(img, order=(1, 0), sigma=1)
+    dx = cal_derivative(img, order=(0, 1), sigma=sigma)
+    dy = cal_derivative(img, order=(1, 0), sigma=sigma)
 
     return np.hypot(dx, dy)
 
 
-def find_overlap_and_unique(A: np.ndarray, B: np.ndarray, eps: float=2):
+def find_overlap_and_unique(a: np.ndarray, b: np.ndarray, threshold: float=2, return_count_only: bool=False):
     '''
-        Find the overlap parts of two point sets.
+        Find the overlap and unique parts of two point sets.
     '''
-    if A.size == 0:
-        return np.array([]), np.array([]), np.array([]), B
-    if B.size == 0:
-        return np.array([]), np.array([]), A, np.array([])
+    if a.size == 0:
+        return np.array([]), np.array([]), np.array([]), b
+    if b.size == 0:
+        return np.array([]), np.array([]), a, np.array([])
 
-    assert A.shape[1] == 2 and B.shape[1] == 2
+    assert a.shape[1] == 2 and b.shape[1] == 2
 
-    # calculate the L2 distance between each points in both A and B
-    dist = np.sqrt(np.sum((A[:, None] - B[None, :])**2, axis=2)) # (m, n)
+    # calculate the L2 distance between each points in both a and b
+    dist = np.sqrt(np.sum((a[:, None] - b[None, :])**2, axis=2)) # (m, n)
 
-    # find the closest point in B for each point in A
-    min_idx = np.argmin(dist, axis=1)
+    # find the closest point in b for each point in a
+    min_idx = np.argmin(dist, axis=1)                           # min_idx: shape (m,), with values in [0, n) 
     
     # only if distance is smaller than eps, the match is valid
-    mask = np.min(dist, axis=1) < eps
-    overlap_A, overlap_B = A[mask], B[min_idx][mask]    
-    unique_A = A[~mask]
+    mask = np.min(dist, axis=1) < threshold
+    overlap_a, overlap_b = a[mask], b[min_idx][mask]            # through b[min_idx][mask], each point in 'a' is matched to at most one nearest point in 'b' (via argmin), avoiding duplicate matches.
+    unique_a = a[~mask]
     
-    # only if distance is smaller than eps, the match is valid
-    mask = np.min(dist, axis=0) < eps
-    unique_B = B[~mask]
-
-    # # struct numpy array
-    # BS = B.view([('x', B.dtype), ('y', B.dtype)]).reshape(-1)
-    # OBS = overlap_B.view([('x', overlap_B.dtype), ('y', overlap_B.dtype)]).reshape(-1)
-    # unique_B = np.setdiff1d(BS, OBS).view(A.dtype).reshape(-1, 2)
+    # only if distance is smaller than threshold, the match is valid
+    mask = np.min(dist, axis=0) < threshold
+    unique_b = b[~mask]
     
-    return overlap_A, overlap_B, unique_A, unique_B
+    if return_count_only:
+        return len(overlap_a), len(overlap_b), len(unique_a), len(unique_b)
+    else:
+        return overlap_a, overlap_b, unique_a, unique_b
 
 
 def find_close_pair(coords: np.ndarray, threshold: int=7, method: str='L1'):
@@ -510,47 +508,71 @@ def describe_database(db: pd.DataFrame):
     plt.show()
 
 
-def cal_snr(img: np.ndarray, noised_img: np.ndarray):
-    '''
-        Calculate the signal-to-noise ratio between the original image and the noised image.
-    Args:
-        img: the original image
-        noised_img: the noised image
-    Returns:
-        snr: the signal-to-noise ratio
-    '''
-    snr = 10 * np.log10(np.sum(img**2) / np.sum((img - noised_img)**2))
-
-    return snr
-
-
-def cal_mse_psnr_ssim(img1: np.ndarray, img2: np.ndarray):
+def cal_mse_psnr_ssim(img1: np.ndarray, img2: np.ndarray, ndigits: int=-1):
     '''
         Calculate peak signal-to-noise ratio and the structural similarity between the original image and the filtered image.
     Args:
         img1: the original image
         img2: the image after filtering
+        ndigits: Number of decimal places to round to. If -1 (default), keep full precision.
     Returns:
-        mse: the mean sqaure error
-        psnr: the peak signal-to-noise ratio
-        mssim: the mean structural similarity
+        mse, psnr, mssim
     '''
-    assert(img1.dtype == img2.dtype and (img1.dtype == np.uint8 or img1.dtype == np.float32))
+    assert img1.shape == img2.shape and img1.dtype == img2.dtype and (img1.dtype == np.uint8 or img1.dtype == np.float32)
 
     # max value
     mv = 255 if img1.dtype == np.uint8 else 1.0
 
-    # caculate the MSE
+    # caculate the mse
     mse = mean_squared_error(img1, img2)
     # print(mse, np.mean((img1 - img2)**2))
     
-    # caculate the PSNR
+    # caculate the psnr
     psnr = peak_signal_noise_ratio(img1, img2, data_range=mv) if mse > 0 else np.inf
     # print(psnr, 10 * np.log10(mv**2 / mse) if mse > 0 else np.inf)
     
-    # caculate the SSIM
+    # caculate the mean ssim
     mssim = structural_similarity(img1, img2, win_size=3, data_range=mv)
 
-    mse, psnr, mssim = round(mse, 2), round(psnr, 2), round(mssim, 2)
+    # round to ndigits precision if needed
+    if ndigits != -1:
+        mse, psnr, mssim = np.round(mse, ndigits), np.round(psnr, ndigits), np.round(mssim, ndigits)
 
     return mse, psnr, mssim
+
+
+def cal_rc_p_f1(tp: int | float | np.ndarray, fp : int | float | np.ndarray, fn: int | float | np.ndarray, percent: bool=True, ndigits: int=-1):
+    '''
+        Calculate recall, precision, and f1-score.
+    Args:
+        tp: true positives - the number of correct detections
+        fp: false positives - the number of false alarms
+        fn: false negatives - the number of missed targets
+        percent: If True, return metrics in percent (e.g., 85.0 instead of 0.85).
+        ndigits: Number of decimal places to round to. If -1 (default), keep full precision.
+    Returns:
+        rc, p, f1
+    '''
+    assert np.ndim(tp) == np.ndim(fp) == np.ndim(fn)
+
+    # denominator constant for safe division
+    eps = 1e-10
+
+    # compute recall
+    rc = tp / np.maximum(tp + fn, eps)
+
+    # compute precision
+    p = tp / np.maximum(tp + fp, eps)
+
+    # compute F1-score
+    f1 = 2 * (p * rc) / np.maximum(p + rc, eps)
+
+    # convert into percentage if needed
+    if percent:
+        rc, p, f1 = rc * 100.0, p * 100.0, f1 * 100.0
+
+    # round to ndigits precision if needed
+    if ndigits != -1:
+        rc, p, f1 = np.round(rc, ndigits), np.round(p, ndigits), np.round(f1, ndigits)
+
+    return rc, p, f1
