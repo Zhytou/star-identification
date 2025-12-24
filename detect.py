@@ -132,7 +132,23 @@ def cal_lcm(img: np.ndarray, method: str, size: int):
                 np.clip(tmean_map[None, ...] / shifted_tmean_map - 1, 0, np.inf) * tmean_map,   # (8, h, w)
                 np.nan
             ), axis=0
-        )     
+        )
+    elif method == 'PCM':
+        'Multiscale patch-based contrast measure for small infrared target detection https://linkinghub.elsevier.com/retrieve/pii/S0031320316300358'
+        mean_residual_map = mean_map[None, ...] - shifted_mean_map
+        positive_mask = mean_residual_map > 0                                                   # only retain position mean residual (bright target)
+        mean_residual_map = np.where(shift_mask & positive_mask, mean_residual_map, np.nan)     # apply mask and set invalid/negative to NaN
+        measure = np.nanmin(
+            np.stack([
+                mean_residual_map[0, ...] * mean_residual_map[1, ...],                          # vertical line
+                mean_residual_map[2, ...] * mean_residual_map[3, ...],                          # horizontal line
+                mean_residual_map[4, ...] * mean_residual_map[5, ...],                          # main diagonal
+                mean_residual_map[6, ...] * mean_residual_map[7, ...],                          # anti-diagonal
+            ], axis=0),
+            initial=np.inf,                                                                     # avoid corner to be np.nan
+            axis=0
+        )
+        measure[measure == np.inf] = eps
     elif method == 'SDM':
         shifted_patches = np.stack([np.roll(patches, shift, axis=(0, 1)) for shift in shitfs])  # shifted patches (8, h, w, d, d)
         measure = np.nanmin(
@@ -288,7 +304,7 @@ def enhance_image(img: np.ndarray, method: str, patch_size: int=3, preserve_dtyp
     padded_img = np.pad(img, ((r, r), (r, r)))                                                  # padded raw image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))                      # raw patches (h, w, d, d)
 
-    if method in ['LCM', 'ILCM', 'NLCM', 'RLCM', 'MLCM']:
+    if method in ['LCM', 'ILCM', 'NLCM', 'RLCM', 'MLCM', 'PCM']:
         enhanced_img = cal_lcm(img, method, size=d)
     elif method == 'Top-Hat':
         selem = np.ones((d, d), dtype=bool)                                                     # structural element
@@ -328,7 +344,8 @@ def enhance_image_multiscale(img: np.ndarray, method: str, patch_sizes: list[int
     '''
         Enhance the image under multiscale.
     '''
-    enhanced_imgs = np.stack([enhance_image(img, method, size) for size in patch_sizes])
+    assert method.startswith('MS_')
+    enhanced_imgs = np.stack([enhance_image(img, method[3:], size) for size in patch_sizes])
 
     return np.max(enhanced_imgs, axis=0)
 
@@ -360,7 +377,7 @@ def region_grow(img1: np.ndarray, img2: np.ndarray, opt_meth: str, thr_meth: str
     ## 1. Preselect
     #! only use local rank_filter, because the global background threshold might be too high under starry light interference
     #! also, avoid preselection when noise is relatively high
-    if True:
+    if False:
         mask = is_local_topk(img1, k=-2, connectivity=connectivity) | is_near_local_max(img1, connectivity=connectivity) # possible seed mask (h, w)
         if d >= 5:                                                              # check the mean gray of inner ring is higher than the outter one
             rr = d // 4
@@ -663,9 +680,11 @@ def group_star(img: np.ndarray, method: list[str], connectivity: int=4, pixel_li
     """
     ehc_meth, thr_meth, lab_meth, opt_meth = method    
 
-    ## 1. Enhance the input image if needed
-    enhanced_img = enhance_image(img, ehc_meth, patch_size=5)
-    # enhanced_img = enhance_image_multiscale(img, ehc_meth, patch_sizes=[3, 5, 7, 9])
+    ## 1. Enhance the input image
+    if ehc_meth.startswith('MS_'):
+        enhanced_img = enhance_image_multiscale(img, ehc_meth, patch_sizes=[3, 5, 7])
+    else:
+        enhanced_img = enhance_image(img, ehc_meth, patch_size=5)
 
     ## 2. Binarize the enhanced image, except for RG-based method
     binary_img = binarize_image(enhanced_img, thr_meth)
