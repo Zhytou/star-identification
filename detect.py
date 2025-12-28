@@ -27,24 +27,30 @@ class UnionSet:
             self.parent[x] = self.find(self.parent[x])
         return self.parent[x]
 
-    def union(self, x: int, y: int):
-        root_x = self.find(x)
-        root_y = self.find(y)
-        if root_x != root_y:
-            self.cnt -= 1
-            if self.rank[root_x] > self.rank[root_y]:
-                self.parent[root_y] = root_x
-            elif self.rank[root_x] < self.rank[root_y]:
-                self.parent[root_x] = root_y
-            else:
-                self.parent[root_y] = root_x
-                self.rank[root_x] += 1
+    def union_2(self, x: int, y: int):
+        x0, y0 = self.find(x), self.find(y)             # parent of x and y
+        if x0 != y0:
+            if self.rank[x0] < self.rank[y0]:           # ensure x0 has higher or equal rank
+                x0, y0 = y0, x0
+            if self.rank[x0] == self.rank[y0]:          # increment rank when merging trees of equal height
+                self.rank[x0] += 1
+            self.cnt -= 1                               # one less connected component after merging
+            self.parent[y0] = x0 
+        return x0
+
+    def union_l(self, xs: list | np.ndarray, y: int=-1):
+        assert len(xs) >= 1
+        x0 = self.find(xs[0]) if y == -1 else self.find(y)
+        for x in xs:
+            x0 = self.union_2(x0, x)
+        return x0
 
     def add(self, x: int):
         if x not in self.parent:
             self.parent[x] = x
             self.rank[x] = 0
             self.cnt += 1
+        return x
     
     def count(self):
         return self.cnt
@@ -222,15 +228,9 @@ def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=0.2):
     return measure
 
 
-def binarize_image(img: np.ndarray, method: str) -> int:
+def binarize_image(img: np.ndarray, method: str):
     '''
-        Binarize the image.
-    Args:
-        img: the image to be processed
-        method: the method used to calculate the threshold
-    Returns:
-        binary_img
-
+        Binarize the grayscale image.
     '''
     assert img.dtype == np.uint8
 
@@ -275,6 +275,7 @@ def binarize_image(img: np.ndarray, method: str) -> int:
         ## 3. Get the optimal threshold for f(x, y) and g(x, y)
         k_vals, m_vals = np.arange(0, k_max, gray_step), np.arange(0, m_max, num_step)
         k, m = np.meshgrid(k_vals, m_vals, indexing='ij')
+        #TODO: optimal threshold calculation based on local entropy
         T_k_opt, T_m_opt = 0, 0
 
         ## 4. Do segmentation
@@ -283,22 +284,33 @@ def binarize_image(img: np.ndarray, method: str) -> int:
     return binary_img
 
 
-def enhance_image(img: np.ndarray, method: str, patch_size: int=3, preserve_dtype: bool=True):
+def binarize_image_local(img: np.ndarray, method: str, coords: np.ndarray, size: int=21):
+    '''
+        Perform local adaptive binarization around given coordinates.
+    '''
+    assert img.dtype == np.uint8 and coords.shape[1] == 2
+
+    h, w = img.shape
+    d = size
+    r = d // 2
+
+    y, x = coords[:, 0], coords[:, 1]
+    ymin, ymax = np.maximum(0, y - r), np.minimum(h, y + r + 1)           # top and bottom boundary
+    xmin, xmax = np.maximum(0, x - r), np.minimum(w, x + r + 1)           # left and right boundary
+
+    binary_img = np.zeros_like(img, dtype=np.uint8)
+    for y1, y2, x1, x2 in zip(ymin, ymax, xmin, xmax):    
+        binary_img[y1:y2, x1:x2] = binary_img[y1:y2, x1:x2] | binarize_image(img[y1:y2, x1:x2], method) #! careful, maybe overlap must use union
+    return binary_img
+
+
+def enhance_image(img: np.ndarray, method: str, size: int=3, preserve_dtype: bool=True):
     '''
         Enhance the image.
-    Args:
-        img: the input image.
-        method: the method used to enhance the image.
-        patch_size: the size of patch
-        preserve_dtype: 
-            If True, the enhanced output is clipped to the valid range of the input dtype (e.g., [0, 255] for uint8) and cast back to the original dtype.
-            If False, the result is returned as float32 to preserve negative or out-of-range values.
-    Return:
-        enhanced_img
     '''
 
-    d = patch_size                                                                              # patch size
-    r = patch_size // 2                                                                         # half of patch size
+    d = size                                                                                    # patch size
+    r = size // 2                                                                               # half of patch size
     max_val = 255 if img.dtype == np.uint8 else 1.0
 
     padded_img = np.pad(img, ((r, r), (r, r)))                                                  # padded raw image
@@ -323,6 +335,9 @@ def enhance_image(img: np.ndarray, method: str, patch_size: int=3, preserve_dtyp
         else:
             mean_map = np.stack([np.mean(patches[:, :, mask], axis=-1) for mask in opt_mask], axis=-1)
             enhanced_img = img - np.max(mean_map, axis=-1)
+    elif method == 'BE':
+        '星敏感器抗杂光背景滤波图像处理方法研究 https://doi.org/10.19328/j.cnki.1006-1630.2016.04.005'
+
     elif method == 'MSobel':
         enhanced_img = cal_sobel(img, sigma=1)
     elif method in ['PGCM', 'BGCM']:
@@ -340,304 +355,260 @@ def enhance_image(img: np.ndarray, method: str, patch_size: int=3, preserve_dtyp
     return enhanced_img
 
 
-def enhance_image_multiscale(img: np.ndarray, method: str, patch_sizes: list[int]):
+def enhance_image_multiscale(img: np.ndarray, method: str, sizes: list[int]):
     '''
         Enhance the image under multiscale.
     '''
     assert method.startswith('MS_')
-    enhanced_imgs = np.stack([enhance_image(img, method[3:], size) for size in patch_sizes])
+    enhanced_imgs = np.stack([enhance_image(img, method[3:], size) for size in sizes])
 
     return np.max(enhanced_imgs, axis=0)
 
 
-def region_grow(img1: np.ndarray, img2: np.ndarray, opt_meth: str, thr_meth: str, patch_size: int=5, wind_size: int=25, connectivity: int=4, steps: int=4) -> tuple[int, np.ndarray]:
+def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: int=4):
     '''
-        Do region grow.
-    Args:
-        img1: the input image for seed detection
-        img2: the input image for region growing 
-        opt_meth: the method of operator
-        thr_meth: the method of threshol
-        patch_size: the size used for operator calculation
-        wind_size: the size used for local threshold calculation
-    Returns:
-        n: number of seeds
-        seeds: the coordinates and labels of the seeds
-        bimg: binary image
+        Initialize seeds for region growth.
     '''
-    assert img1.shape == img2.shape
 
-    h, w = img1.shape
-    d = patch_size
-    r = patch_size // 2
-    padded_img = np.pad(img1, ((r, r), (r, r)), mode='constant')                # padded image
+    d = size
+    r = size // 2
+    padded_img = np.pad(img, ((r, r), (r, r)), mode='constant')                 # padded image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))      # image patches (h, w, d, d)
-    max_intensity = 255 if img1.dtype == 255 else 1.0                           # max intensity for image data type
+    max_intensity = 255 if img.dtype == 255 else 1.0                            # max intensity for image data type
 
     ## 1. Preselect
     #! only use local rank_filter, because the global background threshold might be too high under starry light interference
     #! also, avoid preselection when noise is relatively high
-    if False:
-        mask = is_local_topk(img1, k=-2, connectivity=connectivity) | is_near_local_max(img1, connectivity=connectivity) # possible seed mask (h, w)
-        if d >= 5:                                                              # check the mean gray of inner ring is higher than the outter one
-            rr = d // 4
-            inner = np.zeros((d, d), dtype=bool)
-            inner[r-rr:r+rr+1, r-rr:r+rr+1] = True
-            omean = np.maximum(np.mean(patches[..., ~inner], axis=-1), eps)     # outer ring mean map
-            inner[r, r] = False                                                 # exclude central pixel
-            imean = np.maximum(np.mean(patches[..., inner], axis=-1), eps)      # inner ring mean map 
-            mask = mask & ((img1 == max_intensity) | (img1 - 1. * imean >= 0)) & (imean - 1. * omean >= 0)
-    else:
-        mask = np.ones_like(img1, dtype=bool)
-    
-    n = np.sum(mask)                                                            # number of possible seeds
-
-    print('Number of seeds after preselection:', n)
+    mask = is_local_topk(img, -2, connectivity) | is_near_local_max(img, connectivity) # possible seed mask (h, w)
+    if d >= 5:                                                                  # check the mean gray of inner ring is higher than the outter one
+        rr = d // 4
+        inner = np.zeros((d, d), dtype=bool)
+        inner[r-rr:r+rr+1, r-rr:r+rr+1] = True
+        omean = np.maximum(np.mean(patches[..., ~inner], axis=-1), eps)         # outer ring mean map
+        inner[r, r] = False                                                     # exclude central pixel
+        imean = np.maximum(np.mean(patches[..., inner], axis=-1), eps)          # inner ring mean map 
+        mask = mask & ((img == max_intensity) | (img - 1. * imean >= 0)) & (imean - 1. * omean >= 0)
+    print('Number of seeds after preselection:', np.sum(mask))
 
     ## 2. Double check with different operators 
-    if opt_meth == 'DoH' or opt_meth == 'Ly':
+    if method == 'DoH' or method == 'Ly':
         # https://doi.org/10.16251/j.cnki.1009-2307.2012.01.033
-        res = cal_doh(img1, sigma=1) if opt_meth == 'DoH' else cal_ly(img1, sigma=1)[0] # operator results (h, w)
+        res = cal_doh(img, sigma=1) if method == 'DoH' else cal_ly(img, sigma=1)[0] # operator results (h, w)
         mask = mask & is_local_topk(res, k=-1, connectivity=connectivity)
-    elif opt_meth == 'CGC':
+    elif method == 'CGC':
         # combined gradient and curvature
-        res1, res2 = cal_gcm(img1, 'PGCM', size=patch_size, sigma=0.2), cal_doh(img1, sigma=1.5)
+        res1, res2 = cal_gcm(img, 'PGCM', size=d, sigma=0.2), cal_doh(img, sigma=1.5)
         res2[mask] *= res1[mask]
         mask = mask & (res1 > 0.3) & is_local_topk(res2, k=-2, connectivity=connectivity)
     else:
-        pass
+        mask = np.zeros_like(mask, dtype=bool)
+    print('Number of seeds after operator double check:', np.sum(mask))
 
-    ## 3. Generate unique label for each seed
-    coords = np.argwhere(mask)                                                  # coordinates of preselected seeds (_, 2)
-    labels = np.arange(1, len(coords)+1).reshape(-1, 1)                         # initilize labels for each seeds (_, 1)
-    n, seeds = merge_seeds(np.hstack([coords, labels]))                         # merge the label of connected seeds (_, 3)
+    ## 3. Generate unique label for each seed, namely merge possible connected seeds
+    n = np.sum(mask)                                                            # number of initial unconnected seeds
+    label_tab = UnionSet(n)                                                     # label equivalence table
+    coords, labels = np.argwhere(mask), np.arange(1, n + 1)                     # coordinates and initial labels
+    offsets = np.array([[1, 0], [-1, 0], [0, 1], [0, -1]]) if connectivity == 4 else np.array([[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]])
 
-    print('Number of seeds after operator double check:', n)
-
-    ## 4. Gnerate binary image for later growth
-    if True: # use local threshold if flag is True
-        rr = wind_size // 2
-
-        y, x = coords[:, 0], coords[:, 1]
-        ymin, ymax = np.maximum(0, y - rr), np.minimum(h, y + rr + 1)           # top and bottom boundary
-        xmin, xmax = np.maximum(0, x - rr), np.minimum(w, x + rr + 1)           # left and right boundary
-
-        binary_img = np.zeros_like(img1, np.uint8)
-        for y1, y2, x1, x2 in zip(ymin, ymax, xmin, xmax):    
-            binary_img[y1:y2, x1:x2] = binary_img[y1:y2, x1:x2] | binarize_image(img2[y1:y2, x1:x2], thr_meth) #! careful, maybe overlap must use union
-    else:
-        binary_img = binarize_image(img2, thr_meth)
-
-    ## 5. Retain only foreground seeds
-    valid = binary_img[seeds[:, 0], seeds[:, 1]] == 1
-    seeds = seeds[valid]
-
-    ## 6. Do region growth on binary image, namely breadth first search
-    trace = [seeds]
-    if connectivity == 4:
-        offs = np.array([[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0]], dtype=int)
-    else:  # connectivity == 8
-        offs = np.array([[-1, -1, 0], [-1, 0, 0], [-1, 1, 0], [0, -1, 0], [0, 1, 0], [1, -1, 0], [1, 0, 0], [1, 1, 0]], dtype=int)
-    while steps > 0:                                                            # maximum search steps
-        assert np.all(binary_img[seeds[:, 0], seeds[:, 1]] == 1)                # must be foreground seeds
-        binary_img[seeds[:, 0], seeds[:, 1]] = 0                                # set to visited
-
-        seeds = np.reshape(seeds[:, None, :] + offs, (-1, 3))                   # get the neighboring seeds (4 * n, 3) or (8 * n, 3)
-        valid = (seeds[:, 0] >= 0) & (seeds[:, 0] < h) & (seeds[:, 1] >= 0) & (seeds[:, 1] < w) # boundary check
-        seeds = seeds[valid]
-
-        valid = binary_img[seeds[:, 0], seeds[:, 1]] == 1                       # !careful must validate foreground pixels only after bounds check; otherwise, binary_img[seeds] may raise IndexError for out-of-range coordinates.
-        seeds = seeds[valid]
-
-        trace.append(seeds)                                                     # add current seeds to search trace
-        steps -= 1
-
-    return n, np.concatenate(trace)
-
-
-def merge_seeds(seeds: np.ndarray):
-    '''
-        Merge possible connected seeds.
-    '''
-
-    tot = len(seeds)
-    tab = UnionSet(tot)
-
-    for seed in seeds:
-        x, y, _ = seed
-        # the indexs of connected seeds
-        idxs = np.where(
-            ((seeds[:, 0] == x+1) & (seeds[:, 1] == y)) |
-            ((seeds[:, 0] == x-1) & (seeds[:, 1] == y)) | 
-            ((seeds[:, 0] == x) & (seeds[:, 1] == y+1)) | 
-            ((seeds[:, 0] == x) & (seeds[:, 1] == y-1))
-        )[0]
-
-        # not connected
-        if len(idxs) == 0:
+    # First Pass: construct label equivalence table
+    for i in range(n):
+        ncoordi = coords[i, None, :] + offsets                                  # neighboring coordinates for i-th seed 
+        mask = np.isin(coords[:, 0], ncoordi[:, 0]) & np.isin(coords[:, 1], ncoordi[:, 1])  # connected mask
+        if not np.any(mask):
             continue
-
-        # merge the connected label
-        for idx in idxs:
-            tab.union(seed[2], seeds[idx, 2])
-            seed[2] = min(seed[2], seeds[idx, 2])
-
-    # update label
-    cnt = 0
-    lab = {}
-    for seed in seeds:
-        seed2 = tab.find(seed[2])
-        if seed2 in lab:
-            seed[2] = lab[seed2]
+        clabels = labels[np.nonzero(mask)[0]]                                   # connected labels
+        labels[i] = label_tab.union_l(clabels, labels[i])
+    
+    # Second Pass: allocate new unique labels in [1, label_tab.count()] for each seed
+    label_cnt, label_map = 0, {}                                                # unique label counter(for double check) and label mapping(for compression)
+    for i in range(n):
+        labels[i] = label_tab.find(labels[i])
+        if labels[i] in label_map:
+            labels[i] = label_map[labels[i]]
         else:
-            cnt += 1
-            lab[seed2] = cnt
-            seed[2] = cnt
-    assert cnt == tab.count(), f'{cnt}, {tab.count()}'
+            label_cnt += 1
+            label_map[labels[i]] = label_cnt
+            labels[i] = label_cnt
+    assert label_cnt == label_tab.count(), ''
+    print('Number of seeds after merging:', label_cnt)
 
-    return cnt, seeds
+    return coords, labels
 
 
-def connected_components_label(img: np.ndarray, connectivity: int=4) -> tuple[int, np.ndarray]:
+def region_growth_label(img: np.ndarray, coords: np.ndarray, labels: np.ndarray, connectivity: int=4, steps: int=4):
     '''
-        Label the connected components in the image.
+        Label the image with region growth.
     '''
+
     h, w = img.shape
 
-    # initialize the label image
-    # avoid using int8(overflow)
-    label_img = np.zeros_like(img, dtype=np.uint32)
-    label_cnt = 0
-    label_tab = UnionSet()
+    ## 1. Retain only foreground seeds
+    valid = img[coords[:, 0], coords[:, 1]] != 0
+    coords, labels = coords[valid], labels[valid]
 
-    # offsets
-    ds = np.array([[-1, 0], [1, 0], [0, -1], [0, 1]], dtype=int) if connectivity == 4 else np.array([[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]], dtype=int)
+    ## 2. Do region growth on binary image, namely breadth first search
+    n = len(np.unique(labels))
+    label_img, label_tab = np.zeros_like(img, np.uint32), UnionSet(n)           # label image and label equivalence table
+    offsets = np.array([[1, 0], [-1, 0], [0, 1], [0, -1]]) if connectivity == 4 else np.array([[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]])
+    while steps > 0 and len(coords) > 0:
+        assert np.all(img[coords[:, 0], coords[:, 1]] == 1) and len(coords) == len(labels)
+        img[coords[:, 0], coords[:, 1]] = 0                                     # mark the visited
+        label_img[coords[:, 0], coords[:, 1]] = labels                          # assign the labels
 
-    # first pass
-    xs, ys = np.nonzero(img)
-    for x, y in zip(xs, ys):
-        # # get neighbors
-        # neighbors = ds + (x, y)
-        # # boundary check
-        # mask = (neighbors[:,0] >= 0) & (neighbors[:,0] < h) & (neighbors[:,1] >= 0) & (neighbors[:,1] < w)
-        # neighbors = neighbors[mask]
-
-        # # get connected neighbors' label
-        # connected_labels = label_img[neighbors[:, 0], neighbors[:, 1]]
-        # connected_labels = connected_labels[connected_labels!=0]
-                
-        connected_labels = []
-        for dx, dy in ds:
-            if x + dx < 0 or x + dx >= h or y + dy < 0 or y + dy >= w:
-                continue
-            if label_img[x + dx, y + dy] > 0:
-                connected_labels.append(label_img[x + dx, y + dy])
+        # broadcast to get the neighboring seeds
+        ncoords, nlabels = np.reshape(coords[:, None, :] + offsets[None, ...], (-1, 2)), np.repeat(labels, connectivity) # neighboring coordinates and labels
+        valid = (
+            (ncoords[:, 0] >= 0) & (ncoords[:, 0] < h) & 
+            (ncoords[:, 1] >= 0) & (ncoords[:, 1] < w)
+        )                                                                       # boundary check
+        ncoords, nlabels = ncoords[valid], nlabels[valid]
         
-        if len(connected_labels) == 0:
+        valid = img[ncoords[:, 0], ncoords[:, 1]] != 0                          # foreground and unvisited check
+        ncoords, nlabels = ncoords[valid], nlabels[valid]
+
+        #TODO: add overlap check
+        # find duplicate coordinates and merge label
+
+        coords, labels = ncoords, nlabels                                       # update current coordinates and labels     
+        steps -= 1
+
+    return label_tab.count(), label_img
+
+
+def connected_components_label(img: np.ndarray, connectivity: int=4):
+    '''
+        Label the connected regions with two-pass method.
+    '''
+
+    h, w = img.shape
+    label_img = np.zeros_like(img, dtype=np.uint32)
+    label_cnt, label_tab = 0, UnionSet()                    # unique label counter and label equivalence table
+
+    ## 1. First Pass: construct label equivalence table
+    offsets = np.array([[1, 0], [-1, 0], [0, 1], [0, -1]]) if connectivity == 4 else np.array([[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]])
+    coords = np.argwhere(img)                               # coordinates of nonzero pixels
+    for coord in coords:
+        ncoord = coord[None, :] + offsets                   # coordinates of neighbor pixels
+        
+        valid = (ncoord[...,0] >= 0) & (ncoord[..., 0] < h) & (ncoord[..., 1] >= 0) & (ncoord[..., 1] < w) # boundary check
+        ncoord = ncoord[valid]
+        
+        valid = img[ncoord[:, 0], ncoord[:, 1]] != 0        # foreground check
+        ncoord = ncoord[valid]
+
+        nlabel = label_img[ncoord[:, 0], ncoord[:, 1]]      # labels of neighbor pixels
+        if np.all(nlabel == 0):
             label_cnt += 1
-            label_img[x, y] = label_cnt
-            label_tab.add(label_cnt)
+            label_img[coord[0], coord[1]] = label_tab.add(label_cnt)
         else:
-            min_label = min(connected_labels)
-            for label in connected_labels:
-                label_tab.union(min_label, label)
-            label_img[x, y] = min_label
-    
+            nlabel = nlabel[nlabel != 0]
+            label_img[coord[0], coord[1]] = label_tab.union_l(nlabel)
 
-    # second pass
-    labels = label_img[xs, ys]
-    for xi, yi, labeli in zip(xs, ys, labels):
-        # find the root label
-        label_img[xi, yi] = label_tab.find(labeli)
-    
-    return label_img
+    ## 2. Second Pass: allocate new unique labels in [1, label_tab.count()] for each seed
+    label_cnt, label_map = 0, {}                            # unique label counter(reset for double check) and label mapping(for compression)
+    for coord in coords:
+        label = label_tab.find(label_img[coord[0], coord[1]])
+        if label in label_map:
+            label_img[coord[0], coord[1]] = label_map[label]
+        else:
+            label_cnt += 1
+            label_img[coord[0], coord[1]] = label_cnt
+            label_map[label] = label_cnt
+    assert label_cnt == label_tab.count(), ''
+
+    return label_cnt, label_img
 
 
-def run_length_code_label(img: np.ndarray, connectivity: int=4) -> list[dict]:
+def run_length_code_label(img: np.ndarray, connectivity: int=4):
     '''
-        Label the connected components in the image using run length code.
+        Label the connected regions with run length code.
     '''
-    
-    # label counter & label table for merging
-    label_cnt = 0
-    label_tab = UnionSet()
+      
+    label_cnt, label_tab = 0, UnionSet()    # unique label counter and label equivalence table
 
     def gen_curr_run(row: int, beg: int, end: int):
         '''
             Generate the current run.
-        Args:
-            row: the number of the row
-            beg: the begin column of the run
-            end: the end column of the run
-        Returns:
-            run: the run
         '''
         nonlocal label_cnt, label_tab
-        run = {
-            'row': row,
-            'beg': beg,
-            'end': end,
-            'label': -1
-        }
-        connected_labels = []
-        # use binary search to find the potential connected labels in the previous runs
+        
+        run = {'row': row, 'beg': beg, 'end': end, 'label': -1}
+        clabels = []
+
+        ## 1. Use binary search to find the potential connected labels in the previous runs
         idx = bis.bisect_left(prev_runs, run['beg'], key=lambda x: x['end'])
         if idx < len(prev_runs):
             for prev_run in prev_runs[idx:]:
-                # no longer connected
                 if prev_run['beg'] > end:
                     break
-
-                # 4-connectivity
                 if connectivity == 4:
                     overlap = (prev_run['beg'] <= end) and (prev_run['end'] >= beg)
                 else:
-                    # 8-connectivity
                     overlap = (prev_run['beg'] <= end + 1) and (prev_run['end'] >= beg - 1)
                 if overlap:
-                    connected_labels.append(prev_run['label'])
-
-        if len(connected_labels) == 0:
+                    clabels.append(prev_run['label'])
+        
+        ## 2. Merge the connected labels
+        if len(clabels) == 0:
             label_cnt += 1
-            label_tab.add(label_cnt)
-            run['label'] = label_cnt
+            run['label'] = label_tab.add(label_cnt)
         else:
-            min_label  = min(connected_labels)
-            for label in connected_labels:
-                label_tab.union(min_label, label)
-            run['label'] = min_label
+            run['label'] = label_tab.union_l(clabels)
         
         return run
 
-    h, w = img.shape
+    h, _ = img.shape
 
-    # row, beg, end, label
-    runs = []
-
-    # preverse row runs
-    prev_runs = []
-
-    # iterate on axis 0 of img to generate runs
+    runs, prev_runs= [], []
+    ## 1. Iterate on axis 0 of img to generate runs
     for row in range(h):
-        if len(prev_runs) > 0 and prev_runs[0]['row'] != row-1:
+        if len(prev_runs) > 0 and prev_runs[0]['row'] != row - 1:               # set previous row runs to empty if already skip a row
             prev_runs = []
-        
-        # current row runs
-        curr_runs = []
 
-        # generate current row runs
-        col_ranges = find_ranges(img[row])
-        if col_ranges is None:
-            continue
-
-        curr_runs.extend([gen_curr_run(row, beg, end) for (beg, end) in col_ranges])
+        curr_runs = []                                                          # current row runs
+        col_ranges = find_ranges(img[row])                                      # nonzero column ranges
+        curr_runs.extend([gen_curr_run(row, beg, end) for (beg, end) in col_ranges]) # construct row runs
         prev_runs = curr_runs
         runs.extend(curr_runs)
-
     runs = [dict(run, label=label_tab.find(run['label'])) for run in runs]
-    runs.sort(key=lambda x: x['label'])
 
-    return runs
+    ## 2. Iterate through runs to construct label image
+    label_cnt, label_map = 0, {}                                                # unique label counter(reset for double check) and label mapping(for compression)
+    label_img = np.zeros_like(img, np.uint32)
+    for run in runs:
+        if run['label'] in label_map:
+            run['label'] = label_map[run['label']]
+        else:
+            label_cnt += 1
+            label_map[run['label']] = label_cnt 
+            run['label'] = label_cnt
+        label_img[run['row'], run['beg']:run['end']+1] = run['label']
+    assert label_cnt == label_tab.count()
+
+    return label_cnt, label_img
+
+
+def cross_project_label(img: np.ndarray, connectivity: int=4):
+    '''
+        Label the connected regions with cross projection method.
+    '''
+    label_cnt = 0                                           # unique label counter
+    label_img = np.zeros_like(img, dtype=np.uint32)
+    
+    vproj = np.sum(img, axis=0)                             # vertical projection
+    vranges = find_ranges(vproj)
+
+    for (x1, x2) in vranges:
+        hproj = np.sum(img[:, x1 : x2 + 1], axis=1)         # horizontal projection
+        hranges = find_ranges(hproj)
+
+        for (y1, y2) in hranges:
+            roi = img[y1 : y2 + 1, x1 : x2 + 1]             # the region of interest
+            cnt, label_roi = cv2.connectedComponents(roi, connectivity=connectivity)
+            label_img[y1 : y2 + 1, x1 : x2 + 1] = label_roi + label_cnt
+            label_cnt += cnt
+    
+    return label_cnt, label_img
 
 
 def find_ranges(nums: np.ndarray, threshold: int=0) -> list[tuple[int, int]]:
@@ -657,111 +628,53 @@ def find_ranges(nums: np.ndarray, threshold: int=0) -> list[tuple[int, int]]:
     ends = np.where(np.diff(mask) < 0)[0] - 1
 
     if begs.size == 0 or ends.size == 0:
-        return None
+        return []
 
     return np.vstack([begs, ends]).transpose()
 
 
 def group_star(img: np.ndarray, method: list[str], connectivity: int=4, pixel_limit: int=5) -> list[tuple[np.ndarray, np.ndarray]]:
-    """
-        Group the facula(potential star) in the image.
-    Args:
-        img: the image to be processed
-        method: 
-            RG Region Grow
-            DOH Determination of Hessian
-            LCM Local Contrast Measure
-            CCL Connected Components Label
-            RLC Run Length Code Connected Components Label
-            CPL Cross Projection Label
-        pixel_limit: the minimum number of connected pixels in the group
-    Returns:
-        group_coords: the coordinates of the grouped pixels(which are the potential stars)
-    """
+    '''
+        Group the potential star in the image.
+    '''
     ehc_meth, thr_meth, lab_meth, opt_meth = method    
 
     ## 1. Enhance the input image
     if ehc_meth.startswith('MS_'):
-        enhanced_img = enhance_image_multiscale(img, ehc_meth, patch_sizes=[3, 5, 7])
+        enhanced_img = enhance_image_multiscale(img, ehc_meth, sizes=[3, 5, 7])
     else:
-        enhanced_img = enhance_image(img, ehc_meth, patch_size=5)
+        enhanced_img = enhance_image(img, ehc_meth, size=5)
 
-    ## 2. Binarize the enhanced image, except for RG-based method
+    ## 2. Binarize the enhanced image, except for RGL-based method
     binary_img = binarize_image(enhanced_img, thr_meth)
 
     ## 3. Label the connected regions in the binary image
     group_coords = []
-    if lab_meth == 'RG':
-        # region growth on enhanced image
-        n, trace = region_grow(img, enhanced_img, opt_meth, thr_meth, patch_size=5, wind_size=25)
-
-        # get group coords for each root seed
-        for i in range(1, n+1): 
-            mask = trace[:, 2] == i
-            if np.sum(mask) < pixel_limit:
-                continue
-            group_coords.append((trace[mask, 0], trace[mask, 1]))
+    if lab_meth == 'RGL':
+        'Region Growth Label'
+        coords, labels = initialize_seeds(img, opt_meth, 5, connectivity)
+        binary_img = binarize_image_local(enhanced_img, thr_meth, coords)
+        n, label_img = region_growth_label(binary_img, coords, labels, connectivity)
     elif lab_meth == 'CCL' or lab_meth == 'DCCL':
-        label_img = connected_components_label(binary_img, connectivity) if lab_meth == 'DCCL' else cv2.connectedComponents(binary_img, connectivity=connectivity)[1]
-
-        rows, cols = np.nonzero(label_img)
-        labels = label_img[rows, cols]
-        ulabels, ucnts = np.unique(labels, return_counts=True)
-        ulabels = ulabels[ucnts >= pixel_limit]
-
-        for label in ulabels:
-            coords = rows[labels == label], cols[labels == label]
-            group_coords.append(coords)
-    elif method == 'RLC':
-        runs = run_length_code_label(binary_img, connectivity)
-        
-        curr_label = 1
-        curr_rows, curr_cols = [], []
-        for run in runs:
-            if run['label'] != curr_label and len(curr_rows) > pixel_limit and len(curr_cols) > pixel_limit:
-                group_coords.append((np.array(curr_rows), np.array(curr_cols)))
-                curr_rows, curr_cols = [], []
-
-            curr_label = run['label']
-            row, beg, end = run['row'], run['beg'], run['end']
-
-            curr_rows.extend([row] * (end - beg + 1))
-            curr_cols.extend(list(range(beg, end+1)))
-        
-        if len(curr_rows) > pixel_limit and len(curr_cols) > pixel_limit:
-            group_coords.append((np.array(curr_rows), np.array(curr_cols)))
-    elif method == 'CPL':
-        # vertical projection
-        vproj = np.sum(binary_img, axis=0)
-        vranges = find_ranges(vproj)
-        if vranges is None:
-            return []
-
-        for (y1, y2) in vranges:
-            # horizontal projection
-            hproj = np.sum(binary_img[:, y1:y2+1], axis=1)
-            hranges = find_ranges(hproj)
-
-            for (x1, x2) in hranges:
-                # get the region of interest
-                roi = binary_img[x1:x2+1, y1:y2+1]
-                _, label_roi = cv2.connectedComponents(roi, connectivity=connectivity)
-                rows, cols = np.nonzero(label_roi)
-                labels = label_roi[rows, cols]
-
-                # labels pixel > pixel_limit
-                ulabels, ucnts = np.unique(labels, return_counts=True)
-                ulabels = ulabels[ucnts >= pixel_limit]
-
-                # add offset
-                rows, cols = rows+x1, cols+y1
-
-                # add to group coords
-                for label in ulabels:
-                    coords = rows[labels == label], cols[labels == label]
-                    group_coords.append(coords)
+        'Connected Components Label'
+        n, label_img = connected_components_label(binary_img, connectivity) if lab_meth == 'DCCL' else cv2.connectedComponents(binary_img, connectivity)
+    elif lab_meth == 'CPL':
+        'Cross Projection Label'
+        n, label_img = cross_project_label(binary_img, connectivity)
+    elif lab_meth == 'RLC':
+        'Run Length Code Connected Components Label'
+        n, label_img = run_length_code_label(binary_img, connectivity)
     else:
-        print('Invalid segmentation method!')
-        return []
+        n, label_img = 0, binary_img
+
+    ## 4. Separate the labelled region
+    for i in range(n):
+        rows, cols = np.nonzero(label_img == i + 1)
+        if len(rows) >= pixel_limit and len(cols) >= pixel_limit:
+            group_coords.append((rows, cols))
+        else:
+            print(rows, cols)
+
+    print('n =', n, 'len_group_coords', len(group_coords))
 
     return group_coords
