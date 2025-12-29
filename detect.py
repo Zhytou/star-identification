@@ -5,7 +5,7 @@ import scipy.ndimage as ndi
 import skimage.filters as filters
 import skimage.morphology as morph
 
-from utils import cal_derivative, cal_difference, cal_doh, cal_log, cal_ly, cal_sobel, is_local_topk, is_near_local_max
+from utils import cal_derivative, cal_difference, cal_doh, cal_log, cal_ly, cal_sobel, is_local_topk, is_near_local_max, gen_gaussian_kernel
 
 eps = 1e-10
 
@@ -28,6 +28,9 @@ class UnionSet:
         return self.parent[x]
 
     def union_2(self, x: int, y: int):
+        '''
+            Union two labels x and y.
+        '''
         x0, y0 = self.find(x), self.find(y)             # parent of x and y
         if x0 != y0:
             if self.rank[x0] < self.rank[y0]:           # ensure x0 has higher or equal rank
@@ -39,6 +42,9 @@ class UnionSet:
         return x0
 
     def union_l(self, xs: list | np.ndarray, y: int=-1):
+        '''
+            Union a list of labels xs, and if y is not -1 union with it at the same time.
+        '''
         assert len(xs) >= 1
         x0 = self.find(xs[0]) if y == -1 else self.find(y)
         for x in xs:
@@ -72,9 +78,11 @@ def cal_lcm(img: np.ndarray, method: str, size: int):
     
     i, j =  np.indices((h, w))
     shift_mask = np.stack(
-        [i >= d, i < h - d, j >= d, j < w - d, 
-        (i >= d) & (j >= d), (i < h - d) & (j < w - d),
-        (i < h - d) & (j >= d), (i >= d) & (j < w - d),], axis=0)                               # valid shift mask
+        [i >= 2 * d, i < h - 2 * d, j >= 2 * d, j < w - 2 * d, 
+        (i >= 2 * d) & (j >= 2 * d), (i < h - 2 * d) & (j < w - 2 * d),
+        (i < h - 2 * d) & (j >= 2 * d), (i >= 2 * d) & (j < w - 2 * d),],
+        axis=0
+    )                                                                                           # shift mask indicates valid image patch: True if the entire image patch stays within image bounds after shift
     shitfs = [(d, 0), (-d, 0), (0, d), (0, -d), (d, d), (-d, -d), (-d, d), (d, -d)]             # shift offsets 
 
     kth = 3
@@ -139,10 +147,10 @@ def cal_lcm(img: np.ndarray, method: str, size: int):
                 np.nan
             ), axis=0
         )
-    elif method == 'PCM':
+    elif method == 'PCM' or method == 'MPCM':
         'Multiscale patch-based contrast measure for small infrared target detection https://linkinghub.elsevier.com/retrieve/pii/S0031320316300358'
         mean_residual_map = mean_map[None, ...] - shifted_mean_map
-        positive_mask = mean_residual_map > 0                                                   # only retain position mean residual (bright target)
+        positive_mask = mean_residual_map > 0                                                   # positive mask indicates bright target
         mean_residual_map = np.where(shift_mask & positive_mask, mean_residual_map, np.nan)     # apply mask and set invalid/negative to NaN
         measure = np.nanmin(
             np.stack([
@@ -155,6 +163,9 @@ def cal_lcm(img: np.ndarray, method: str, size: int):
             axis=0
         )
         measure[measure == np.inf] = eps
+        if method == 'MPCM':
+            selem = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
+            measure = morph.erosion(measure, footprint=selem)
     elif method == 'SDM':
         shifted_patches = np.stack([np.roll(patches, shift, axis=(0, 1)) for shift in shitfs])  # shifted patches (8, h, w, d, d)
         measure = np.nanmin(
@@ -300,7 +311,7 @@ def binarize_image_local(img: np.ndarray, method: str, coords: np.ndarray, size:
 
     binary_img = np.zeros_like(img, dtype=np.uint8)
     for y1, y2, x1, x2 in zip(ymin, ymax, xmin, xmax):    
-        binary_img[y1:y2, x1:x2] = binary_img[y1:y2, x1:x2] | binarize_image(img[y1:y2, x1:x2], method) #! careful, maybe overlap must use union
+        binary_img[y1:y2, x1:x2] = binary_img[y1:y2, x1:x2] | binarize_image(img[y1:y2, x1:x2], method) #!NOTE: use union to avoid overlap
     return binary_img
 
 
@@ -313,10 +324,10 @@ def enhance_image(img: np.ndarray, method: str, size: int=3, preserve_dtype: boo
     r = size // 2                                                                               # half of patch size
     max_val = 255 if img.dtype == np.uint8 else 1.0
 
-    padded_img = np.pad(img, ((r, r), (r, r)))                                                  # padded raw image
+    padded_img = np.pad(img, ((r, r), (r, r)), 'reflect')                                                  # padded raw image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))                      # raw patches (h, w, d, d)
 
-    if method in ['LCM', 'ILCM', 'NLCM', 'RLCM', 'MLCM', 'PCM']:
+    if method in ['LCM', 'ILCM', 'NLCM', 'RLCM', 'MLCM', 'PCM', 'MPCM']:
         enhanced_img = cal_lcm(img, method, size=d)
     elif method == 'Top-Hat':
         selem = np.ones((d, d), dtype=bool)                                                     # structural element
@@ -335,9 +346,13 @@ def enhance_image(img: np.ndarray, method: str, size: int=3, preserve_dtype: boo
         else:
             mean_map = np.stack([np.mean(patches[:, :, mask], axis=-1) for mask in opt_mask], axis=-1)
             enhanced_img = img - np.max(mean_map, axis=-1)
-    elif method == 'BE':
+    elif method == 'BEF':
         '星敏感器抗杂光背景滤波图像处理方法研究 https://doi.org/10.19328/j.cnki.1006-1630.2016.04.005'
-
+        kernel = gen_gaussian_kernel(sigma=1, size=d)                                           # default gaussian kernel with a size of d
+        kernel[1:-1, 1:-1] = 0                                                                  # zero out the inner region of gaussian kernel to estimate the bacground
+        kernel[0, 0], kernel[0, -1], kernel[-1, 0], kernel[-1, -1] = kernel[0, 0] + 1, kernel[0, -1] + 1, kernel[-1, 0] + 1, kernel[-1, -1] + 1 # emphasize corner contributions for background estimation
+        kernel /= kernel.sum()                                                                  # normalize the kernel
+        enhanced_img = np.clip((img - np.sum(patches * kernel[None, None, ...], axis=(-1, -2))), 0, max_val) # background estimation via convolution and subtract
     elif method == 'MSobel':
         enhanced_img = cal_sobel(img, sigma=1)
     elif method in ['PGCM', 'BGCM']:
@@ -377,9 +392,8 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
     max_intensity = 255 if img.dtype == 255 else 1.0                            # max intensity for image data type
 
     ## 1. Preselect
-    #! only use local rank_filter, because the global background threshold might be too high under starry light interference
-    #! also, avoid preselection when noise is relatively high
-    mask = is_local_topk(img, -2, connectivity) | is_near_local_max(img, connectivity) # possible seed mask (h, w)
+    #!NOTE: only use local rank_filter, because the global background threshold might be too high under starry light interference
+    mask = is_local_topk(img, -1, connectivity) | is_near_local_max(img, connectivity) # possible seed mask (h, w)
     if d >= 5:                                                                  # check the mean gray of inner ring is higher than the outter one
         rr = d // 4
         inner = np.zeros((d, d), dtype=bool)
@@ -430,6 +444,7 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
             label_map[labels[i]] = label_cnt
             labels[i] = label_cnt
     assert label_cnt == label_tab.count(), ''
+    assert labels.min() >= 1 and labels.max() <= label_cnt
     print('Number of seeds after merging:', label_cnt)
 
     return coords, labels
@@ -466,11 +481,33 @@ def region_growth_label(img: np.ndarray, coords: np.ndarray, labels: np.ndarray,
         valid = img[ncoords[:, 0], ncoords[:, 1]] != 0                          # foreground and unvisited check
         ncoords, nlabels = ncoords[valid], nlabels[valid]
 
-        #TODO: add overlap check
-        # find duplicate coordinates and merge label
+        # find duplicate coordinates and merge corresponding labels
+        ncoords_view = ncoords.view([('', ncoords.dtype)] * 2)                  # structural array for duplicate search
+        _, uniuqe_idx, inverse_idx = np.unique(ncoords_view, return_index=True, return_inverse=True)
+
+        ulabels = nlabels[uniuqe_idx]                                           # labels of unique coordinates
+        ilabels = ulabels[inverse_idx]                                          # reconstructed labels via inverse mapping
+        mask = nlabels != ilabels                                               # overlap check
+        for i in range(np.sum(mask)):
+            nlabels[mask][i] = label_tab.union_2(nlabels[mask][i], ilabels[mask][i])
 
         coords, labels = ncoords, nlabels                                       # update current coordinates and labels     
         steps -= 1
+
+    ## 3. Allocate new unique labels in [1, label_tab.count()] for each seed
+    #!NOTE: due to foreground and duplicate check, seed labels may no longer stay within the range of [1, label_tab.count()].
+    #!NOTE: thus compact relabeling is applied to restore the valid range.
+    if label_img.max() > label_tab.count():
+        label_cnt, label_map = 0, {}                                            # unique label counter(for double check) and label mapping(for compression)
+        ulabels = np.unique(label_img[label_img != 0])
+        for label in ulabels:
+            if label in label_map:
+                label_img[label_img == label] = label_map[label]
+            else:
+                label_cnt += 1
+                label_img[label_img == label] = label_cnt
+                label_map[label] = label_cnt
+        assert label_cnt == label_tab.count() and label_img.max() <= label_cnt
 
     return label_tab.count(), label_img
 
@@ -643,7 +680,7 @@ def group_star(img: np.ndarray, method: list[str], connectivity: int=4, pixel_li
     if ehc_meth.startswith('MS_'):
         enhanced_img = enhance_image_multiscale(img, ehc_meth, sizes=[3, 5, 7])
     else:
-        enhanced_img = enhance_image(img, ehc_meth, size=5)
+        enhanced_img = enhance_image(img, ehc_meth, size=7)
 
     ## 2. Binarize the enhanced image, except for RGL-based method
     binary_img = binarize_image(enhanced_img, thr_meth)
@@ -673,8 +710,6 @@ def group_star(img: np.ndarray, method: list[str], connectivity: int=4, pixel_li
         if len(rows) >= pixel_limit and len(cols) >= pixel_limit:
             group_coords.append((rows, cols))
         else:
-            print(rows, cols)
-
-    print('n =', n, 'len_group_coords', len(group_coords))
+            print(i, rows, cols)
 
     return group_coords
