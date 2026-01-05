@@ -62,6 +62,27 @@ class UnionSet:
         return self.cnt
 
 
+def con_shift_map(map: np.ndarray, size: int):
+    '''
+        Construct shifted mask and map.
+    '''
+
+    h, w = map.shape
+    d = size  
+
+    i, j =  np.indices((h, w))
+    shift_mask = np.stack(
+        [i >= 2 * d, i < h - 2 * d, j >= 2 * d, j < w - 2 * d, 
+        (i >= 2 * d) & (j >= 2 * d), (i < h - 2 * d) & (j < w - 2 * d),
+        (i < h - 2 * d) & (j >= 2 * d), (i >= 2 * d) & (j < w - 2 * d),],
+        axis=0
+    )                                                                                           # shift mask indicates valid image patch: True if the entire image patch stays within image bounds after shift
+    shitfs = [(d, 0), (-d, 0), (0, d), (0, -d), (d, d), (-d, -d), (-d, d), (d, -d)]             # shift offsets 
+    shifted_map = np.stack([np.roll(map, shift, axis=(0, 1)) for shift in shitfs], axis=0)      # shifted map
+
+    return shift_mask, np.maximum(shifted_map, eps)
+
+
 def cal_lcm(img: np.ndarray, method: str, size: int):
     '''
         Calculate local contrast measure.
@@ -76,30 +97,17 @@ def cal_lcm(img: np.ndarray, method: str, size: int):
     flatten_patches = np.reshape(patches, (h, w, -1))                                           # flatten patches (h, w, d²)
     sorted_patches = np.sort(flatten_patches, axis=-1)                                          # sorted flatten patches (h, w, d²)
     
-    i, j =  np.indices((h, w))
-    shift_mask = np.stack(
-        [i >= 2 * d, i < h - 2 * d, j >= 2 * d, j < w - 2 * d, 
-        (i >= 2 * d) & (j >= 2 * d), (i < h - 2 * d) & (j < w - 2 * d),
-        (i < h - 2 * d) & (j >= 2 * d), (i >= 2 * d) & (j < w - 2 * d),],
-        axis=0
-    )                                                                                           # shift mask indicates valid image patch: True if the entire image patch stays within image bounds after shift
-    shitfs = [(d, 0), (-d, 0), (0, d), (0, -d), (d, d), (-d, -d), (-d, d), (d, -d)]             # shift offsets 
-
     kth = 3
-    kmax_map = sorted_patches[..., d**2 - kth]                                                  # kth max map (h, w)
-    max_map = sorted_patches[..., -1]                                                           # max map (h, w)
-
     trim = 2
+    max_map = sorted_patches[..., -1]                                                           # max map (h, w)
     kmean_map = np.mean(sorted_patches[..., -kth:], axis=-1)                                    # kth top mean map (h, w)
     tmean_map = np.mean(sorted_patches[..., trim:-trim], axis=-1)                               # trimmed mean map
     mean_map = np.mean(flatten_patches, axis=-1)                                                # mean map (h, w)
     
-    shifted_mean_map = np.stack([np.roll(mean_map, shift, axis=(0, 1)) for shift in shitfs])    # shifted mean map(neighbor patches' mean) (8, h, w)
-    shifted_mean_map = np.maximum(shifted_mean_map, eps)
-    shifted_kmean_map = np.stack([np.roll(kmean_map, shift, axis=(0, 1)) for shift in shitfs]) # shifted kth mean map(neighbor patches' mean) (8, h, w)
-    shifted_kmean_map = np.maximum(shifted_kmean_map, eps)
-    shifted_tmean_map = np.stack([np.roll(tmean_map, shift, axis=(0, 1)) for shift in shitfs])  # shifted trimmed mean map(neighbor patches' mean) (8, h, w)
-    shifted_tmean_map = np.maximum(shifted_tmean_map, eps)
+    shift_mask = con_shift_map(img, size=d)[0]
+    shifted_mean_map = con_shift_map(mean_map, size=d)[1]                                       # shifted mean map(neighbor patches' mean) (8, h, w)
+    shifted_kmean_map = con_shift_map(kmean_map, size=d)[1]                                     # shifted kth mean map(neighbor patches' mean) (8, h, w)
+    shifted_tmean_map = con_shift_map(tmean_map, size=d)[1]                                     # shifted trimmed mean map(neighbor patches' mean) (8, h, w)
 
     if method == 'LCM':
         'A Local Contrast Method for Small  Infrared Target Detection http://ieeexplore.ieee.org/document/6479296/'
@@ -146,38 +154,61 @@ def cal_lcm(img: np.ndarray, method: str, size: int):
                 np.clip(tmean_map[None, ...] / shifted_tmean_map - 1, 0, np.inf) * tmean_map,   # (8, h, w)
                 np.nan
             ), axis=0
-        )
-    elif method == 'PCM' or method == 'MPCM':
-        'Multiscale patch-based contrast measure for small infrared target detection https://linkinghub.elsevier.com/retrieve/pii/S0031320316300358'
-        mean_residual_map = mean_map[None, ...] - shifted_mean_map
-        positive_mask = mean_residual_map > 0                                                   # positive mask indicates bright target
-        mean_residual_map = np.where(shift_mask & positive_mask, mean_residual_map, np.nan)     # apply mask and set invalid/negative to NaN
-        measure = np.nanmin(
-            np.stack([
-                mean_residual_map[0, ...] * mean_residual_map[1, ...],                          # vertical line
-                mean_residual_map[2, ...] * mean_residual_map[3, ...],                          # horizontal line
-                mean_residual_map[4, ...] * mean_residual_map[5, ...],                          # main diagonal
-                mean_residual_map[6, ...] * mean_residual_map[7, ...],                          # anti-diagonal
-            ], axis=0),
-            initial=np.inf,                                                                     # avoid corner to be np.nan
-            axis=0
-        )
-        measure[measure == np.inf] = eps
-        if method == 'MPCM':
-            selem = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
-            measure = morph.erosion(measure, footprint=selem)
-    elif method == 'SDM':
-        shifted_patches = np.stack([np.roll(patches, shift, axis=(0, 1)) for shift in shitfs])  # shifted patches (8, h, w, d, d)
-        measure = np.nanmin(
-            np.where(
-                shift_mask,                                                                     # (8, h, w)
-                np.linalg.norm(patches[None, ...] - shifted_patches, axis=(-2, -1)) / shifted_mean_map,   # (8, h, w)
-                np.nan
-            ), axis=0
-        )                                                                                       # euclidean difference measure (h, w) 
+        )                                                                                     # euclidean difference measure (h, w) 
     else:
         measure = np.zeros_like(img, dtype=img.dtype)
 
+    return measure
+
+
+def cal_pcm(img: np.ndarray, method: str, size: int):
+    '''
+        Calculate patch-based contrast measure.
+    '''
+
+    h, w = img.shape
+    d = size                                                                                    # patch size
+    r = size // 2                                                                               # half of patch size
+    
+    fimg = img.astype(np.float64)                                                               # change data type to avoid overflow
+    padded_img = np.pad(fimg, ((r, r), (r, r)))                                                 # padded raw image
+    patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))                      # raw patches (h, w, d, d)
+    
+    mean_map = np.mean(patches, axis=(-1, -2))                                                  # mean map (h, w)
+    shift_mask, shifted_mean_map = con_shift_map(mean_map, size=d)                              # shifted mean map(neighbor patches' mean) (8, h, w)
+    
+    mean_residual_map = mean_map[None, ...] - shifted_mean_map                                  # mean residual  map (8, h, w)
+    bright_mask = mean_residual_map > 0                                                         # bright target mask
+    mean_residual_map = np.where(shift_mask & bright_mask, mean_residual_map, np.nan)           # apply mask and set invalid/negative to NaN
+
+    structural_response = np.nanmin(
+        np.stack([
+            mean_residual_map[0, ...] * mean_residual_map[1, ...],                          # vertical line
+            mean_residual_map[2, ...] * mean_residual_map[3, ...],                          # horizontal line
+            mean_residual_map[4, ...] * mean_residual_map[5, ...],                          # main diagonal
+            mean_residual_map[6, ...] * mean_residual_map[7, ...],                          # anti-diagonal
+        ], axis=0),
+        initial=np.inf,                                                                     # avoid four np.nan
+        axis=0
+    )
+    valid = structural_response != np.inf
+
+    if method == 'PCM':
+        'Multiscale patch-based contrast measure for small infrared target detection https://linkinghub.elsevier.com/retrieve/pii/S0031320316300358'
+        measure = np.where(valid, structural_response, eps)
+        # selem = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
+        # measure = morph.erosion(measure, footprint=selem)
+    elif method == 'IPCM':
+        'An Improved Multiscale Patch-Based Contrast Measure for Small Infrared Target Detection https://ieeexplore.ieee.org/document/10065630'
+        sigma = 1.5
+        measure = np.where(
+            valid, 
+            img * (1 - np.exp(-(structural_response / sigma)**2)), 
+            eps
+        )
+    else:
+        measure = np.zeros_like(img, dtype=img.dtype)
+    
     return measure
 
 
@@ -193,11 +224,11 @@ def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=0.2):
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))                      # raw patches (h, w, d, d)
     flatten_patches = np.reshape(patches, (h, w, -1))                                           # flatten patches (h, w, d²)
 
-    diffs = np.stack([cal_difference(img, dir) for dir in range(8)], axis=0)                    # neighoring pixel difference map (8, h, w)
     if True:
         grad_y = cal_derivative(img, order=(1, 0), sigma=sigma)                                 # gradient y map (h, w)
         grad_x = cal_derivative(img, order=(0, 1), sigma=sigma)                                 # gradient x map (h, w)
     else:
+        diffs = np.stack([cal_difference(img, dir) for dir in range(8)], axis=0)                # neighoring pixel difference map (8, h, w)
         grad_y = diffs[0]
         grad_x = diffs[2]
     padded_grad_x, padded_grad_y = np.pad(grad_x, ((r, r), (r, r))), np.pad(grad_y, ((r, r), (r, r)))  # padded gradient x and gradient y map (h, w, d, d)
@@ -327,8 +358,16 @@ def enhance_image(img: np.ndarray, method: str, size: int=3, preserve_dtype: boo
     padded_img = np.pad(img, ((r, r), (r, r)), 'reflect')                                                  # padded raw image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))                      # raw patches (h, w, d, d)
 
-    if method in ['LCM', 'ILCM', 'NLCM', 'RLCM', 'MLCM', 'PCM', 'MPCM']:
+    if method.endswith('LCM'):
         enhanced_img = cal_lcm(img, method, size=d)
+    elif method.endswith('PCM'):
+        enhanced_img = cal_pcm(img, method, size=d)
+    elif method.endswith('GCM'):
+        enhanced_img = cal_gcm(img, method, size=d, sigma=1)
+    elif method == 'IGM':
+        lcm = cal_lcm(img, 'MLCM', size=d)
+        gcm = cal_gcm(img, 'BGCM', size=d, sigma=1)
+        enhanced_img = lcm * gcm
     elif method == 'Top-Hat':
         selem = np.ones((d, d), dtype=bool)                                                     # structural element
         enhanced_img = morph.white_tophat(img, footprint=selem)                                 # enhanced image based on white top-hat
@@ -355,17 +394,11 @@ def enhance_image(img: np.ndarray, method: str, size: int=3, preserve_dtype: boo
         enhanced_img = np.clip((img - np.sum(patches * kernel[None, None, ...], axis=(-1, -2))), 0, max_val) # background estimation via convolution and subtract
     elif method == 'MSobel':
         enhanced_img = cal_sobel(img, sigma=1)
-    elif method in ['PGCM', 'BGCM']:
-        enhanced_img = cal_gcm(img, method, size=d, sigma=1)
-    elif method == 'IGM':
-        lcm = cal_lcm(img, 'MLCM', size=d)
-        gcm = cal_gcm(img, 'BGCM', size=d, sigma=1)
-        enhanced_img = lcm * gcm
     else: # method == 'None'
         enhanced_img = img
 
     if preserve_dtype:
-        enhanced_img = (enhanced_img / np.maximum(np.max(enhanced_img), eps) * max_val).astype(img.dtype)
+        enhanced_img = (enhanced_img / np.max(enhanced_img, initial=eps) * max_val).astype(img.dtype)
 
     return enhanced_img
 
@@ -411,9 +444,9 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
         mask = mask & is_local_topk(res, k=-1, connectivity=connectivity)
     elif method == 'CGC':
         # combined gradient and curvature
-        res1, res2 = cal_gcm(img, 'PGCM', size=d, sigma=0.2), cal_doh(img, sigma=1.5)
+        res1, res2 = cal_gcm(img, 'PGCM', size=d, sigma=1), cal_doh(img, sigma=1.5)
         res2[mask] *= res1[mask]
-        mask = mask & (res1 > 0.3) & is_local_topk(res2, k=-2, connectivity=connectivity)
+        mask = mask & (res1 > 0.2) & is_local_topk(res2, k=-2, connectivity=connectivity)
     else:
         mask = np.zeros_like(mask, dtype=bool)
     print('Number of seeds after operator double check:', np.sum(mask))
@@ -680,7 +713,7 @@ def group_star(img: np.ndarray, method: list[str], connectivity: int=4, pixel_li
     if ehc_meth.startswith('MS_'):
         enhanced_img = enhance_image_multiscale(img, ehc_meth, sizes=[3, 5, 7])
     else:
-        enhanced_img = enhance_image(img, ehc_meth, size=7)
+        enhanced_img = enhance_image(img, ehc_meth, size=5)
 
     ## 2. Binarize the enhanced image, except for RGL-based method
     binary_img = binarize_image(enhanced_img, thr_meth)
@@ -710,6 +743,7 @@ def group_star(img: np.ndarray, method: list[str], connectivity: int=4, pixel_li
         if len(rows) >= pixel_limit and len(cols) >= pixel_limit:
             group_coords.append((rows, cols))
         else:
-            print(i, rows, cols)
+            pass
+            # print(i, rows, cols)
 
     return group_coords
