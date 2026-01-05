@@ -465,11 +465,9 @@ def quest(v: np.ndarray, w: np.ndarray, weights: np.ndarray=None):
     return u @ vh
 
 
-def draw_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gray'):
+def plot_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gray', label_text: bool=False):
     '''
-        Draw the gray image in 3 dimension.
-    Args:
-        img: the image to be processed
+        Plot the gray image in 3 dimension.
     '''
     # get the image size
     h, w = img.shape
@@ -480,16 +478,17 @@ def draw_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gr
     x, y = np.meshgrid(x, y)
     z = img
     
-    # create 3D image
+    # create 3d axes
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
 
+    # plot surface/bar3d
     if method == 'plot_surface':
         ax.plot_surface(
             x, y, z, 
             cmap=color_map, 
         )
-    elif method == 'bar3d':
+    else: # method == 'bar3d'
         x, y = x.flatten(), y.flatten()
         dx = dy = 0.9       # bar width
         dz = z.flatten()    # bar height
@@ -500,23 +499,47 @@ def draw_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gr
             linewidth=0.3,
             alpha=0.9
         )
-    else:
-        for i in range(h):
-            z_line = z[i, :]
-            ax.plot(x[i,:], [i] * len(x[i,:]), z_line, linewidth=1.5, alpha=0.7,
-                    color=plt.cm.viridis(z_line.max() / np.max(np.abs(img))))
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z (gray value)')
+
+    # label text
+    if label_text:
+        plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
+        ax.set_xlabel('X/像素', labelpad=5)
+        ax.set_ylabel('Y/像素', labelpad=5)
+        # ax.set_zlabel('Z')
+        ax.set_zlabel('灰度', rotation=90)
+    
+    # image title
     # ax.set_title(title)
     plt.show()
 
 
-def draw_freq_spectrum(img: np.ndarray):
+def plot_grad_field(img: np.ndarray, sigma: float, scale: float=1):
     '''
-        Draw the frequency spectrum of the image.
-    Args:
-        img: the image to be processed
+        Plot the gradient vector field.
+    '''
+    eps = 1e-10
+    h, w = img.shape
+
+    # compute gradients
+    grad_y, grad_x = cal_derivative(img, order=(1, 0), sigma=sigma), cal_derivative(img, order=(0, 1), sigma=sigma)
+    grad = np.hypot(grad_y, grad_x)
+    max_grad = np.max(grad, initial=eps)
+    grad_y, grad_x = grad_y / max_grad, grad_x / max_grad
+    
+    # create grid
+    y, x = np.meshgrid(np.arange(0, h), np.arange(0, w), indexing='ij')
+
+    # plot
+    plt.figure(figsize=(10, 10))
+    plt.imshow(img, cmap='gray')
+    plt.quiver(x, y, grad_x, grad_y, color='r', angles='xy', scale_units='xy', scale=scale)
+    plt.title("Gradient Vector Field")
+    plt.show()
+
+
+def plot_freq_spectrum(img: np.ndarray):
+    '''
+        Plot the frequency spectrum of the image.
     '''
     f = np.fft.fft2(img)
     fshift = np.fft.fftshift(f)    
