@@ -1,4 +1,5 @@
 import os
+import cv2
 import numpy as np
 import pandas as pd
 from itertools import combinations
@@ -17,6 +18,30 @@ def gen_combos(n: int, k: int):
     '''
     combos = np.array(list(combinations(range(n), k)))
     return combos
+
+
+def gen_gaussian_kernel(sigma: float, size: int, x: np.ndarray=None, order: int=2, normalize: bool=True):
+    '''
+        Generate a gaussian kernel.
+    '''
+    assert size % 2 == 1 and (order in (1, 2) or (x is not None and x.ndim in (1, 2)))
+
+    r = size // 2
+    if x is None:
+        x = np.arange(-r, r + 1)
+        if order == 1:
+            xx = x ** 2
+        else:  # order == 2
+            x1, x2 = np.meshgrid(x, x)
+            xx = x1 ** 2 + x2 ** 2
+    else:
+        xx = x ** 2
+        
+    kernel = np.exp(- xx / (2 * sigma **2))
+    if normalize:
+        kernel /= kernel.sum()
+
+    return kernel
 
 
 def cal_derivative(img: np.ndarray, order: tuple[int, int], sigma: float):
@@ -153,14 +178,102 @@ def cal_sobel(img: np.ndarray, sigma: float):
     return np.hypot(dx, dy)
 
 
+def cal_angdist(points1: np.ndarray, points2: np.ndarray=None):
+    '''
+        Calculate the angular distance of the points.
+    '''
+    if points2 is None:
+        points2 = points1
+
+    assert points1.shape[1] == 3 and points2.shape[1] == 3
+    
+    norm1 = np.linalg.norm(points1, axis=1)
+    norm2 = np.linalg.norm(points2, axis=1)
+    angd = np.dot(points1, points2.T) / np.outer(norm1, norm2)
+
+    return angd
+
+
+def cal_mse_psnr_ssim(img1: np.ndarray, img2: np.ndarray, ndigits: int=-1):
+    '''
+        Calculate peak signal-to-noise ratio and the structural similarity between the original image and the filtered image.
+    Args:
+        img1: the original image
+        img2: the image after filtering
+        ndigits: Number of decimal places to round to. If -1 (default), keep full precision.
+    Returns:
+        mse, psnr, mssim
+    '''
+    assert img1.shape == img2.shape and img1.dtype == img2.dtype and (img1.dtype == np.uint8 or img1.dtype == np.float32)
+
+    # max value
+    mv = 255 if img1.dtype == np.uint8 else 1.0
+
+    # caculate the mse
+    mse = mean_squared_error(img1, img2)
+    # print(mse, np.mean((img1 - img2)**2))
+    
+    # caculate the psnr
+    psnr = peak_signal_noise_ratio(img1, img2, data_range=mv) if mse > 0 else np.inf
+    # print(psnr, 10 * np.log10(mv**2 / mse) if mse > 0 else np.inf)
+    
+    # caculate the mean ssim
+    mssim = structural_similarity(img1, img2, win_size=3, data_range=mv)
+
+    # round to ndigits precision if needed
+    if ndigits != -1:
+        mse, psnr, mssim = np.round(mse, ndigits), np.round(psnr, ndigits), np.round(mssim, ndigits)
+
+    return mse, psnr, mssim
+
+
+def cal_rc_p_f1(tp: int | float | np.ndarray, fp : int | float | np.ndarray, fn: int | float | np.ndarray, percent: bool=True, ndigits: int=-1):
+    '''
+        Calculate recall, precision, and f1-score.
+    Args:
+        tp: true positives - the number of correct detections
+        fp: false positives - the number of false alarms
+        fn: false negatives - the number of missed targets
+        percent: If True, return metrics in percent (e.g., 85.0 instead of 0.85).
+        ndigits: Number of decimal places to round to. If -1 (default), keep full precision.
+    Returns:
+        rc, p, f1
+    '''
+    assert np.ndim(tp) == np.ndim(fp) == np.ndim(fn)
+
+    # denominator constant for safe division
+    eps = 1e-10
+
+    # compute recall
+    rc = tp / np.maximum(tp + fn, eps)
+
+    # compute precision
+    p = tp / np.maximum(tp + fp, eps)
+
+    # compute F1-score
+    f1 = 2 * (p * rc) / np.maximum(p + rc, eps)
+
+    # convert into percentage if needed
+    if percent:
+        rc, p, f1 = rc * 100.0, p * 100.0, f1 * 100.0
+
+    # round to ndigits precision if needed
+    if ndigits != -1:
+        rc, p, f1 = np.round(rc, ndigits), np.round(p, ndigits), np.round(f1, ndigits)
+
+    return rc, p, f1
+
+
 def find_overlap_and_unique(a: np.ndarray, b: np.ndarray, threshold: float=2, return_count_only: bool=False):
     '''
         Find the overlap and unique parts of two point sets.
     '''
-    if a.size == 0:
-        return np.array([]), np.array([]), np.array([]), b
-    if b.size == 0:
-        return np.array([]), np.array([]), a, np.array([])
+    if a.size == 0 or b.size == 0:
+        res = np.array([]), np.array([]), a, b
+        if return_count_only:
+            return tuple(map(len, res))
+        else:
+            return res
 
     assert a.shape[1] == 2 and b.shape[1] == 2
 
@@ -179,10 +292,11 @@ def find_overlap_and_unique(a: np.ndarray, b: np.ndarray, threshold: float=2, re
     mask = np.min(dist, axis=0) < threshold
     unique_b = b[~mask]
     
+    res = overlap_a, overlap_b, unique_a, unique_b
     if return_count_only:
-        return len(overlap_a), len(overlap_b), len(unique_a), len(unique_b)
+        return tuple(map(len, res))
     else:
-        return overlap_a, overlap_b, unique_a, unique_b
+        return res
 
 
 def find_close_pair(coords: np.ndarray, threshold: int=7, method: str='L1'):
@@ -253,7 +367,7 @@ def is_near_local_max(img: np.ndarray, connectivity: int=4, footprint: np.ndarra
     
     mean = np.mean(img)
     std = np.std(img)
-    gap = min(15, 0.5 * mean, 0.5 * std)
+    gap = min(5, 0.5 * mean, 0.5 * std)
 
     return max_map - img < gap
 
@@ -316,7 +430,7 @@ def quest(v: np.ndarray, w: np.ndarray, weights: np.ndarray=None):
     assert np.allclose(np.linalg.norm(v, axis=0), 1, atol=1e-6)
     assert np.allclose(np.linalg.norm(w, axis=0), 1, atol=1e-6)
 
-    #! Something wrong, need to fix
+    #TODO: fix
     n = v.shape[1]
     if weights is None:
         weights = np.ones(n)/n
@@ -349,31 +463,6 @@ def quest(v: np.ndarray, w: np.ndarray, weights: np.ndarray=None):
     
     u, _, vh = np.linalg.svd(r)
     return u @ vh
-
-
-def get_angdist(points1: np.ndarray, points2: np.ndarray=None):
-    '''
-        Get the angular distance of the points.
-    '''
-    if points2 is None:
-        points2 = points1
-
-    assert points1.shape[1] == 3 and points2.shape[1] == 3
-    
-    norm1 = np.linalg.norm(points1, axis=1)
-    norm2 = np.linalg.norm(points2, axis=1)
-    angd = np.dot(points1, points2.T) / np.outer(norm1, norm2)
-
-    return angd
-
-
-def convert_rade2deg(ra: float, dec: float):
-    '''
-        Convert the RA and DE from degree to timezone.
-    '''
-    coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg)
-
-    return coord.to_string('hmsdms')
 
 
 def draw_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gray'):
@@ -489,6 +578,94 @@ def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, 
     plt.close()
 
 
+def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: np.ndarray, eps: float):
+    '''
+        Label the detect result with different shapes and colors.
+    '''
+
+    def draw_shape(img: np.ndarray, center: tuple[float, float], shape: str, color: tuple[int, int, int]=(0, 255, 0), size: int=4, thickness: int=1):
+        y, x = int(center[0]), int(center[1])
+
+        if shape == 'triangle' or shape == 'Triangle':
+            pts = np.array([
+                [x, y - size],
+                [x - size, y + size],
+                [x + size, y + size]
+            ], dtype=np.int32)
+            # cv2.fillPoly(img, [pts], color)
+            if thickness >= 0:
+                cv2.polylines(img, [pts], True, color, max(1, thickness))
+        elif shape == 'cross' or shape == 'Cross':
+            cv2.line(img, (x - size, y), (x + size, y), color, thickness)
+            cv2.line(img, (x, y - size), (x, y + size), color, thickness)
+        elif shape == 'rectangle' or shape == 'Rectangle':
+            cv2.rectangle(img, (x - size, y - size), (x + size, y + size), color, thickness)
+        else: # shape == 'circle' or shape == 'Circle'
+            cv2.circle(img, (x, y), size, color, thickness)
+            # cv2.circle(img, (x, y), size//2, (0, 0, 0), 1)
+
+    def draw_legend(img: np.ndarray, entries: dict, top_left: tuple[int, int], legend_size: tuple[int, int]=(60, 100), gap: int=15):
+        h, w = img.shape[:2]
+        legend_h, legend_w = legend_size
+
+        start_y, start_x = top_left
+        start_y, start_x = max(legend_h + gap, min(h - gap - legend_h, start_y)), max(0, min(w - gap - legend_w, start_x))
+
+        cv2.rectangle(img, (start_x, start_y), (start_x + legend_w, start_y + legend_h), (255, 255, 255), thickness=-1)
+
+        current_y = start_y
+        for label in entries:
+            shape, color = entries[label]
+
+            margin_y, margin_x = (legend_h - (len(entries) - 1 ) * gap) // 2, legend_w // 8
+            legend_shape_y, legend_shape_x = current_y + margin_y, start_x + margin_x
+            legend_shape_size = 8
+            draw_shape(img, (legend_shape_y, legend_shape_x), shape, color=color, size=legend_shape_size)  #!NOTE: draw_shape use (row, column), while cv2 rawing functions expect (column, row)
+            (_, text_height), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            total_text_height = text_height + baseline
+            text_baseline_y = current_y + gap // 2 + (total_text_height / 2 - baseline)
+            cv2.putText(img, label, (start_x + 2 * gap, int(text_baseline_y)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
+            
+            current_y += gap
+
+    if len(img.shape) == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+    _, matched_coords, missed_coords, false_coords = find_overlap_and_unique(real_coords, esti_coords, eps)       
+    entries = {
+        'Real Star': ('Cross', (0, 0, 255)),
+        'Matched Detection': ('Triangle', (0, 255, 255)),
+        'False Alarm': ('Circle', (255, 0, 0))
+    }
+    for coord in real_coords:
+        shape, color = entries['Real Star']
+        draw_shape(img, coord, shape, color)
+    for coord in matched_coords:
+        shape, color = entries['Matched Detection']
+        draw_shape(img, coord, shape, color)
+    for coord in false_coords:
+        shape, color = entries['False Alarm']
+        draw_shape(img, coord, shape, color)
+
+    h, w = img.shape[:2]
+    draw_legend(img, entries, (h-15, w-40), (50, 120))
+    
+    print(
+        'Total Number of Stars:', len(real_coords),
+        '\nNumber of Matched Stars:', len(matched_coords),
+        '\nNumber of Miss Stars:', len(missed_coords),
+        '\nNumber of False Stars:', len(false_coords),
+        '\nReal:\n',
+        np.round(real_coords, 2),
+        '\nMiss:\n', 
+        np.round(missed_coords, 2),
+        '\nFalse:\n', 
+        np.round(false_coords, 2)
+    )
+
+    return img
+
+
 def describe_database(db: pd.DataFrame):
     '''
         Describe the database.
@@ -506,73 +683,3 @@ def describe_database(db: pd.DataFrame):
 
     plt.hist(db_info, bins=max_cnt, edgecolor='black')
     plt.show()
-
-
-def cal_mse_psnr_ssim(img1: np.ndarray, img2: np.ndarray, ndigits: int=-1):
-    '''
-        Calculate peak signal-to-noise ratio and the structural similarity between the original image and the filtered image.
-    Args:
-        img1: the original image
-        img2: the image after filtering
-        ndigits: Number of decimal places to round to. If -1 (default), keep full precision.
-    Returns:
-        mse, psnr, mssim
-    '''
-    assert img1.shape == img2.shape and img1.dtype == img2.dtype and (img1.dtype == np.uint8 or img1.dtype == np.float32)
-
-    # max value
-    mv = 255 if img1.dtype == np.uint8 else 1.0
-
-    # caculate the mse
-    mse = mean_squared_error(img1, img2)
-    # print(mse, np.mean((img1 - img2)**2))
-    
-    # caculate the psnr
-    psnr = peak_signal_noise_ratio(img1, img2, data_range=mv) if mse > 0 else np.inf
-    # print(psnr, 10 * np.log10(mv**2 / mse) if mse > 0 else np.inf)
-    
-    # caculate the mean ssim
-    mssim = structural_similarity(img1, img2, win_size=3, data_range=mv)
-
-    # round to ndigits precision if needed
-    if ndigits != -1:
-        mse, psnr, mssim = np.round(mse, ndigits), np.round(psnr, ndigits), np.round(mssim, ndigits)
-
-    return mse, psnr, mssim
-
-
-def cal_rc_p_f1(tp: int | float | np.ndarray, fp : int | float | np.ndarray, fn: int | float | np.ndarray, percent: bool=True, ndigits: int=-1):
-    '''
-        Calculate recall, precision, and f1-score.
-    Args:
-        tp: true positives - the number of correct detections
-        fp: false positives - the number of false alarms
-        fn: false negatives - the number of missed targets
-        percent: If True, return metrics in percent (e.g., 85.0 instead of 0.85).
-        ndigits: Number of decimal places to round to. If -1 (default), keep full precision.
-    Returns:
-        rc, p, f1
-    '''
-    assert np.ndim(tp) == np.ndim(fp) == np.ndim(fn)
-
-    # denominator constant for safe division
-    eps = 1e-10
-
-    # compute recall
-    rc = tp / np.maximum(tp + fn, eps)
-
-    # compute precision
-    p = tp / np.maximum(tp + fp, eps)
-
-    # compute F1-score
-    f1 = 2 * (p * rc) / np.maximum(p + rc, eps)
-
-    # convert into percentage if needed
-    if percent:
-        rc, p, f1 = rc * 100.0, p * 100.0, f1 * 100.0
-
-    # round to ndigits precision if needed
-    if ndigits != -1:
-        rc, p, f1 = np.round(rc, ndigits), np.round(p, ndigits), np.round(f1, ndigits)
-
-    return rc, p, f1
