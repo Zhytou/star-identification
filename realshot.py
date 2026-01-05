@@ -53,7 +53,7 @@ def cal_attitude(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, h: int
     stars['X'] = np.cos(stars['Ra'])*np.cos(stars['De'])
     stars['Y'] = np.sin(stars['Ra'])*np.cos(stars['De'])
     stars['Z'] = np.sin(stars['De'])
-    #! careful! use index to sort the stars, because the output of isin is not sorted by the given list
+    #!NOTE: use index to sort the stars, because the output of isin is not sorted by the given list
     stars = stars.set_index('Star ID').loc[ids]
     rvs = stars[['X', 'Y', 'Z']].to_numpy()
 

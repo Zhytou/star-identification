@@ -16,13 +16,6 @@ cata['Z'] = np.sin(cata['De'])
 def add_stellar_noise(img: np.ndarray, method: str='Gaussian', luminosity: float=5.5, position: tuple[int, int]=(0, 0), sigma_x: int=100, sigma_y: int=-1, clipped: bool=True):
     '''
         Add stellar noise.
-    Args:
-        img: the input image
-        method: the simulation method
-        position: the center of stellar noise (row, column)
-        luminosity: the stellar luminosity in Mv
-    Return:
-        noised_img
     '''
     h, w = img.shape
     y, x = np.linspace(0, h-1, h), np.linspace(0, w-1, w)
@@ -57,7 +50,7 @@ def add_stellar_noise(img: np.ndarray, method: str='Gaussian', luminosity: float
 
 def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float, clipped: bool=True) -> np.ndarray:
     """
-        Add gaussian and pepper-salt noise to an image.
+        Add gaussian and pepper-salt noise.
     """
     h, w = img.shape
 
@@ -77,27 +70,19 @@ def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float
         noised_img[mask < prob_p/2] = 0.0
         noised_img[(mask >= prob_p/2) & (mask < prob_p)] = 1.0
 
-    # clip the image if needed
-    if clipped:
-        noised_img = np.clip(noised_img, 0, 1.0)
-
     # denormalize the image
     noised_img = (noised_img * max_value).astype(img.dtype)
+
+    # clip the image if needed
+    if clipped:
+        noised_img = np.clip(noised_img, 0, max_value)
 
     return noised_img
 
 
 def gen_false_stars(num: int, pos: np.array, min_d: int=6, mag_range: tuple=(3, 6), size: tuple=(512, 512)) -> np.ndarray:
     '''
-        Add false stars to the image.
-    Args:
-        img: the image to add false stars
-        num: the number of false stars
-        pos: the positions of true stars
-        min_d: the minimum distance between false stars and true stars
-        mag_range: the range of magnitude of false stars
-    Returns:
-        false_stars: the false stars
+        Generate random false stars.
     '''
     h, w = size
     false_stars = []

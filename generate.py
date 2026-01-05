@@ -10,7 +10,7 @@ from scipy.spatial.distance import cdist
 
 from simulate import create_star_image
 from extract import get_star_centroids
-from utils import get_angdist
+from utils import cal_angdist
 
 
 # minimum number of stars in the region for pattern generation
@@ -95,7 +95,7 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
         coords-np.array([h/2, w/2]),
         np.full((n, 1), f)
     ])
-    angdists = get_angdist(points)
+    angdists = cal_angdist(points)
 
     # choose top max_num_samp brightest star as the reference star
     n = min(n, max_num_samp+1) if realshot and max_num_samp != -1 else n

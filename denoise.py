@@ -5,7 +5,9 @@ import scipy.ndimage as ndi
 import skimage.morphology as morph
 import skimage.restoration as restoration
 
-# from utils import find_close_pair
+from utils import gen_gaussian_kernel
+
+
 eps = 1e-10
 
 def basic_filter(img: np.ndarray, method: str='Gaussian', size: int=3) -> np.ndarray:
@@ -174,10 +176,8 @@ def denoise_with_blf(img: np.ndarray, size: int, sigma_g: float, sigma_s: float,
 
     # calculate the color and space weights
     color_diffs = custom_activation(np.abs(grays - patches), threshold)
-    color_weights = np.exp(-(color_diffs ** 2) / (2 * sigma_g ** 2))
-
-    x, y = np.meshgrid(np.arange(-r, r + 1), np.arange(-r, r + 1))
-    space_weights = np.exp(-(x ** 2 + y ** 2) / (2 * sigma_s ** 2))
+    color_weights = gen_gaussian_kernel(sigma=sigma_g, size=d, x=color_diffs)
+    space_weights = gen_gaussian_kernel(sigma=sigma_s, size=d)
 
     # apply bilateral filter    
     bilateral_weights = color_weights * space_weights
@@ -222,7 +222,7 @@ def denoise_with_amf(img: np.ndarray, size1: int, size2: int):
     mask2 = (mins >= img[None, ...]) | (maxs <= img[None, ...])             # (n, h, w)
 
     # set possible noisy pixels to valid median values
-    i, j = np.meshgrid(np.arange(0, h), np.arange(0, w))
+    i, j = np.meshgrid(np.arange(0, h), np.arange(0, w), indexing='ij')
     k = np.argmax(mask1 & mask2, axis=0)  # the first window size index whose median value is valid
     
     denoised_img = np.where(
@@ -329,7 +329,7 @@ def denoise_with_cmg(img: np.ndarray, size: int=5, sigma: float=1):
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))  # patches for guassian filter
 
     x, y = np.meshgrid(np.arange(-r, r+1), np.arange(-r, r+1))              # offsets
-    kernel = np.exp(-(x**2 + y**2)/(2*sigma**2))                            # default gaussian kernel
+    kernel = gen_gaussian_kernel(sigma=sigma, size=d)                       # default gaussian kernel
     weights = kernel * np.stack([
         x <= 0, x >= 0,                                                     # west and east
         y <= 0, y >= 0,                                                     # south and north
@@ -446,14 +446,6 @@ def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sig
         else:
             wt = swt * gwt ** (1 - jcoef) * iwt ** jcoef                        # bilateral weights (h, w, d, d)
         wt = wt / np.maximum(np.sum(wt, axis=(-1, -2), keepdims=True), eps)    # normalize the weights
-
-        # check double star situation
-        # max_val = 255 if img.dtype == np.uint8 else 1.0 
-        # coords = np.column_stack(np.where(g == max_val))
-        # coord, _ = find_close_pair(coords, 4)
-        # x, y = coord
-        # print(x, y, p[x, y])
-        # print(iwt[x, y], gwt[x, y], wt[x, y])
 
         return wt
 

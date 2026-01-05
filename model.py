@@ -592,7 +592,7 @@ def create_model(method: str, model_type: str, meth_params: list, num_class: int
     }
 
     method_mapping = {
-        #! carefaul!, rac_nn accept (num_ring, num_neighbor, num_sector)
+        #!NOTE: rac_nn accept (num_ring, num_neighbor, num_sector)
         # use lambda to change params dynamically(dict is static)
         'rac_nn': lambda params: (sum(params[-3])+params[-2]*params[-1], num_class),
         'lpt_nn': lambda params: (params[-1], num_class)
