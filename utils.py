@@ -594,7 +594,7 @@ def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, 
     plt.close()
 
 
-def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: np.ndarray, dist_threshold: float, axis_on: bool=False, show: bool=True, output_path: str=None):
+def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: np.ndarray, dist_threshold: float, axis_on: bool=False, show: bool=True, info: bool=False, output_path: str=None):
     '''
         Label the detect result with different shapes and colors.
     '''
@@ -603,7 +603,7 @@ def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: n
     _, matched_coords, missed_coords, false_coords = find_overlap_and_unique(real_coords, esti_coords, dist_threshold)
     detect_res = np.vstack([
         np.hstack([coords, np.full((coords.shape[0], 1), i, dtype=int)])
-        for i, coords in enumerate([real_coords, matched_coords, false_coords])
+        for i, coords in enumerate([real_coords, esti_coords])
     ])
 
     _, ax = plt.subplots(figsize=(10, 10))
@@ -618,12 +618,17 @@ def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: n
         ax.imshow(img, cmap='gray', vmin=0, vmax=255, origin='upper')
         ax.axis('off')
 
-    legend_elements = [
-        Line2D([0], [0], marker='+', linestyle='None', mec='red', mfc='red', ms=10, mew=2, label='真实星点'),
-        Line2D([0], [0], marker='^', linestyle='None', mec='yellow', mfc='none', ms=10, mew=2, label='正确检测'),
-        Line2D([0], [0], marker='o', linestyle='None', mec='blue', mfc='none', ms=10, mew=2, label='错误检测')
+    legends = [
+        Line2D([0], [0], marker='+', linestyle='None', mec='red', mfc='red', ms=14, mew=3, label='真实星点位置'),
+        Line2D([0], [0], marker='^', linestyle='None', mec='yellow', mfc='none', ms=14, mew=3, label='算法输出位置'),
+        # Line2D([0], [0], marker='o', linestyle='None', mec='blue', mfc='none', ms=14, mew=3, label='错误检测')
     ]
-    ax.legend(handles=legend_elements, bbox_to_anchor=(0.75, 1), loc='upper left', prop={'family': 'SimHei', 'size': 12})
+    ax.legend(
+        handles=legends, 
+        bbox_to_anchor=(0.97, 0), # anchor point in axes coordinates
+        loc='lower right', # align the legend corner to the anchor
+        prop={'family': 'SimHei', 'size': 18}
+    )
 
     for row, col, label in detect_res:
         if label == 0:
@@ -632,6 +637,18 @@ def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: n
             ax.plot(col, row, '^', mec='yellow', mfc='none', ms=10, mew=2)  # yellow triangle
         else: # label == 2
             ax.plot(col, row, 'o', mec='blue', mfc='none', ms=10, mew=2)    # blue circle
+
+    if info:
+        print(
+            'Total Number of Stars:', len(real_coords),
+            '\nNumber of Matched Stars:', len(matched_coords),
+            '\nNumber of Miss Stars:', len(missed_coords),
+            '\nNumber of False Stars:', len(false_coords),
+            '\nMiss:\n', 
+            np.round(missed_coords, 2),
+            '\nFalse:\n', 
+            np.round(false_coords, 2)
+        )
 
     if output_path:
         dir = os.path.abspath(os.path.dirname(output_path))
@@ -642,17 +659,6 @@ def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: n
         plt.show()
 
     plt.close()
-
-    print(
-        'Total Number of Stars:', len(real_coords),
-        '\nNumber of Matched Stars:', len(matched_coords),
-        '\nNumber of Miss Stars:', len(missed_coords),
-        '\nNumber of False Stars:', len(false_coords),
-        '\nMiss:\n', 
-        np.round(missed_coords, 2),
-        '\nFalse:\n', 
-        np.round(false_coords, 2)
-    )
 
 
 def describe_database(db: pd.DataFrame):
