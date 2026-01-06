@@ -13,7 +13,7 @@ cata['Y'] = np.sin(cata['Ra'])*np.cos(cata['De'])
 cata['Z'] = np.sin(cata['De'])
 
 
-def add_stellar_noise(img: np.ndarray, method: str='Gaussian', luminosity: float=5.5, position: tuple[int, int]=(0, 0), sigma_x: int=100, sigma_y: int=-1, clipped: bool=True):
+def add_stellar_noise(img: np.ndarray, method: str='Gaussian', luminosity: float=5.5, position: tuple[int, int]=(0, 0), sigma_x: int=100, sigma_y: int=-1):
     '''
         Add stellar noise.
     '''
@@ -39,16 +39,13 @@ def add_stellar_noise(img: np.ndarray, method: str='Gaussian', luminosity: float
         noise = np.clip((1 - (y - y0) / (h - y0)) * I0, 0, I_max)
     else: # method == 'None':
         return img
-    
-    if clipped:
-        noised_img = np.clip(img + noise, 0, I_max).astype(img.dtype)
-    else:
-        noised_img = (img + noise).astype(img.dtype)
+        
+    noised_img = np.clip(img + noise, 0, I_max).astype(img.dtype)
 
     return noised_img
 
 
-def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float, clipped: bool=True) -> np.ndarray:
+def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float) -> np.ndarray:
     """
         Add gaussian and pepper-salt noise.
     """
@@ -71,11 +68,10 @@ def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float
         noised_img[(mask >= prob_p/2) & (mask < prob_p)] = 1.0
 
     # denormalize the image
-    noised_img = (noised_img * max_value).astype(img.dtype)
+    noised_img = noised_img * max_value
 
-    # clip the image if needed
-    if clipped:
-        noised_img = np.clip(noised_img, 0, max_value)
+    # clip the image
+    noised_img = np.clip(noised_img, 0, max_value).astype(img.dtype)
 
     return noised_img
 
