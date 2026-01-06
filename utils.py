@@ -561,15 +561,16 @@ def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, 
     h, w = img.shape[:2]
 
     _, ax = plt.subplots(figsize=(10, 10))
-    ax.imshow(img, cmap='gray', origin='lower')  
-
     if axis_on:
+        #!NOTE: when axes are on, invert y-axis so that image origin aligns with array indexing (row 0 at bottom); origin='lower' + invert together place data correctly while keeping axis labels in row-coordinates
+        ax.imshow(img, cmap='gray', vmin=0, vmax=255, origin='lower')  
         ax.axis('on')
         ax.set_xlim(0, w)
         ax.set_ylim(0, h)
+        ax.invert_yaxis()
     else:
+        ax.imshow(img, cmap='gray', vmin=0, vmax=255, origin='upper')
         ax.axis('off')
-    ax.invert_yaxis()
 
     if np.all(ids==None):
         ids = np.arange(len(coords))+1 if auto_label else np.full(len(coords), -1)
@@ -606,26 +607,27 @@ def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: n
     ])
 
     _, ax = plt.subplots(figsize=(10, 10))
-    ax.imshow(img, cmap='gray', origin='lower')
-
     if axis_on:
+        #!NOTE: when axes are on, invert y-axis so that image origin aligns with array indexing (row 0 at bottom); origin='lower' + invert together place data correctly while keeping axis labels in row-coordinates
+        ax.imshow(img, cmap='gray', vmin=0, vmax=255, origin='lower')  
         ax.axis('on')
         ax.set_xlim(0, w)
         ax.set_ylim(0, h)
+        ax.invert_yaxis()
     else:
+        ax.imshow(img, cmap='gray', vmin=0, vmax=255, origin='upper')
         ax.axis('off')
-    ax.invert_yaxis()
 
     legend_elements = [
-        Line2D([0], [0], marker='+', color='w', mec='red', mfc='red', ms=10, mew=2, label='真实星点'),
-        Line2D([0], [0], marker='^', color='w', mec='yellow', mfc='none', ms=10, mew=2, label='正确检测'),
-        Line2D([0], [0], marker='o', color='w', mec='blue', mfc='none', ms=10, mew=2, label='错误检测')
+        Line2D([0], [0], marker='+', linestyle='None', mec='red', mfc='red', ms=10, mew=2, label='真实星点'),
+        Line2D([0], [0], marker='^', linestyle='None', mec='yellow', mfc='none', ms=10, mew=2, label='正确检测'),
+        Line2D([0], [0], marker='o', linestyle='None', mec='blue', mfc='none', ms=10, mew=2, label='错误检测')
     ]
     ax.legend(handles=legend_elements, bbox_to_anchor=(0.75, 1), loc='upper left', prop={'family': 'SimHei', 'size': 12})
 
     for row, col, label in detect_res:
         if label == 0:
-            ax.plot(col, row, 'r+', ms=10, mew=2)          # red cross
+            ax.plot(col, row, 'r+', ms=10, mew=2)                           # red cross
         elif label == 1:
             ax.plot(col, row, '^', mec='yellow', mfc='none', ms=10, mew=2)  # yellow triangle
         else: # label == 2
