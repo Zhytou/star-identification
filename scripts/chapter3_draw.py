@@ -4,28 +4,11 @@ import numpy as np
 import timeit
 from math import radians
 
-from simulate import create_star_image, add_gaussian_and_pepper_noise, add_stellar_noise
+from simulate import draw_star, create_star_image, add_gaussian_and_pepper_noise, add_stellar_noise
 from denoise import denoise_image
-from detect import group_star, cal_gcm
+from detect import group_star, initialize_seeds, enhance_image, binarize_image, enhance_and_binarize_image
 from extract import get_star_centroids
-from utils import find_overlap_and_unique, cal_mse_psnr_ssim, cal_doh, draw_gray_3d
-
-
-# 非局部均匀滤波测试——Lena图片
-if False:
-    img = cv2.imread(f'example/lena/lena.png', cv2.IMREAD_GRAYSCALE)
-
-    imgs = {}
-    imgs['noised'] = add_gaussian_and_pepper_noise(img, 0.00, 0.001, clipped=True)
-    imgs['nlm'] = denoise_with_nlm(imgs['noised'])
-    imgs['gaussian'] = filter_image(imgs['noised'], 'gaussian')
-    imgs['median'] = filter_image(imgs['noised'], 'median')
-    imgs['glp'] = filter_image(imgs['noised'], 'gaussian low pass')
-
-    for key in imgs:
-        cv2.imwrite(f'res/chapter3/lena/{key}.png', imgs[key])
-        mse, psnr, ssim = cal_mse_psnr_ssim(img, imgs[key])
-        print(key, mse, psnr, ssim)
+from utils import find_overlap_and_unique, cal_doh, plot_gray_3d, plot_grad_field, cal_mse_psnr_ssim, cal_rc_p_f1, label_detect_result
 
 
 ra, de, roll=radians(29.2104), radians(-12.0386), radians(0)
@@ -65,8 +48,8 @@ if False:
         cv2.imwrite(f'{dir}/{method}.png', img2)
         cv2.imwrite(f'{dir}/{method}_S.png', img2[y-d:y+d, x-d:x+d])
 
-        mse, psnr, ssim = cal_mse_psnr_ssim(img0, img2)
-        print(method, mse, psnr, ssim)
+        # mse, psnr, ssim = cal_mse_psnr_ssim(img0, img2, ndigits=2)
+        # print(method, mse, psnr, ssim)
 
 
 # 改进双边滤波测试
@@ -92,8 +75,8 @@ if False:
         else:    
             img2 = denoise_image(denoise_image(img1, 'NLM'), method)
         
-        mse, psnr, ssim = cal_mse_psnr_ssim(img0, img2)
-        print(method, mse, psnr, ssim)
+        # mse, psnr, ssim = cal_mse_psnr_ssim(img0, img2, ndigits=2)
+        # print(method, mse, psnr, ssim)
         cv2.imwrite(f'{dir}/{method}.png', img2)
 
 
@@ -161,7 +144,7 @@ if False:
                 img2 = denoise_image(img1, method)
 
             # 计算降噪前后图像质量指标
-            mse, psnr, ssim = cal_mse_psnr_ssim(img0, img2)
+            mse, psnr, ssim = cal_mse_psnr_ssim(img0, img2, ndigits=2)
             print(
                 method,
                 '\nPSNR:', psnr, 'SSIM:', ssim,
@@ -172,78 +155,6 @@ if False:
                 img3 = img2 if img2.dtype == np.uint8 else 255*img2
                 cv2.imwrite(f'{dir}/{g}_{p}/{method}.png', img3)
                 cv2.imwrite(f'{dir}/{g}_{p}/scale/{method}.png', img3[y-d:y+d, x-d:x+d])
-
-
-def cal_centroid_error(coords1: np.ndarray, coords2: np.ndarray):
-    '''
-        Calculate the centroid method error.
-    '''
-    coords1, coords2, _, _ = find_overlap_and_unique(coords1, coords2)
-    # print(np.hstack([coords1, coords2]))
-
-    assert len(coords1) == len(coords2), 'Error in find_overlap_and_unique!'
-    error = np.mean(np.linalg.norm(coords1 - coords2, axis=1))
-    n = len(coords1)
-
-    return n, error
-
-
-# 图像降噪对质心计算的影响
-if False:
-    num_test = 10
-
-    img0, stars = create_star_image(
-        ra, de, roll, 
-        w=w, 
-        h=h,
-        fovx=fov, 
-        fovy=fov, 
-        limit_mag=limit_mag, 
-        sigma_psf=psf,
-        background=background
-    )
-    tot = len(stars)
-    real_coords = stars[:, 1:3]
-
-    # 打印视场内恒星信息
-    print(np.histogram(stars[:, -1], range=(0, 6), bins=6))
-
-    # 比较各个降噪方法后误差大小
-    # 其中NONE为无预处理时
-    for method in [
-        'NONE', 
-        'GAUSSIAN', 
-        'MEAN', 
-        # 'MEDIAN', 
-        # 'BLF'
-    ]:
-        
-        cnts, errs = [], []
-        for _ in range(num_test):
-            img1 = add_gaussian_and_pepper_noise(img0, sigma_g=0.1, prob_p=0.005)
-            esti_coords = np.array(get_star_centroids(
-                img1,
-                method,
-                'Liebe3',
-                'CCL',
-                'MCoG',
-                pixel_limit=5,
-                num_esti=3 
-            ))
-
-            # 正确提取质心数量和质心误差
-            cnt, err = cal_centroid_error(real_coords, esti_coords)
-            cnts.append(cnt)
-            errs.append(err)
-
-        print(
-            'Method:', method,  
-            '\nTotal number of stars for the test:', tot,
-            '\nNumber of correct extracted stars for each test image:', cnts,
-            '\nError for each test image:', errs,
-            '\nAveragae error:', np.mean(errs),
-            '\n--------------------------------'
-        )
 
 
 def find_miss_idxs(coords: np.ndarray, miss_coords: np.ndarray, atol: float=1e-8, rtol: float=1e-5):
@@ -269,103 +180,6 @@ def find_miss_idxs(coords: np.ndarray, miss_coords: np.ndarray, atol: float=1e-8
     return idxs
 
 
-def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: np.ndarray, legend_text: np.ndarray=None):
-    '''
-        Label the detect result with different shapes and colors.
-    '''
-
-    def draw_shape(img: np.ndarray, center: tuple[float, float], shape: str, color: tuple[int, int, int]=(0, 255, 0), size: int=4, thickness: int=1):
-        y, x = int(center[0]), int(center[1])
-
-        if shape == 'triangle' or shape == 'Triangle':
-            pts = np.array([
-                [x, y - size],
-                [x - size, y + size],
-                [x + size, y + size]
-            ], dtype=np.int32)
-            # cv2.fillPoly(img, [pts], color)
-            if thickness >= 0:
-                cv2.polylines(img, [pts], True, color, max(1, thickness))
-        elif shape == 'cross' or shape == 'Cross':
-            cv2.line(img, (x - size, y), (x + size, y), color, thickness)
-            cv2.line(img, (x, y - size), (x, y + size), color, thickness)
-        elif shape == 'rectangle' or shape == 'Rectangle':
-            cv2.rectangle(img, (x - size, y - size), (x + size, y + size), color, thickness)
-        else: # shape == 'circle' or shape == 'Circle'
-            cv2.circle(img, (x, y), size, color, thickness)
-            # cv2.circle(img, (x, y), size//2, (0, 0, 0), 1)
-
-    def draw_legend(img: np.ndarray, entries: dict, top_left: tuple[int, int], legend_size: tuple[int, int]=(60, 100), gap: int=15):
-        h, w = img.shape[:2]
-        legend_h, legend_w = legend_size
-
-        start_y, start_x = top_left
-        start_y, start_x = max(legend_h + gap, min(h - gap - legend_h, start_y)), max(0, min(w - gap - legend_w, start_x))
-
-        cv2.rectangle(img, (start_x, start_y), (start_x + legend_w, start_y + legend_h), (255, 255, 255), thickness=-1)
-
-        current_y = start_y
-        for label in entries:
-            shape, color = entries[label]
-
-            margin_y, margin_x = (legend_h - (len(entries) - 1 ) * gap) // 2, legend_w // 8
-            legend_shape_y, legend_shape_x = current_y + margin_y, start_x + margin_x
-            legend_shape_size = 8
-            draw_shape(img, (legend_shape_y, legend_shape_x), shape, color=color, size=legend_shape_size)  #! careful, draw_shape use (row, column), while cv2 rawing functions expect (column, row)
-            if legend_text is None:
-                (_, text_height), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-                total_text_height = text_height + baseline
-                text_baseline_y = current_y + gap // 2 + (total_text_height / 2 - baseline)
-                cv2.putText(img, label, (start_x + 2 * gap, int(text_baseline_y)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
-            else:
-                paste_y, paste_x = start_y + margin_y, int(legend_shape_x + legend_shape_size * 1.2)
-                text = cv2.resize(legend_text, (legend_w - 2 * margin_x, legend_h - 2 * margin_y))
-                text_h, text_w = text.shape[:2]
-
-                img[paste_y:paste_y+text_h, paste_x:paste_x+text_w] = text
-            current_y += gap
-
-    if len(img.shape) == 2:
-        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-
-    _, matched_coords, missed_coords, false_coords = find_overlap_and_unique(real_coords, esti_coords, 1)       
-    entries = {
-        'Correct Star': ('Cross', (0, 0, 255)),
-        'Matched Detection': ('Triangle', (0, 255, 255)),
-        # 'Missed Star': ('', (0, 0, 255)),
-        'False Alarm': ('Circle', (255, 0, 0))
-    }
-
-    for coord in matched_coords:
-        shape, color = entries['Correct Star']
-        draw_shape(img, coord, shape, color)
-    for coord in matched_coords:
-        shape, color = entries['Matched Detection']
-        draw_shape(img, coord, shape, color)
-    # for coord in matched_coords:
-    #     shape, color = entries['Missed Star']
-    #     draw_shape(img, coord, shape, color)
-    # for coord in matched_coords:
-    #     shape, color = entries['False Alarm']
-    #     draw_shape(img, coord, shape, color)
-
-    draw_legend(img, entries, (h-15, w-40), (50, 120))
-
-    # miss_idxs = find_miss_idxs(real_coords, missed_coords)
-    print(
-        'Total Number of Stars:', len(real_coords),
-        '\nNumber of Matched Stars:', len(matched_coords),
-        '\nNumber of Miss Stars:', len(missed_coords),
-        '\nNumber of False Stars:', len(false_coords),
-        # '\nMiss:\n', 
-        # real_coords[miss_idxs].astype(int),
-        # '\nFalse:\n', 
-        # coords3.astype(int)
-    )
-
-    return img
-
-
 # 选择一处恒星数量多、星等差异大的视场，从而说明检测算法针对不同星等的恒星均能有限检测
 ra, de, roll=radians(25.0588), radians(-21.7205), radians(0)
 limit_mag=6
@@ -380,10 +194,8 @@ save=True
 if False:
     img, stars = create_star_image(
         ra, de, roll,
-        h=h,
-        w=w, 
-        fovx=fov, 
-        fovy=fov, 
+        h=h, w=w, 
+        fovx=fov, fovy=fov, 
         limit_mag=limit_mag, 
         background=background,
         sigma_psf=psf,
@@ -391,9 +203,10 @@ if False:
     )
 
     img = add_stellar_noise(img, method='Gaussian', position=(h//2, w//4), luminosity=4.5, sigma_x=64, sigma_y=96)
-    # img = add_gaussian_and_pepper_noise(img, sigma_g=0.002, prob_p=0.0)
+    img = add_gaussian_and_pepper_noise(img, sigma_g=0.00, prob_p=0.00)
 
-    draw_gray_3d(img)
+    # plot_gray_3d(img, color_map='turbo')
+    plot_gray_3d(img, color_map='gray', label_text=True)
 
 
 # DoH算子 及 改进后的DoH算子运算结果
@@ -430,7 +243,6 @@ if False:
     P = 5   # pad
     for i, img in enumerate(imgs):
         img = np.pad(img, ((P, P), (P, P)))
-        # draw_gray_3d(img, 'bar3d')
         os.makedirs('res/chapter3/doh/', exist_ok=True)
         cv2.imwrite(f'res/chapter3/doh/original_{i}.png', img)
 
@@ -447,13 +259,38 @@ if False:
             print(np.round(gcm[P:-P, P:-P], 2))
         
 
+# 梯度一致性效果
+if False:
+    if not os.path.exists('res/chapter3/gcm/img_0.png'):
+        img, stars = create_star_image(
+            ra, de, roll, 
+            h=h, w=w, 
+            fovy=fov, fovx=fov, 
+            limit_mag=limit_mag, 
+        )
+        img = add_stellar_noise(img, method='Gaussian', position=(h//2, w//4), luminosity=4.5, sigma_x=64, sigma_y=96)
+        img = add_gaussian_and_pepper_noise(img, sigma_g=0.07, prob_p=0.001)
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+        cv2.imwrite('res/chapter3/gcm/img_0.png')
+    else:
+        img = cv2.imread('res/chapter3/gcm/img_0.png')
+
+    for x, y in [()]:
+        x1, y1 = max(x - d, )
+        cv2.rectangle(img, (x1, y1), bot_right, line_color, line_width)
+
+    # cv2.imwrite('res/chapter2/sim/noise.png', img1)
+    # cv2.imwrite('res/chapter2/sim/noise_scale.png', crop_img1)
+
+
 fov=20
 psf=1
 roi=2
+deul=1 # detection error upper limit
 
 
 # 星点检测作图
-if False:
+if True:
     dir = 'res/chapter3/detect'
 
     img0, stars = create_star_image(
@@ -468,35 +305,38 @@ if False:
 
     for (g, p, s, y, x, lum, roi) in [
         ## Constant stellar background
-        (0.00, 0.000, 'Constant', 0, 0, 7.5, 0),
+        # (0.00, 0.000, 'Constant', 0, 0, 7.5, 0),
 
         # Gasussian stellar background
-        (0.00, 0.000, 'Gaussian', h//2, -w//4, 5.5, 128), 
-        (0.00, 0.000, 'Gaussian', h//3, w//5*3, 5, 64), 
+        (0.00, 0.003, 'Gaussian', h//2, -w//4, 5.5, 128), 
+        # (0.00, 0.000, 'Gaussian', h//3, w//5*3, 5, 64), 
 
         ## Linear stellar background
         # (0.00, 0.000, 'Linear_X', 0, 0, 5.3, 128), 
-        (0.00, 0.000, 'Linear_Y', 0, 0, 5.3, 128), 
+        # (0.00, 0.000, 'Linear_Y', 0, 0, 5.3, 128), 
     ]:
         img1 = add_stellar_noise(img0, method=s, position=(y, x), luminosity=lum, sigma_x=roi)
         img2 = add_gaussian_and_pepper_noise(img1, sigma_g=g, prob_p=p)
     
-        os.makedirs(f'{dir}/{g}_{p}_{s}_{x}_{y}_{lum}_{roi}', exist_ok=True)
-        cv2.imwrite(f'{dir}/{g}_{p}_{s}_{x}_{y}_{lum}_{roi}/Clean.png', img2)
+        cdir = f'{dir}/{g}_{p}_{s}_{x}_{y}_{lum}_{roi}'
         for den_meth, seg_meth, pixel_num in [
             # CCL-Based
-            # ('None', ['None',  'Liebe3', 'CCL', 'None'], 3),
+            # ('None', ['None',  'Liebe3', 'CPL', 'None'], 3),
             # ('None', ['LCM',  'Liebe3', 'CCL', 'None'], 3),
             # ('None', ['ILCM',  'Liebe3', 'CCL', 'None'], 3),
             # ('None', ['NLCM',  'Liebe3', 'CCL', 'None'], 3),
             # ('None', ['RLCM',  'Liebe3', 'CCL', 'None'], 1),
+
+            # ('None', ['PCM',  'Liebe3', 'CCL', 'None'], 3),
+            # ('Median', ['IPCM',  'Liebe5', 'CCL', 'None'], 3),
+            
             # ('None', ['Top-Hat', 'Liebe3', 'CCL', 'None'], 3),
             # ('None', ['Max-Median', 'Liebe3', 'CCL', 'None'], 3),
-            # ('None', ['IGM', 'Liebe3', 'CCL', 'None'], 3),
+            # ('None', ['BEF', 'Liebe3', 'CCL', 'None'], 3),
 
-            # RG-Based
-            # ('None', ['None', 'Liebe3', 'RG',  'None'], 3),
-            ('None', ['None', 'Liebe3', 'RG',  'CGC'], 3),
+            # RGL-Based
+            # ('None', ['None', 'Liebe3', 'RGL',  'None'], 3),
+            ('None', ['None', 'Liebe3', 'RGL',  'CGC'], 3),
         ]:
             print(
                 'Deviation of Gaussian Noise:', g,
@@ -505,16 +345,17 @@ if False:
                 '\nSegmentation Method:', seg_meth,
             )
 
-            esti_coords = np.array(get_star_centroids(img2.copy(), den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num))
+            esti_coords = np.array(get_star_centroids(img2, den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num))
+            cpath = os.path.join(cdir, '_'.join(seg_meth)+'.png')
+            label_detect_result(img2, real_coords, esti_coords, deul, output_path=cpath)
 
-            if os.path.exists('res/chapter3/detect/legend_text.png'):
-                legend_text = cv2.imread('res/chapter3/detect/legend_text.png', cv2.IMREAD_COLOR)
-            else:
-                legend_text = None
-            img3 = label_detect_result(img2, real_coords, esti_coords, legend_text)
-
-            seg_meth_full = '_'.join(seg_meth)
-            cv2.imwrite(f'{dir}/{g}_{p}_{s}_{x}_{y}_{lum}_{roi}/{seg_meth_full}.png', img3)
+            # intermediate detection results
+            # coords, labels = initialize_seeds(img2, seg_meth[3], size=5)
+            # eimg = enhance_image(img2, seg_meth[0], size=5)
+            # bimg = enhance_and_binarize_image(eimg, seg_meth[0], seg_meth[1], coords, size=5) * 255
+            # cv2.imwrite('img_0.png', img0)
+            # cv2.imwrite('img_e.png', eimg)
+            # cv2.imwrite('img_b.png', bimg)
 
 
 # 实拍红外小目标图像检测效果
@@ -534,13 +375,8 @@ if False:
             # ('None', ['IGM', 'Liebe3', 'CCL', 'None'], 3),
         ]:
             esti_coords = np.array(get_star_centroids(img1.copy(), den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num))
-
-            img2 = cv2.cvtColor(img1, cv2.COLOR_GRAY2BGR)
-            img2 = label_image(img2, esti_coords, (0, 255, 0))
-        
-            seg_meth_full = '_'.join(seg_meth)
-            os.makedirs(f'res/chapter3/realshot/{dataset_name}/{seg_meth_full}', exist_ok=True)
-            cv2.imwrite(f'res/chapter3/realshot/{dataset_name}/{seg_meth_full}/{name}', img2)
+            cpath = os.path.join(f'res/chapter3/realshot/{dataset_name}', '_'.join(seg_meth)+'.png')
+            label_detect_result(img2, real_coords, esti_coords, deul, output_path=cpath)
 
 
 # 实拍星图检测实验（该星图由实拍杂光背景和仿真星点合成得到）
@@ -552,49 +388,27 @@ if False:
 
         img1, stars = create_star_image(
             ra, de, roll,
-            h=h,
-            w=w, 
-            fovx=fov, 
-            fovy=fov, 
+            h=h, w=w, 
+            fovx=fov, fovy=fov, 
             limit_mag=limit_mag, 
             background=img0,
             sigma_psf=psf,
             roi=roi,
         )
         real_coords = stars[:, 1:3]
-
         img2 = add_gaussian_and_pepper_noise(img1, sigma_g=0, prob_p=0)
 
         for den_meth, seg_meth, pixel_num in [
             ('None', ['IGM', 'Liebe3', 'CCL', 'None'], 3),
-            ('None', ['MLCM', 'Liebe3', 'RG',  'CGC'], 3),
+            ('None', ['MLCM', 'Liebe3', 'RGL',  'CGC'], 3),
         ]:
             esti_coords = np.array(get_star_centroids(img2.copy(), den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num))
+            label_detect_result(img2, real_coords, esti_coords, deul, output_path='_'.join(seg_meth))
 
-            # coords1: correct match
-            # coords2: miss match
-            # coords3: false match
-            _, coords1, coords2, coords3 = find_overlap_and_unique(real_coords, esti_coords, 4)       
-            img3 = cv2.cvtColor(img2, cv2.COLOR_GRAY2BGR)
-            img3 = label_image(img3, coords1, (0, 255, 0))
-            img3 = label_image(img3, coords2, (255, 0, 0))
-            img3 = label_image(img3, coords3, (0, 0, 255))
-
-            print(
-                'Segmentation Method:', seg_meth,
-                '\nTotal Number of Stars:', len(real_coords),
-                '\nNumber of Miss Stars:', len(coords2),
-                '\nNumber of False Stars:', len(coords3),
-            )
-
-            seg_meth_full = '_'.join(seg_meth)
-            os.makedirs(f'res/chapter3/realshot/{dataset_name}/{seg_meth_full}', exist_ok=True)
-            cv2.imwrite(f'res/chapter3/realshot/{dataset_name}/{seg_meth_full}/{name}', img3)
-            
 
 # 星点检测数量对比
-if True:
-    num_test = 20
+if False:
+    num_test = 5
 
     img0, stars = create_star_image(
         ra, de, roll,
@@ -625,58 +439,41 @@ if True:
         # ('None', ['None',  'Otsu', 'CCL', 'None'], 3),
         # ('None', ['Top-Hat',  'Liebe3', 'CCL', 'None'], 3),
         # ('Median', ['MSobel', 'Liebe5', 'CCL', 'None'], 3),
-        ('Median', ['MS_PCM',  'Liebe3', 'CCL', 'None'], 3),
-        # ('None', ['None',  'Liebe3', 'RG',  'Ly'], 3),
-        # ('None', ['None',  'Liebe3', 'RG',  'CGC'], 3),
+        # ('None', ['BEF',  'Liebe3', 'CCL', 'None'], 3),
+        ('None', ['IPCM',  'Liebe3', 'CCL', 'None'], 3),
+        # ('None', ['None',  'Liebe3', 'RGL',  'Ly'], 3),
+        # ('None', ['None',  'Liebe3', 'RGL',  'CGC'], 3),
     ]:
-        avg_cnts = []
-        avg_err = []
+        avg_cnts = []                                                               # average correct/miss/false estimation count for each method under certain test scenario
         for (g, p, s, y, x, lum, roi) in [
             # Constant stellar background
+            # (0.00, 0.000, 'Constant', 0, 0, 7, 0),
             # (0.03, 0.003, 'Constant', 0, 0, 7, 0),
-            # (0.06, 0.006, 'Constant', 0, 0, 8, 0),
+            # (0.06, 0.006, 'Constant', 0, 0, 7, 0),
             # (0.09, 0.009, 'Constant', 0, 0, 7, 0),
 
             # Gasussian stellar background
-            # (0.00, 0.000, 'Gaussian', h//2, w//4, 5.5, 128), 
-            (0.03, 0.003, 'Gaussian', h//2, w//4, 5, 128), 
-            # (0.06, 0.006, 'Gaussian', h//2, w//4, 5, 128),
-            # (0.09, 0.009, 'Gaussian', h//2, w//4, 5, 128)
-        ]:
-    
-            cnts = []
-            err = []
+            # (0.00, 0.000, 'Gaussian', h//2, -w//4, 5.5, 128),
+            (0.03, 0.003, 'Gaussian', h//2, -w//4, 5, 128), 
+            (0.06, 0.006, 'Gaussian', h//2, -w//4, 5, 128),
+            (0.09, 0.009, 'Gaussian', h//2, -w//4, 5, 128)
+        ]:    
+            cnts = []                                                               # correct/miss/false estimation count for each test
             for _ in range(num_test):
                 img1 = add_stellar_noise(img0, method=s, position=(y, x), luminosity=lum, sigma_x=roi)
                 img2 = add_gaussian_and_pepper_noise(img1, sigma_g=g, prob_p=p)
+
                 esti_coords = np.array(get_star_centroids(img2, den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num))
-
-                # coords1: correct match
-                # coords2: miss match
-                # coords3: false match
-                _, coords1, coords2, coords3 = find_overlap_and_unique(real_coords, esti_coords, eps=2)
-
-                cnts.append((len(coords1), len(coords2), len(coords3)))
-            
-                # find the closest esti_coord
-                if len(coords1) == 0:
-                    err.append(np.inf)
-                else:
-                    dis = np.linalg.norm(coords1 - real_coord, axis=1)
-                    err.append(np.min(dis))
-
+                cnts.append(find_overlap_and_unique(real_coords, esti_coords, threshold=deul, return_count_only=True)[1:])
             avg_cnts.append(np.mean(cnts, axis=0))
-            avg_err.append(np.mean(err))
-
-        avg_cnts, avg_err = np.array(avg_cnts), np.array(avg_err)
+        avg_cnts = np.array(avg_cnts)
+        rc, p, f1 = cal_rc_p_f1(avg_cnts[:, 0], avg_cnts[:, 1], avg_cnts[:, 2], percent=True, ndigits=2)
         print(
             'Method:', den_meth, seg_meth, pixel_num,
-            # '\nTotal number of stars in test image:', len(real_coords),
-            # '\nDetect result:', avg_cnts,
-            '\nAverage correct rate:', avg_cnts[:, 0] / len(real_coords) * 100.0,
-            '\nAverage miss count:', avg_cnts[:, 1],
-            '\nAverage false count:', avg_cnts[:, 2],
-            f'\nAverage centroid error for {real_coord[0], real_coord[1]}:', avg_err,
+            '\nDetect result:', avg_cnts,
+            '\nRecall:', rc,
+            '\nPrecsion:', p,
+            '\nF1-score:', f1,
             '\n---------------------------------'
         )
 

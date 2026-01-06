@@ -5,31 +5,15 @@ import matplotlib.pyplot as plt
 from math import radians, tan
 
 from simulate import create_star_image, draw_star, add_stellar_noise, add_gaussian_and_pepper_noise
-from utils import get_angdist, find_overlap_and_unique, draw_gray_3d, label_star_image
+from utils import cal_angdist, plot_gray_3d, label_star_image
 
 
 # 灰度分布模型
-if False:
-    x, y = np.meshgrid(np.arange(7), np.arange(7))
-    x, y = x.flatten() + 0.5, y.flatten() + 0.5
-    dx = dy = 0.7
-    
+if True:
     mag = 3
     psf = 0.7
-    z = draw_star(np.zeros((7, 7), dtype=np.uint8), (3.5, 3.5), mag, sigma=psf)    
-    dz = z.flatten()
-
-    fig = plt.figure(figsize=(6, 6))
-    ax = fig.add_subplot(111, projection='3d')
-
-    bars = ax.bar3d(
-        x, y, 0, dx, dy, dz, 
-        color='gray',
-        linewidth=0.3,
-        alpha=0.9
-    )           
-
-    plt.show()
+    img = draw_star(np.zeros((7, 7), dtype=np.uint8), (3.5, 3.5), mag, sigma=psf)
+    plot_gray_3d(img, 'bar3d')
 
 
 ra, de, roll = radians(249.2104), radians(-12.0386), radians(-13.3845)
@@ -87,7 +71,7 @@ if False:
     rvs[:, 2] = np.sin(des)
 
     # angular distances
-    vagds, ragds = get_angdist(vvs), get_angdist(rvs)
+    vagds, ragds = cal_angdist(vvs), cal_angdist(rvs)
 
     # print validation results
     for i in range(n):
@@ -110,7 +94,7 @@ def extract_rect(img, top_left: tuple[int, int], bot_right: tuple[int, int], lin
 
 
 # 成像噪声/杂散光干扰
-if True:
+if False:
     img0, stars = create_star_image(
         ra, de, roll, 
         h=h, w=w, 

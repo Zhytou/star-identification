@@ -3,13 +3,12 @@ import numpy as np
 import pandas as pd
 
 from simulate import cata
-from denoise import filter_image, denoise_image
-from detect import cal_threshold, get_seed_coords
+from denoise import denoise_image
 from extract import get_star_centroids
 from model import create_model
 from realshot import identify_realshot_by_nn, cal_attitude, load_h5data
 from test import draw_results
-from utils import get_angdist, label_star_image
+from utils import cal_angdist, label_star_image
 
 
 DEBUG = True
@@ -175,46 +174,9 @@ if True:
     )
 
 
-# 验证降噪\二值化\连通域等算法和matlab实现一致性
-if False:
-    # dir = './example/xie/20161227225347/'
-    file = './example/3P0/00001010_00000000019CFBA2/'
-
-    img0 = cv2.imread(file+'o.bmp', cv2.IMREAD_GRAYSCALE)
-    print(img0.shape)
-
-    # 验证中值滤波正确性
-    img1 = filter_image(img0, 'MEDIAN')
-    img2 = cv2.imread(file+'f.bmp', cv2.IMREAD_GRAYSCALE)
-    assert np.sum(img1!=img2) == 0, 'Wrong median filter!'
-
-    # 验证阈值计算以及二值化正确性
-    T = cal_threshold(img1, 'Liebe5')
-    print('Threashold:', T)
-    bimg2 = np.zeros_like(img2)
-    bimg2[img2 >= T] = 1
-    img3 = cv2.imread(file+'v.bmp', cv2.IMREAD_GRAYSCALE)
-    assert np.sum(bimg2!=img3) == 0, 'Wrong segementation!'
-
-    # 验证连通性标记正确性
-    num_label, limg3 = cv2.connectedComponents(img3, connectivity=4)
-    img4 = cv2.imread(file+'bw.bmp', cv2.IMREAD_GRAYSCALE)
-    assert num_label == len(np.unique(img4)), 'Wrong connected compononets labeling!'
-
-    coords = np.array(get_star_centroids(
-        img0, 
-        'MEDIAN',
-        'Liebe5',
-        'CCL',
-        'MCoG',
-        5,
-    ))
-    print(coords.shape)
-
-
 # 展示降噪-提取各阶段效果
 if False:
-    img0 = cv2.imread('./example/xie/20161227225347/20161227225347.bmp', cv2.IMREAD_GRAYSCALE)
+    img0 = cv2.imread('./realshot/xie/20161227225347/20161227225347.bmp', cv2.IMREAD_GRAYSCALE)
     cv2.imshow('img0', img0)
 
     h, w = img0.shape
@@ -224,10 +186,7 @@ if False:
     img1 = denoise_image(img0, 'BLF')
     cv2.imshow('img1', img1)
 
-    T = cal_threshold(img1, 'Liebe3')
-    print('mean+3*std', T)
-
-    coords = get_seed_coords(img1, 5, T, 10100, 1.2*T)
+    coords = get_star_centroids(img1, 'None', ['None', 'Liebe3', 'CCL', 'None'], 'CoG', pixel_limit=5)
     img2 = cv2.cvtColor(img1, cv2.COLOR_GRAY2BGR)
     for coord in coords:
         cv2.circle(img2, (int(coord[1]), int(coord[0])), 5, (255, 0, 0), 1)
@@ -245,7 +204,7 @@ if False:
     # 角距35mm/像元尺寸5.5um
     f = 35269.52/5.5
 
-    data = np.load(f'./example/xie/{name}/{name}.npz', allow_pickle=True)
+    data = np.load(f'./realshot/xie/{name}/{name}.npz', allow_pickle=True)
 
     # idxs需要减一，因为matlab中序号计数从1开始
     idxs = data['idxs']-1
@@ -267,11 +226,11 @@ if False:
     V2[:, 1] = V2[:, 1] - w/2
     V2[:, 2] = f
 
-    print(np.allclose(get_angdist(V1), get_angdist(V2), atol=1e-4))
+    print(np.allclose(cal_angdist(V1), cal_angdist(V2), atol=1e-4))
 
     # 本方法计算结果
     # coords = get_star_centroids(
-    #     cv2.imread(f'./example/xie/{name}/{name}.bmp', cv2.IMREAD_GRAYSCALE),
+    #     cv2.imread(f'./realshot/xie/{name}/{name}.bmp', cv2.IMREAD_GRAYSCALE),
     #     'MEDIAN', 
     #     'Liebe3', 
     #     'CCL', 
@@ -283,7 +242,7 @@ if False:
 # 使用单张图片验证识别算法有效性，并在原图中标出恒星ID
 if False:
     # test image
-    img_path = './example/xie/cdata/cdata.bmp'
+    img_path = './realshot/xie/cdata/cdata.bmp'
     img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
 
     # test image config
@@ -352,7 +311,7 @@ if False:
         '2P0',
         '3P0'
     ]:
-        data.extend(load_h5data(f'example/{prefix}/', f'{prefix}_liebe5_pixel5_eps00005.h5')) 
+        data.extend(load_h5data(f'realshot/{prefix}/', f'{prefix}_liebe5_pixel5_eps00005.h5')) 
 
     # get the path of test image
     # target_paths = ['00000064_000000000198AA97.bmp', '00000071_000000000198AF3A.bmp', '00000084_000000000198B7D6.bmp', '00000129_000000000198D4C4.bmp', '00000255_000000000199265E.bmp']
