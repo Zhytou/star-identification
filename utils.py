@@ -1,13 +1,9 @@
 import os
-import cv2
 import numpy as np
 import pandas as pd
 from itertools import combinations
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
-from mpl_toolkits.mplot3d import Axes3D
-from astropy import units as u
-from astropy.coordinates import SkyCoord
+from matplotlib.lines import Line2D
 from scipy.ndimage import rank_filter, maximum_filter, gaussian_filter, correlate
 from skimage.metrics import mean_squared_error, peak_signal_noise_ratio, structural_similarity
 
@@ -533,7 +529,8 @@ def plot_grad_field(img: np.ndarray, sigma: float, scale: float=1):
     plt.figure(figsize=(10, 10))
     plt.imshow(img, cmap='gray')
     plt.quiver(x, y, grad_x, grad_y, color='r', angles='xy', scale_units='xy', scale=scale)
-    plt.title("Gradient Vector Field")
+    # plt.title("Gradient Vector Field")
+    plt.axis('off')
     plt.show()
 
 
@@ -557,7 +554,7 @@ def plot_freq_spectrum(img: np.ndarray):
     plt.show()
 
 
-def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, circle: bool=False, auto_label: bool=False, axis_on: bool=True, grid_on: bool=False, grid_step: int=10, show: bool=True, output_path: str=None):
+def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, circle: bool=False, auto_label: bool=False, axis_on: bool=True, show: bool=True, output_path: str=None):
     '''
         Label the stars in the image with id or circle.
     '''
@@ -574,119 +571,86 @@ def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, 
         ax.axis('off')
     ax.invert_yaxis()
 
-    if grid_on:
-        ax.set_xticks(np.arange(0, w, grid_step))
-        ax.set_yticks(np.arange(0, h, grid_step))
-        ax.grid(grid_on, color='r', linewidth=2)
-
     if np.all(ids==None):
         ids = np.arange(len(coords))+1 if auto_label else np.full(len(coords), -1)
 
     for id, (row, col) in zip(ids, coords):
         row, col = int(row), int(col)
         if circle:
-            circle = Circle((col, row), 10, edgecolor='b', facecolor='none')
-            ax.add_patch(circle)
+            ax.plot(col, row, 'o', mec='blue', mfc='none', ms=10, mew=2)
         if id != -1:
             row, col = min(row+10, h-20), min(col-20, w-20)
             ax.text(col, row, str(id), fontsize=10, color='white', ha='left', va='top')
 
+    if output_path: #!NOTE: must save before show, otherwise the figure will be cleared by plt.show() and saved as blank/white image
+        dir = os.path.abspath(os.path.dirname(output_path))
+        os.makedirs(dir, exist_ok=True)
+        plt.savefig(output_path, format='png', bbox_inches='tight', dpi=300)
+
     if show:
         plt.show()
 
-    if output_path:
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        plt.savefig(output_path, format='png', bbox_inches='tight', pad_inches=1, dpi=300)
-    
     plt.close()
 
 
-def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: np.ndarray, eps: float):
+def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: np.ndarray, dist_threshold: float, axis_on: bool=False, show: bool=True, output_path: str=None):
     '''
         Label the detect result with different shapes and colors.
     '''
-
-    def draw_shape(img: np.ndarray, center: tuple[float, float], shape: str, color: tuple[int, int, int]=(0, 255, 0), size: int=4, thickness: int=1):
-        y, x = int(center[0]), int(center[1])
-
-        if shape == 'triangle' or shape == 'Triangle':
-            pts = np.array([
-                [x, y - size],
-                [x - size, y + size],
-                [x + size, y + size]
-            ], dtype=np.int32)
-            # cv2.fillPoly(img, [pts], color)
-            if thickness >= 0:
-                cv2.polylines(img, [pts], True, color, max(1, thickness))
-        elif shape == 'cross' or shape == 'Cross':
-            cv2.line(img, (x - size, y), (x + size, y), color, thickness)
-            cv2.line(img, (x, y - size), (x, y + size), color, thickness)
-        elif shape == 'rectangle' or shape == 'Rectangle':
-            cv2.rectangle(img, (x - size, y - size), (x + size, y + size), color, thickness)
-        else: # shape == 'circle' or shape == 'Circle'
-            cv2.circle(img, (x, y), size, color, thickness)
-            # cv2.circle(img, (x, y), size//2, (0, 0, 0), 1)
-
-    def draw_legend(img: np.ndarray, entries: dict, top_left: tuple[int, int], legend_size: tuple[int, int]=(60, 100), gap: int=15):
-        h, w = img.shape[:2]
-        legend_h, legend_w = legend_size
-
-        start_y, start_x = top_left
-        start_y, start_x = max(legend_h + gap, min(h - gap - legend_h, start_y)), max(0, min(w - gap - legend_w, start_x))
-
-        cv2.rectangle(img, (start_x, start_y), (start_x + legend_w, start_y + legend_h), (255, 255, 255), thickness=-1)
-
-        current_y = start_y
-        for label in entries:
-            shape, color = entries[label]
-
-            margin_y, margin_x = (legend_h - (len(entries) - 1 ) * gap) // 2, legend_w // 8
-            legend_shape_y, legend_shape_x = current_y + margin_y, start_x + margin_x
-            legend_shape_size = 8
-            draw_shape(img, (legend_shape_y, legend_shape_x), shape, color=color, size=legend_shape_size)  #!NOTE: draw_shape use (row, column), while cv2 rawing functions expect (column, row)
-            (_, text_height), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            total_text_height = text_height + baseline
-            text_baseline_y = current_y + gap // 2 + (total_text_height / 2 - baseline)
-            cv2.putText(img, label, (start_x + 2 * gap, int(text_baseline_y)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
-            
-            current_y += gap
-
-    if len(img.shape) == 2:
-        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-
-    _, matched_coords, missed_coords, false_coords = find_overlap_and_unique(real_coords, esti_coords, eps)       
-    entries = {
-        'Real Star': ('Cross', (0, 0, 255)),
-        'Matched Detection': ('Triangle', (0, 255, 255)),
-        'False Alarm': ('Circle', (255, 0, 0))
-    }
-    for coord in real_coords:
-        shape, color = entries['Real Star']
-        draw_shape(img, coord, shape, color)
-    for coord in matched_coords:
-        shape, color = entries['Matched Detection']
-        draw_shape(img, coord, shape, color)
-    for coord in false_coords:
-        shape, color = entries['False Alarm']
-        draw_shape(img, coord, shape, color)
-
-    h, w = img.shape[:2]
-    draw_legend(img, entries, (h-15, w-40), (50, 120))
     
+    h, w = img.shape
+    _, matched_coords, missed_coords, false_coords = find_overlap_and_unique(real_coords, esti_coords, dist_threshold)
+    detect_res = np.vstack([
+        np.hstack([coords, np.full((coords.shape[0], 1), i, dtype=int)])
+        for i, coords in enumerate([real_coords, matched_coords, false_coords])
+    ])
+
+    _, ax = plt.subplots(figsize=(10, 10))
+    ax.imshow(img, cmap='gray', origin='lower')
+
+    if axis_on:
+        ax.axis('on')
+        ax.set_xlim(0, w)
+        ax.set_ylim(0, h)
+    else:
+        ax.axis('off')
+    ax.invert_yaxis()
+
+    legend_elements = [
+        Line2D([0], [0], marker='+', color='w', mec='red', mfc='red', ms=10, mew=2, label='真实星点'),
+        Line2D([0], [0], marker='^', color='w', mec='yellow', mfc='none', ms=10, mew=2, label='正确检测'),
+        Line2D([0], [0], marker='o', color='w', mec='blue', mfc='none', ms=10, mew=2, label='错误检测')
+    ]
+    ax.legend(handles=legend_elements, bbox_to_anchor=(0.75, 1), loc='upper left', prop={'family': 'SimHei', 'size': 12})
+
+    for row, col, label in detect_res:
+        if label == 0:
+            ax.plot(col, row, 'r+', ms=10, mew=2)          # red cross
+        elif label == 1:
+            ax.plot(col, row, '^', mec='yellow', mfc='none', ms=10, mew=2)  # yellow triangle
+        else: # label == 2
+            ax.plot(col, row, 'o', mec='blue', mfc='none', ms=10, mew=2)    # blue circle
+
+    if output_path:
+        dir = os.path.abspath(os.path.dirname(output_path))
+        os.makedirs(dir, exist_ok=True)
+        plt.savefig(output_path, format='png', bbox_inches='tight', dpi=300)
+
+    if show:
+        plt.show()
+
+    plt.close()
+
     print(
         'Total Number of Stars:', len(real_coords),
         '\nNumber of Matched Stars:', len(matched_coords),
         '\nNumber of Miss Stars:', len(missed_coords),
         '\nNumber of False Stars:', len(false_coords),
-        '\nReal:\n',
-        np.round(real_coords, 2),
         '\nMiss:\n', 
         np.round(missed_coords, 2),
         '\nFalse:\n', 
         np.round(false_coords, 2)
     )
-
-    return img
 
 
 def describe_database(db: pd.DataFrame):
