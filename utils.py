@@ -509,31 +509,6 @@ def plot_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gr
     plt.show()
 
 
-def plot_grad_field(img: np.ndarray, sigma: float, scale: float=1):
-    '''
-        Plot the gradient vector field.
-    '''
-    eps = 1e-10
-    h, w = img.shape
-
-    # compute gradients
-    grad_y, grad_x = cal_derivative(img, order=(1, 0), sigma=sigma), cal_derivative(img, order=(0, 1), sigma=sigma)
-    grad = np.hypot(grad_y, grad_x)
-    max_grad = np.max(grad, initial=eps)
-    grad_y, grad_x = grad_y / max_grad, grad_x / max_grad
-    
-    # create grid
-    y, x = np.meshgrid(np.arange(0, h), np.arange(0, w), indexing='ij')
-
-    # plot
-    plt.figure(figsize=(10, 10))
-    plt.imshow(img, cmap='gray')
-    plt.quiver(x, y, grad_x, grad_y, color='r', angles='xy', scale_units='xy', scale=scale)
-    # plt.title("Gradient Vector Field")
-    plt.axis('off')
-    plt.show()
-
-
 def plot_freq_spectrum(img: np.ndarray):
     '''
         Plot the frequency spectrum of the image.
@@ -552,6 +527,21 @@ def plot_freq_spectrum(img: np.ndarray):
     plt.title('Frequency Spectrum')
     plt.axis('off')
     plt.show()
+
+
+def save_and_show(output_path: str, show: bool):
+    '''
+        Save and show figure if needed.
+    '''
+    if output_path: #!NOTE: must save before show, otherwise the figure will be cleared by plt.show() and saved as blank/white image
+        dir = os.path.abspath(os.path.dirname(output_path))
+        os.makedirs(dir, exist_ok=True)
+        plt.savefig(output_path, format='png', bbox_inches='tight', dpi=300)
+
+    if show:
+        plt.show()
+
+    plt.close()
 
 
 def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, circle: bool=False, auto_label: bool=False, axis_on: bool=True, show: bool=True, output_path: str=None):
@@ -583,18 +573,10 @@ def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, 
             row, col = min(row+10, h-20), min(col-20, w-20)
             ax.text(col, row, str(id), fontsize=10, color='white', ha='left', va='top')
 
-    if output_path: #!NOTE: must save before show, otherwise the figure will be cleared by plt.show() and saved as blank/white image
-        dir = os.path.abspath(os.path.dirname(output_path))
-        os.makedirs(dir, exist_ok=True)
-        plt.savefig(output_path, format='png', bbox_inches='tight', dpi=300)
-
-    if show:
-        plt.show()
-
-    plt.close()
+    save_and_show(show, output_path)
 
 
-def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: np.ndarray, dist_threshold: float, axis_on: bool=False, show: bool=True, info: bool=False, output_path: str=None):
+def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: np.ndarray, dist_threshold: float, axis_on: bool=False, info: bool=False, show: bool=True, output_path: str=None):
     '''
         Label the detect result with different shapes and colors.
     '''
@@ -649,16 +631,33 @@ def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: n
             '\nFalse:\n', 
             np.round(false_coords, 2)
         )
+    
+    save_and_show(output_path, show)
 
-    if output_path:
-        dir = os.path.abspath(os.path.dirname(output_path))
-        os.makedirs(dir, exist_ok=True)
-        plt.savefig(output_path, format='png', bbox_inches='tight', dpi=300)
 
-    if show:
-        plt.show()
+def label_grad_field(img: np.ndarray, sigma: float, scale: float=1, show: bool=True, output_path: str=None):
+    '''
+        Plot the gradient vector field.
+    '''
+    eps = 1e-10
+    h, w = img.shape
 
-    plt.close()
+    # compute gradients
+    grad_y, grad_x = cal_derivative(img, order=(1, 0), sigma=sigma), cal_derivative(img, order=(0, 1), sigma=sigma)
+    grad = np.hypot(grad_y, grad_x)
+    max_grad = np.max(grad, initial=eps)
+    grad_y, grad_x = grad_y / max_grad, grad_x / max_grad
+    
+    # create grid
+    y, x = np.meshgrid(np.arange(0, h), np.arange(0, w), indexing='ij')
+
+    # create ax and quiver
+    _, ax = plt.subplots(figsize=(10, 10))
+    ax.imshow(img, cmap='gray', vmin=0, vmax=255, origin='upper')
+    ax.axis('off')
+    ax.quiver(x, y, grad_x, grad_y, color='r', angles='xy', scale_units='xy', scale=scale)
+
+    save_and_show(output_path, show)
 
 
 def describe_database(db: pd.DataFrame):
