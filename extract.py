@@ -32,7 +32,7 @@ def cal_center_of_guassian_curve(img: np.ndarray, rows, cols) -> tuple[float, fl
     return round(-X[1]/(2*X[0]), 3), round(-X[2]/(2*X[0]), 3)
 
 
-def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, method: str, T: int=0, A: float=200, sigma: float=1.0) -> tuple[float, float]:
+def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, method: str, T: float=0, A: float=200, sigma: float=1.0) -> tuple[float, float]:
     '''
         Calculate the centroid of the star in the window.
     '''
@@ -45,6 +45,8 @@ def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, m
         xgs, ygs = np.sum(x * g), np.sum(y * g)
         gs = np.sum(g)
     elif method == 'MCoG':
+        if T == 0:
+            T = np.mean(img) + 3 * np.std(img)
         xgs, ygs = np.sum(x * (g - T)), np.sum(y * (g - T))
         gs = np.sum(g - T)
     elif method == 'WCoG':

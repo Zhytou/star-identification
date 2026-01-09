@@ -60,7 +60,7 @@ def gen_pattern(meth_params: dict, coords: np.ndarray, ids: np.ndarray, cata_idx
     '''
         Generate the pattern with the given star coordinates for one star image.
     Args:
-        meth_params: the parameters for the method
+        meth_params: the parameters for the identification method
         coords: the coordinates of the stars
         ids: the ids of the stars
         cata_idxs: the catalogue index of the stars
@@ -609,18 +609,14 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, extr_params: dict, 
         h, w = img.shape
 
         # get the coordinates and graysums of the stars in the image
-        points = np.array(get_star_centroids(
+        points = get_star_centroids(
             img, 
             den_meth=extr_params['den'],
-            thr_meth=extr_params['thr'],
             seg_meth=extr_params['seg'],
             cen_meth=extr_params['cen'],
             pixel_limit=extr_params['pixel'],
-            T1=extr_params.get('T1', None),
-            T2=extr_params.get('T2', None),
-            T3=extr_params.get('T3', None),
             need_gray=True,
-        ))
+        )
         coords = points[:, :2]
         grays = points[:, 2]
 

@@ -14,7 +14,7 @@ from sklearn.metrics.pairwise import haversine_distances
 from generate import setup
 from dataset import create_dataset
 from model import create_model
-from utils import get_angdist, traid, gen_combos
+from utils import cal_angdist, traid, gen_combos
 
 
 # Chinese font setting
@@ -342,7 +342,7 @@ def verify(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, probs: np.nd
     rvs = stars[['X', 'Y', 'Z']].to_numpy()
 
     # get the angular distances
-    vagds, ragds = get_angdist(vvs), get_angdist(rvs)
+    vagds, ragds = cal_angdist(vvs), cal_angdist(rvs)
 
     # compare the angular distnaces
     match = np.isclose(vagds, ragds, atol=eps)
@@ -382,7 +382,7 @@ def triangle_match(cata: pd.DataFrame, vvs: np.ndarray, init_id: int, init_idx: 
     assert(n >= 3)
 
     # cosine cangular distances between view vectors
-    vagds = get_angdist(vvs) # (n, n)
+    vagds = cal_angdist(vvs) # (n, n)
 
     # get the all potential reference vectors in guide star database
     rvs = np.zeros((len(cata), 3))
@@ -391,7 +391,7 @@ def triangle_match(cata: pd.DataFrame, vvs: np.ndarray, init_id: int, init_idx: 
     rvs[:, 2] = np.sin(cata['De'])    
 
     # cosine angular distances between initial vector and all reference vectors
-    ragds = get_angdist(rvs[cata['Star ID'] == init_id], rvs) # (1, k) (k is len(cata))
+    ragds = cal_angdist(rvs[cata['Star ID'] == init_id], rvs) # (1, k) (k is len(cata))
 
     # calculate the differences between view vectors and reference vectors
     diffs = np.abs(vagds[init_idx, :, None] - ragds) # (n, k)

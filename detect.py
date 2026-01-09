@@ -394,7 +394,7 @@ def enhance_image_multiscale(img: np.ndarray, method: str, sizes: list[int], pre
     return np.max(enhanced_imgs, axis=0)
 
 
-def enhance_and_binarize_image(img: np.ndarray, ehc_meth: str, thr_meth: str, coords: np.ndarray, size: list[int] | int, wind: int=21):
+def enhance_and_binarize_image(img: np.ndarray, ehc_meth: str, thr_meth: str, coords: np.ndarray, size: list[int] | int, wind: int=11):
     '''
         Enhance the image and perform local adaptive binarization around given coordinates.
     '''
@@ -444,7 +444,7 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
         inner[r, r] = False                                                     # exclude central pixel
         imean = np.maximum(np.mean(patches[..., inner], axis=-1), eps)          # inner ring mean map 
         mask = mask & ((img == max_intensity) | (img - 1. * imean >= 0)) & (imean - 1. * omean >= 0)
-    print('Number of seeds after preselection:', np.sum(mask))
+    # print('Number of seeds after preselection:', np.sum(mask))
 
     ## 2. Double check with different operators 
     if method == 'DoH' or method == 'Ly':
@@ -458,7 +458,7 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
         mask = mask & (res1 > 0.2) & is_local_topk(res2, k=-2, connectivity=connectivity)
     else:
         mask = np.zeros_like(mask, dtype=bool)
-    print('Number of seeds after operator double check:', np.sum(mask))
+    # print('Number of seeds after operator double check:', np.sum(mask))
 
     ## 3. Generate unique label for each seed, namely merge possible connected seeds
     n = np.sum(mask)                                                            # number of initial unconnected seeds
@@ -486,8 +486,8 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
             label_map[labels[i]] = label_cnt
             labels[i] = label_cnt
     assert label_cnt == label_tab.count(), ''
-    assert labels.min() >= 1 and labels.max() <= label_cnt
-    print('Number of seeds after merging:', label_cnt)
+    assert label_cnt == 0 or labels.min() >= 1 and labels.max() <= label_cnt
+    # print('Number of seeds after merging:', label_cnt)
 
     return coords, labels
 

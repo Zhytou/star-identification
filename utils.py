@@ -573,7 +573,7 @@ def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, 
             row, col = min(row+10, h-20), min(col-20, w-20)
             ax.text(col, row, str(id), fontsize=10, color='white', ha='left', va='top')
 
-    save_and_show(show, output_path)
+    save_and_show(output_path, show)
 
 
 def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: np.ndarray, dist_threshold: float, axis_on: bool=False, info: bool=False, show: bool=True, output_path: str=None):
