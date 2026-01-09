@@ -8,10 +8,6 @@ from detect import group_star
 def cal_center_of_guassian_curve(img: np.ndarray, rows, cols) -> tuple[float, float]:
     '''
         Calculate the centroid of the star using the gaussian fitting.
-    Args:
-        img: the image to be processed
-    Returns:
-        centroid: the centroid of the star
     '''
     x, y = rows+0.5, cols+0.5
 
@@ -36,110 +32,53 @@ def cal_center_of_guassian_curve(img: np.ndarray, rows, cols) -> tuple[float, fl
     return round(-X[1]/(2*X[0]), 3), round(-X[2]/(2*X[0]), 3)
 
 
-def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, method: str, T: int=-1, center: tuple[int, int]=None, A: float=200, sigma: float=1.0) -> tuple[float, float]:
+def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, method: str, T: int=0, A: float=200, sigma: float=1.0) -> tuple[float, float]:
     '''
         Calculate the centroid of the star in the window.
-    Args:
-        img: the image to be processed
-        rows/cols: the coordinates of the pixels in the window
-        method: centroid algorithm
-            'CoG': center of gravity
-            'MCoG': modified center of gravity
-            'WCoG': weighed center of gravity
-            'CCoG': compensated center of gravity
-            # 'IWCoG': iterative weighed center of gravity
-        T: the threshold of the star
-        center: initial centroid used in WCoG
-        sigma: the sigma used in WCoG and IWCoG
-    Returns:
-        centroid: the centroid of the star
     '''
     
-    # gray
-    g = img[rows, cols]
-    #? row and column add 0.5 to get the center of the pixel
-    x, y = rows+0.5, cols+0.5
+    y, x = rows, cols
+    g = img[y, x]
+    y, x = y + 0.5, x + 0.5
 
     if method == 'CoG' or method == 'CCoG':
-        # row multiply gray and sum, column multiply gray and sum
         xgs, ygs = np.sum(x * g), np.sum(y * g)
         gs = np.sum(g)
     elif method == 'MCoG':
         xgs, ygs = np.sum(x * (g - T)), np.sum(y * (g - T))
         gs = np.sum(g - T)
     elif method == 'WCoG':
-        # weight for each pixel used in WCoG and IWCoG
-        d = (x-center[0])**2 + (y-center[1])**2
-        w = A*np.exp(-d/(2*sigma**2))
+        i = np.argmax(g)
+        x0, y0 = x[i], y[i]
+        d2 = (x - x0)**2 + (y - y0)**2
+        w = A*np.exp(-d2 / (2 * sigma**2))
         xgs, ygs = np.sum(x * g * w), np.sum(y * g * w)
         gs = np.sum(g * w)
-        if gs == 0.0:
-            return 0.0, 0.0
     else:
         print('Invalid gravity method!')
         return 0.0, 0.0
     
     gs = np.maximum(gs, 1e-10)
-    center = xgs/gs, ygs/gs
-
-    return center
+    return ygs/gs, xgs/gs, gs
 
 
-def get_star_centroids(img: np.ndarray, den_meth: str, seg_meth: list['str'], cen_meth: str | list[str], pixel_limit: int=5, connectivity=4, num_esti: int=1, need_gray: bool=False, save_path:str=None) -> list[tuple[float, float]] | list[tuple[float, float, int]] | dict[str, list[tuple[float, float]]]:
+def get_star_centroids(img: np.ndarray, den_meth: str, seg_meth: list['str'], cen_meth: str, pixel_limit: int=5, connectivity=4, need_gray: bool=False) -> np.ndarray:
     '''
         Get the centroids of the stars in the image.
-    Args:
-        img: the image to be processed
-        den_method: denoising method
-        seg_method: segmentation method list
-        cen_method: centroid algorithm
-        pixel_limit: the minimum number of connected pixels
-        T1/T2/T3: optional threshold used in RG segmentation method
-        num_esti: the number of estimation using centroid algorithm
-        need_gray: whether to return the sum of gray of each centroid
-        save_img: whether to save the filtered image
-    Returns:
-        centroids: the centroids of the stars in the image
     '''
 
-    # denoise
+    # preprocess with denoising method
     filtered_img = denoise_image(img, den_meth)
     
-    if type(save_path) is str:
-        cv2.imwrite(save_path, filtered_img)
-
     # rough group star using connectivity
     group_coords = group_star(filtered_img, seg_meth, connectivity=connectivity, pixel_limit=pixel_limit)
 
     # calculate the centroid coordinate with threshold and weight
-    centroids = {}
+    centroids = np.array([cal_center_of_gravity(filtered_img, rows, cols, cen_meth) for rows, cols in group_coords])
 
-    if isinstance(cen_meth, str):
-        cen_meths = [cen_meth]
-    else:
-        cen_meths = cen_meth
-
-    for method in cen_meths:
-        centroids[method] = []
-        for rows, cols in group_coords:
-            # get the brightest pixel and use it as the center
-            vals = filtered_img[rows, cols]
-            idx = np.argmax(vals)
-            # ?maybe use the brightest pixel as the center to construct a window
-            brightest = rows[idx], cols[idx]
-
-            # get the graysum
-            graysum = np.sum(vals)
-
-            # calculate the centroid
-            avg_centroid = np.mean([cal_center_of_gravity(filtered_img, rows, cols, method, center=brightest) for _ in range(num_esti)], axis=0)
-
-            if need_gray:
-                centroids[method].append((avg_centroid[0], avg_centroid[1], graysum))
-            else:
-                centroids[method].append((avg_centroid[0], avg_centroid[1]))
-
-    if len(cen_meths) == 1:
-        return centroids[cen_meth]
+    # sort by star luminosity
+    centroids = centroids[np.argsort(centroids[:, 2])]
+    if not need_gray:
+        centroids = centroids[:, :2]
 
     return centroids
