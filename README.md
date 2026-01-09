@@ -48,87 +48,84 @@ python -m scripts.chapter4_draw
 
 1. **恒星筛选**：基于视轴方向与恒星的角距筛选可见恒星。
 
-    $$
-        \theta=arccos{\vec{v_{axis}}\cdot\vec{v_{star}}}\le FOV/2
-    $$
+$$
+    \theta=arccos{\vec{v_{axis}}\cdot\vec{v_{star}}}\le FOV/2
+$$
 
 2. **坐标计算**：完成从赤经赤纬到像素坐标的转换。
   
-    2.1 赤经赤纬 → 天球直角坐标
-    <div align="center">
-        <img src="assets/celestial_coord_system.png" alt="celestial_coord_system" width="256">
-    </div>
+<div align="center">
+    <p>赤经赤纬 → 天球直角坐标</p>
+    <img src="assets/celestial_coord_system.png" alt="celestial_coord_system" width="256">
+</div>
 
-    $$
+$$
     \begin{pmatrix}
-    x \\
-    y \\
-    z
+        x \\
+        y \\
+        z
     \end{pmatrix} =
     \begin{pmatrix}
-    \cos\alpha \cos\delta \\
-    \sin\alpha \cos\delta \\
-    \sin\delta
+        \cos\alpha \cos\delta \\
+        \sin\alpha \cos\delta \\
+        \sin\delta
     \end{pmatrix}
-    $$
+$$
 
-    2.2 天球直角坐标 → 星敏感器坐标
-    <div align="center">
-        <img src="assets/sensor_coord_system.png" alt="sensor_coord_system.png" width="256">
-    </div>
+<div align="center">
+    <p>天球直角坐标 → 星敏感器坐标</p>
+    <img src="assets/sensor_coord_system.png" alt="sensor_coord_system.png" width="256">
+</div>
     
-    $$
+$$
     \begin{pmatrix}
-    x' \\
-    y' \\
-    z'
+        x' \\
+        y' \\
+        z'
     \end{pmatrix} =
     M \cdot
     \begin{pmatrix}
-    x \\
-    y \\
-    z
+        x \\
+        y \\
+        z
     \end{pmatrix}
-    $$
+$$
 
-    $$
-    M =
+$$
+    M = \begin{pmatrix}
+        \cos\varphi_0 & \sin\varphi_0 & 0 \\
+        -\sin\varphi_0 & \cos\varphi_0 & 0 \\
+        0 & 0 & 1
+    \end{pmatrix} \cdot
     \begin{pmatrix}
-    \cos\varphi_0 & \sin\varphi_0 & 0 \\
-    -\sin\varphi_0 & \cos\varphi_0 & 0 \\
-    0 & 0 & 1
-    \end{pmatrix}
-    \cdot
+        1 & 0 & 0 \\
+        0 & \cos(\pi/2-\delta_0) & \sin(\pi/2-\delta_0) \\
+        0 & -\sin(\pi/2-\delta_0) & \cos(\pi/2-\delta_0)
+    \end{pmatrix} \cdot
     \begin{pmatrix}
-    1 & 0 & 0 \\
-    0 & \cos(\pi/2-\delta_0) & \sin(\pi/2-\delta_0) \\
-    0 & -\sin(\pi/2-\delta_0) & \cos(\pi/2-\delta_0)
+        \cos(\pi/2+\alpha_0) & \sin(\pi/2+\alpha_0) & 0 \\
+        -\sin(\pi/2+\alpha_0) & \cos(\pi/2+\alpha_0) & 0 \\
+        0 & 0 & 1
     \end{pmatrix}
-    \cdot
-    \begin{pmatrix}
-    \cos(\pi/2+\alpha_0) & \sin(\pi/2+\alpha_0) & 0 \\
-    -\sin(\pi/2+\alpha_0) & \cos(\pi/2+\alpha_0) & 0 \\
-    0 & 0 & 1
-    \end{pmatrix}
-    $$
+$$
 
-    2.3 星敏感器坐标 → 像平面坐标
-    <div align="center">
-        <img src="assets/pixel_coord_system.png" alt="pixel_coord_system.png" width="256">
-    </div>
+<div align="center">
+    <p>星敏感器坐标 → 像平面坐标</p>
+    <img src="assets/pixel_coord_system.png" alt="pixel_coord_system.png" width="256">
+</div>
 
-    $$
+$$
     \begin{cases}
-    col = \frac{w}{2}+\frac{x'}{z'}\cdot\frac{f}{d} \\
-    row = \frac{h}{2}+\frac{y'}{z'}\cdot\frac{f}{d}
+        col = \frac{w}{2}+\frac{x'}{z'}\cdot\frac{f}{d} \\
+        row = \frac{h}{2}+\frac{y'}{z'}\cdot\frac{f}{d}
     \end{cases}
-    $$
+$$
 
 3. **灰度确定**：基于二维高斯函数的PSF模型。
 
-  $$
+$$
     I(x, y) = I_0 \cdot exp^{\frac{(x-x_0)^2+(y-y_0)^2}{2\sigma^2}}
-  $$
+$$
 
 **运行效果**：
 
