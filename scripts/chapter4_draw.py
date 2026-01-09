@@ -3,8 +3,6 @@ import numpy as np
 import pandas as pd
 
 from simulate import cata
-from denoise import denoise_image
-from extract import get_star_centroids
 from model import create_model
 from realshot import identify_realshot_by_nn, cal_attitude, load_h5data
 from test import draw_results
@@ -85,7 +83,7 @@ if False:
 
 
 # 模型内存和计算消耗统计
-if True:
+if False:
     gcata = pd.read_csv('./catalogue/sao6.0_d0.03_12_15.csv')
     num_class = len(gcata)
     
@@ -174,27 +172,6 @@ if True:
     )
 
 
-# 展示降噪-提取各阶段效果
-if False:
-    img0 = cv2.imread('./realshot/xie/20161227225347/20161227225347.bmp', cv2.IMREAD_GRAYSCALE)
-    cv2.imshow('img0', img0)
-
-    h, w = img0.shape
-    y0, x0 = h/2, w/2
-    f0 = 34000/6.7
-    
-    img1 = denoise_image(img0, 'BLF')
-    cv2.imshow('img1', img1)
-
-    coords = get_star_centroids(img1, 'None', ['None', 'Liebe3', 'CCL', 'None'], 'CoG', pixel_limit=5)
-    img2 = cv2.cvtColor(img1, cv2.COLOR_GRAY2BGR)
-    for coord in coords:
-        cv2.circle(img2, (int(coord[1]), int(coord[0])), 5, (255, 0, 0), 1)
-    cv2.imshow('img2', img2)
-
-    cv2.waitKey(-1)
-
-
 # 验证提取算法有效性——分别计算恒星在星敏感器坐标系以及天球坐标系下角距，比较对应值大小
 if False:
     name = 'cdata'
@@ -228,19 +205,9 @@ if False:
 
     print(np.allclose(cal_angdist(V1), cal_angdist(V2), atol=1e-4))
 
-    # 本方法计算结果
-    # coords = get_star_centroids(
-    #     cv2.imread(f'./realshot/xie/{name}/{name}.bmp', cv2.IMREAD_GRAYSCALE),
-    #     'MEDIAN', 
-    #     'Liebe3', 
-    #     'CCL', 
-    #     'CoG', 
-    #     pixel_limit=3
-    # )
-
 
 # 使用单张图片验证识别算法有效性，并在原图中标出恒星ID
-if False:
+if True:
     # test image
     img_path = './realshot/xie/cdata/cdata.bmp'
     img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
@@ -271,14 +238,10 @@ if False:
             ],
         },
         extr_params={
-            'den': 'NLM_BLF',   # denoise
-            'thr': 'Liebe3',    # threshold
-            'seg': 'RG',        # segmentation
+            'den': 'None',      # denoise
+            'seg': ['None', 'Liebe3', 'CCL', 'None'], # segmentation: [enhancement, threshold, label, operator]
             'cen': 'MCoG',      # centroid
             'pixel': 3,         # pixel number limit
-            'T1': None,         # optional for RG
-            'T2': 0,            # optional for RG
-            'T3': None,         # optional for RG
         },
         model_types={
             'rac_nn': 'cnn3'
@@ -342,9 +305,8 @@ if False:
         ],
     }
     extr_params = {
-        'den': 'MEDIAN',    # denoise
-        'thr': 'Liebe5',    # threshold
-        'seg': 'CCL',       # segmentation
+        'den': 'Median',    # denoise
+        'seg': ['None', 'Liebe5', 'CCL', 'None'], # segmentation: [enhancement, threshold, label, operator]
         'cen': 'MCoG',      # centroid
         'pixel': 5          # pixel number limit
     }
