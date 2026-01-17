@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 from denoise import denoise_image
-from detect import group_star
+from detect import group_star, cal_threshold
 
 
 def cal_center_of_guassian_curve(img: np.ndarray, rows, cols) -> tuple[float, float]:
@@ -45,8 +45,6 @@ def cal_center_of_gravity(img: np.ndarray, rows: np.ndarray, cols: np.ndarray, m
         xgs, ygs = np.sum(x * g), np.sum(y * g)
         gs = np.sum(g)
     elif method == 'MCoG':
-        if T == 0:
-            T = np.mean(img) + 3 * np.std(img)
         xgs, ygs = np.sum(x * (g - T)), np.sum(y * (g - T))
         gs = np.sum(g - T)
     elif method == 'WCoG':
@@ -76,10 +74,11 @@ def get_star_centroids(img: np.ndarray, den_meth: str, seg_meth: list['str'], ce
     group_coords = group_star(filtered_img, seg_meth, connectivity=connectivity, pixel_limit=pixel_limit)
 
     # calculate the centroid coordinate with threshold and weight
-    centroids = np.array([cal_center_of_gravity(filtered_img, rows, cols, cen_meth) for rows, cols in group_coords])
+    T = cal_threshold(filtered_img, seg_meth[1])
+    centroids = np.array([cal_center_of_gravity(filtered_img, rows, cols, cen_meth, T) for rows, cols in group_coords])
 
     # sort by star luminosity
-    centroids = centroids[np.argsort(centroids[:, 2])]
+    centroids = centroids[np.argsort(centroids[:, 2])][::-1]
     if not need_gray:
         centroids = centroids[:, :2]
 
