@@ -1,5 +1,4 @@
-import os, re, json, time
-from datetime import datetime
+import os, re, time
 import numpy as np
 import pandas as pd
 import torch
@@ -625,90 +624,6 @@ def eval_time(model: nn.Module, input: torch.Tensor, times: int=100):
     elapsed = (end_time - start_time) / times * 1000
     
     return round(elapsed, 6)
-
-
-def draw_results(res: dict, save: bool=False):
-    '''
-        Draw the results of the accuracy.
-    Args:
-        res: the results to be drawn
-            {
-                'method1': {
-                    'test_type1': [(x, y), ...],
-                    'test_type2': [(x, y), ...],
-                },
-                'method2': {
-                    'test_type1': [(x, y), ...],
-                    'test_type2': [(x, y), ...],
-                },
-            }
-    '''
-
-    # method abbreviation to full name
-    abbr_2_name = {
-        'rac_nn': '本文方法',
-        'lpt_nn': '基于Polestar模式的神经网络算法',
-        'grid': '栅格算法',
-        'lpt': '改进的LPT算法'
-    }
-    # test type abbreviation to full name
-    type_2_name = {
-        'pos': '位置噪声(pixel)',
-        'mag': '亮度噪声(Mv)',
-        'fs': '伪星数目',
-        'ms': '缺失星数目'
-    }
-
-    # set timestamp as sub directory
-    now = datetime.now()
-    subdir = now.strftime("%Y%m%d_%H%M%S")
-    dir = f'res/chapter4/sim/{subdir}'
-    os.makedirs(dir, exist_ok=True)
-    
-    # save the results
-    if save:
-        with open(f'{dir}/res.txt', 'w') as f:
-            json.dump(res, f, indent=4)
-
-    # change abbreviation to full name
-    for mabbr, mname in abbr_2_name.items():
-        if mabbr not in res:
-            continue
-        res[mname] = res.pop(mabbr)
-        for tabbr, tname in type_2_name.items():
-                if tabbr not in res[mname]:
-                    continue
-                res[mname][tname] = res[mname].pop(tabbr)
-
-    # draw the results
-    for name in type_2_name.values():
-        fig, ax = plt.subplots()
-        ax.set_xlabel(name)
-        ax.set_ylabel('识别率(%)')
-
-        for method in abbr_2_name.values():
-            if method not in res or name not in res[method]:
-                continue
-
-            res[method][name].sort(key=lambda x: x[0])
-            xs, ys = zip(*res[method][name])
-            
-            # avoid 100% accuracy
-            # ys = [y-0.1 for y in ys]
-            
-            # calculate the minimum y value
-            # if ymin > ys[-1]:
-            #     ymin = np.floor(ys[-1]/10)*10
-
-            # plot the results
-            ax.plot(xs, ys, label=method, marker='o')
-            ax.set_xlim(min(xs), max(xs))
-            ax.set_ylim(80, 100)
-            ax.set_xticks(xs)
-            ax.legend()
-
-        fig.savefig(f'{dir}/{name}.png')
-    plt.show()
 
 
 def do_test(meth_params: dict, simu_params: dict, model_types: dict, test_params: dict, gcata_path: str, num_thd: int=20):
