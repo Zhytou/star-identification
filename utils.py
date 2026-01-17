@@ -1,11 +1,15 @@
-import os
+import os, json, numbers
 import numpy as np
 import pandas as pd
 from itertools import combinations
 import matplotlib.pyplot as plt
+from datetime import datetime
 from matplotlib.lines import Line2D
 from scipy.ndimage import rank_filter, maximum_filter, gaussian_filter, correlate
 from skimage.metrics import mean_squared_error, peak_signal_noise_ratio, structural_similarity
+
+plt.rcParams['font.sans-serif']=['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
 
 
 def gen_combos(n: int, k: int):
@@ -14,6 +18,13 @@ def gen_combos(n: int, k: int):
     '''
     combos = np.array(list(combinations(range(n), k)))
     return combos
+
+
+def gen_timestamp(fmt: str='%Y%m%d_%H'):
+    '''
+        Generate a timestamp string for the current time.
+    '''
+    return datetime.now().strftime(fmt)
 
 
 def gen_gaussian_kernel(sigma: float, size: int, x: np.ndarray=None, order: int=2, normalize: bool=True):
@@ -223,13 +234,13 @@ def cal_mse_psnr_ssim(img1: np.ndarray, img2: np.ndarray, ndigits: int=-1):
     return mse, psnr, mssim
 
 
-def cal_rc_p_f1(tp: int | float | np.ndarray, fp : int | float | np.ndarray, fn: int | float | np.ndarray, percent: bool=True, ndigits: int=-1):
+def cal_rc_p_f1(tp: int | float | np.ndarray, fn: int | float | np.ndarray, fp : int | float | np.ndarray, percent: bool=True, ndigits: int=-1):
     '''
         Calculate recall, precision, and f1-score.
     Args:
         tp: true positives - the number of correct detections
-        fp: false positives - the number of false alarms
         fn: false negatives - the number of missed targets
+        fp: false positives - the number of false alarms
         percent: If True, return metrics in percent (e.g., 85.0 instead of 0.85).
         ndigits: Number of decimal places to round to. If -1 (default), keep full precision.
     Returns:
@@ -529,6 +540,41 @@ def plot_freq_spectrum(img: np.ndarray):
     plt.show()
 
 
+def plot_line_chart(res: dict, xlabel: str='x', ylabel: str='y', xrange: tuple=None, yrange: tuple=None, img_name: str='result.png', show: bool=True, output_dir: str=None):
+    '''
+        Draw the results of the accuracy.
+    '''
+    # plot the results
+    fig, ax = plt.subplots()
+    for method in res:
+        xs, ys = zip(*res[method])
+        if isinstance(xs[0], numbers.Number) and not isinstance(xs[0], bool):
+            ax.set_xticks(xs)
+        else:
+            xlabels, xs = xs, np.arange(len(xs), dtype=np.int32)
+            ax.set_xticks(xs)
+            ax.set_xticklabels(xlabels)
+        if xrange == None:
+            xrange = (np.min(xs), np.max(xs))
+        if yrange == None:
+            yrange = (np.min(ys), np.max(ys))
+        ax.plot(xs, ys, label=method, marker='o')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_xlim(xrange)
+    ax.set_ylim(yrange)
+    ax.legend()
+
+    # save and show figure
+    if output_dir:
+        save_and_show(os.path.join(output_dir, img_name), show)
+
+    # save the text results
+    if output_dir:
+        with open(os.path.join(output_dir, 'res.txt'), 'w') as f:
+            json.dump(res, f, indent=4)
+
+
 def save_and_show(output_path: str, show: bool):
     '''
         Save and show figure if needed.
@@ -544,7 +590,7 @@ def save_and_show(output_path: str, show: bool):
     plt.close()
 
 
-def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, circle: bool=False, auto_label: bool=False, axis_on: bool=True, show: bool=True, output_path: str=None):
+def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, circle: bool=False, auto_label: bool=False, sort: bool=False, axis_on: bool=True, show: bool=True, output_path: str=None):
     '''
         Label the stars in the image with id or circle.
     '''
@@ -564,6 +610,11 @@ def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, 
 
     if np.all(ids==None):
         ids = np.arange(len(coords))+1 if auto_label else np.full(len(coords), -1)
+
+    if sort:
+        idxs = np.lexsort((coords[:, 1], coords[:, 0]))
+        coords = coords[idxs]
+        ids = ids[idxs]
 
     for id, (row, col) in zip(ids, coords):
         row, col = int(row), int(col)
