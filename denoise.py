@@ -19,21 +19,26 @@ def basic_filter(img: np.ndarray, method: str='Gaussian', size: int=3) -> np.nda
     Returns:
         filtered_img: the image after filtering
     '''
+
+    d = size
+    r = size // 2
+
     if method == 'Gaussian':
-        filtered_img = ndi.gaussian_filter(img, sigma=0.7, truncate=(size//2)/0.7)
+        filtered_img = ndi.gaussian_filter(img, sigma=0.7, truncate=(r)/0.7)
     elif method == 'Mean':
-        filtered_img = ndi.uniform_filter(img, size=size)
+        filtered_img = ndi.uniform_filter(img, size=d)
     elif method == 'Median':
-        # d = size//2
-        # padded_img = np.pad(img, ((d, d), (d, d)), mode='constant')
-        filtered_img = ndi.median_filter(img, size)
+        filtered_img = ndi.median_filter(img, d)
+    elif method == 'MMedian':
+        padded_img = np.pad(img, ((r, r), (r, r)), mode='constant', constant_values=0)
+        filtered_img = ndi.median_filter(padded_img, d)[r:-r, r:-r]
     elif method == 'Bilateral':
         filtered_img = restoration.denoise_bilateral(img, win_size=9, sigma_color=20, sigma_spatial=1.5)
     elif method == 'GLF':
         f = np.fft.fft2(img)
         fshift = np.fft.fftshift(f)
 
-        kernel = cv2.getGaussianKernel(size, 0.7)
+        kernel = cv2.getGaussianKernel(d, 0.7)
         kernel = np.outer(kernel, kernel.transpose())
         kernel_padded = np.pad(kernel, ((0, img.shape[0] - kernel.shape[0]), (0, img.shape[1] - kernel.shape[1])), mode='constant')
         kernel_f = np.fft.fft2(kernel_padded)
@@ -54,15 +59,19 @@ def morph_filter(img: np.ndarray, size: int=3, method: str='Erode', selem: str='
     '''
         Morphology filter.
     '''
+
+    d = size
+    r = size // 2
+
     if selem == 'Disk':
-        kernel = morph.disk(size//2)
+        kernel = morph.disk(r)
     elif selem == 'Cross':
         # no built-in function
-        kernel = np.zeros((size, size), dtype=bool)
-        kernel[:, size//2] = True
-        kernel[size//2, :] = True
+        kernel = np.zeros((d, d), dtype=bool)
+        kernel[:, r] = True
+        kernel[r, :] = True
     else:
-        kernel = np.ones((size, size), dtype=bool)
+        kernel = np.ones((d, d), dtype=bool)
     
     if method == 'Erode':
         filtered_img = morph.erosion(img, kernel)
