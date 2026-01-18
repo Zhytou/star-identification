@@ -219,7 +219,7 @@ def get_rotation_matrix(ra: float, de: float, roll: float, method: int=1) -> np.
 
 def cal_zxz_euler(R: np.ndarray, method: int=1) -> tuple[float, float, float]:
     '''
-        Get the ra, de and roll angles from the rotation matrix.
+        Get the ra, de and roll in radians from the rotation matrix.
     '''
     assert R.shape == (3, 3), "Rotation matrix should be 3x3."
     assert np.allclose(R @ R.T, np.identity(3), atol=1e-3), "Rotation matrix is not orthogonal."
@@ -278,7 +278,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
 
     # calculate fovx if not given
     if fovx == -1:
-        fovx = degrees(atan(tan(radians(fovy/2)*w/h)))
+        fovx = 2*degrees(atan(tan(radians(fovy/2))*w/h))
 
     # get field of view
     # ? what happern, when fovx != fovy
