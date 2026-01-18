@@ -348,9 +348,9 @@ def verify(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, probs: np.nd
     scores = np.sum(match, axis=1)
 
     # at least the angular distance between one pair of stars is verified, the image can be considered as correctly identification    
-    # !careful! minus one to exclude itself
-    if np.max(scores)-1 < 1 or np.sum(scores == scores.max()) > 1:
-        # if no star pairs are verified or multiple match, leave to postprocess    
+    # !NOTE: minus one to exclude itself
+    if np.max(scores)-1 < 1:
+        # if no star pairs are verified, leave to postprocess    
         # ids[probs != probs.max()] = -1
         return ids, None
     
@@ -363,12 +363,11 @@ def verify(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, probs: np.nd
         idx1, idx2 = np.lexsort((probs[mask], scores))[-2:]    
 
     # keep results that satisfy both the idx1-th and idx2-th angular distance constraints
-    cstr = match[idx1] & match[idx2]
-    idxs = np.where(mask)[0] 
-    ids[idxs[~cstr]] = -1
+    verified = match[idx1] & match[idx2]
+    ids[mask] = np.where(verified, ids[mask], -1)
 
     ### 3.calculate the attitude matrix
-    att_mat = traid(vvs[cstr].T, rvs[cstr].T)
+    att_mat = traid(vvs[verified].T, rvs[verified].T)
 
     return ids, att_mat
 
@@ -476,14 +475,12 @@ def postprocess(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, att_mat
 
     # if no attitude infomation is offerred, do triangle match
     if att_mat is None:
-        idxs = np.where(ids!=-1)[0]
-        for idx in idxs:
+        for idx in np.where(ids!=-1)[0]:
             nids, att_mat = triangle_match(cata, vvs, ids[idx], idx, eps1)
             if att_mat is not None:
                 ids = nids
                 break
-
-        if att_mat is None:
+        else:
             return ids
 
     # get the ideal reference vectors
