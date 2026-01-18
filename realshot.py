@@ -4,12 +4,12 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
+from simulate import create_star_image, cal_zxz_euler, cata
 from generate import gen_real_sample, setup
 from model import create_model
 from dataset import create_dataset
 from test import predict, verify, postprocess
 from utils import label_star_image, traid
-
 
 
 def load_h5data(dir: str, name: str):
@@ -37,7 +37,7 @@ def load_h5data(dir: str, name: str):
     return data
 
 
-def cal_attitude(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, h: int, w: int, f: int, grays: np.ndarray=None):
+def cal_attitude(coords: np.ndarray, ids: np.ndarray, h: int, w: int, f: float):
     '''
         Calculate the attitude matrix of star sensor.
     '''
@@ -60,7 +60,7 @@ def cal_attitude(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, h: int
     return traid(vvs.T, rvs.T)
 
 
-def identify_realshot_by_nn(img_paths: list[str], simu_params: dict, meth_params: dict, extr_params: dict, model_types: dict, gcata_path: str, device: str=torch.device('cuda' if torch.cuda.is_available() else 'cpu'), eps1: float=1e-4, eps2: float=1e-3, output_dir: str=None):
+def identify_realshot_by_nn(img_paths: list[str], simu_params: dict, meth_params: dict, extr_params: dict, model_types: dict, gcata_path: str, prob_threshold: float=0, device: str=torch.device('cuda' if torch.cuda.is_available() else 'cpu'), eps0: float=1e-4, eps1: float=1e-4, eps2: float=1e-3, output_dir: str=None):
     '''
         Identify realshot by nn method.
     '''
@@ -79,27 +79,12 @@ def identify_realshot_by_nn(img_paths: list[str], simu_params: dict, meth_params
         gen_cfg = f'{gcata_name}_'+'_'.join(map(str, meth_params[method]))
         ext_cfg = '_'.join(map(str, extr_params.values()))
 
-        # print info
-        print(
-            'Realshot Test',
-            '\n-----------------------',
-            '\nMETHOD INFO',
-            '\nMethod:', method,
-            '\nSimulation config:', sim_cfg,
-            '\nGeneration config:', gen_cfg,
-            '\nExtraction config:', ext_cfg,
-            '\n-----------------------',
-            '\nMODEL INFO',
-            '\nModel type:', model_types[method],
-            '\nDevice:', device,
-            '\n-----------------------',
-        )
-
         # get the pattern radius for later fov restriction
         rp = np.radians(meth_params[method][1])
 
         # test data
-        df = df_dict[method]
+        # !NOTE: some stars may not have valid patterns, because of insufficient stars in their neighboring regions
+        df = df_dict[method].dropna(axis=0).copy()
 
         # dataset
         dataset = create_dataset(
@@ -120,16 +105,15 @@ def identify_realshot_by_nn(img_paths: list[str], simu_params: dict, meth_params
         model.load_state_dict(torch.load(model_path))
 
         # predict the star catalogue index
-        cata_idxs, valid_probs = predict(model, loader, 0, device)
-        
-        # initilize the predicted ids and probs
-        ids, probs = np.full(len(df), -1), np.full(len(df), 0.0)
-        
-        # some stars may not have valid patterns, because of insufficient stars in their neighboring regions
-        mask = df.isna().any(axis=1).to_numpy()
-        ids[~mask] = gcata.loc[cata_idxs, 'Star ID'].to_numpy()
-        probs[~mask] = valid_probs
+        cata_idxs, probs = predict(model, loader, prob_threshold, device)
 
+        # valid(propability > prob_threshold)
+        valid = cata_idxs != -1
+
+        # initilize the predicted ids and probs
+        ids = np.full(len(df), -1)
+        ids[valid] = gcata.loc[cata_idxs[valid], 'Star ID'].to_numpy()
+        
         # get all the coordinates
         coords = df[['row', 'col']].to_numpy()
 
@@ -137,7 +121,7 @@ def identify_realshot_by_nn(img_paths: list[str], simu_params: dict, meth_params
         img_ids = df['img_id'].to_numpy()
 
         # add flags
-        df['valid'] = ~mask
+        df['valid'] = valid
         df['verified'] = False
 
         # do verification and postprocess for each image
@@ -157,6 +141,7 @@ def identify_realshot_by_nn(img_paths: list[str], simu_params: dict, meth_params
                 h=simu_params['h'], 
                 w=simu_params['w'], 
                 f=simu_params['f'],
+                eps=eps0,
             )
 
             if esti_atti is not None:
@@ -180,21 +165,42 @@ def identify_realshot_by_nn(img_paths: list[str], simu_params: dict, meth_params
 
             # label the realshot and save it to res dir
             if output_dir is not None:                
-                # xxxx.bmp
-                img_name = os.path.basename(img_id)
+                # xxxx + .bmp
+                img_name = os.path.splitext(os.path.basename(img_id))[0]
 
                 # read image
                 img = cv2.imread(img_id, cv2.IMREAD_GRAYSCALE)
 
                 # label and save the image
                 label_star_image(
-                    img, 
-                    esti_coords, 
-                    esti_ids, 
-                    circle=True,
-                    axis_on=False,
-                    show=False,
-                    output_path=os.path.join(output_dir, img_name)
+                    img, esti_coords, circle=True, auto_label=True, axis_on=False, show=False, sort=True, 
+                    output_path=os.path.join(output_dir, 'detect', img_name+'.png')
+                )
+                label_star_image(
+                    img, esti_coords, esti_ids, circle=True, axis_on=False, show=False, sort=True, 
+                    output_path=os.path.join(output_dir, 'identify', img_name+'.png')
+                )
+
+                # create simulated star image with identified info
+                if esti_atti is not None:
+                    ra, de, roll = cal_zxz_euler(esti_atti, simu_params['rot'])
+                    simu_img, simu_stars = create_star_image(
+                        ra, de, roll, 
+                        h=simu_params['h'], w=simu_params['w'], 
+                        limit_mag=simu_params['limit_mag'],
+                        fovx=-1, fovy=np.degrees(2*rp)
+                    )
+                    simu_ids, simu_coords = simu_stars[:, 0].astype(int), simu_stars[:, 1:3]
+                    label_star_image(
+                        simu_img, simu_coords, simu_ids, circle=True, axis_on=False, show=False, sort=True, 
+                        output_path=os.path.join(output_dir, 'simulate', img_name+'.png')
+                    )
+
+                # save estimation results(coords and ids)
+                np.savetxt(
+                   os.path.join(output_dir, 'identify', img_name+'.txt'),
+                    np.hstack([esti_coords, esti_ids[:, None]]),
+                    fmt="%.2f", delimiter='\t', header="row col id"
                 )
 
         # update dataframe
