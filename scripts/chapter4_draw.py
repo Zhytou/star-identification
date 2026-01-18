@@ -1,15 +1,17 @@
-import os, cv2, torch
+import os, cv2, torch, h5py
 import numpy as np
 import pandas as pd
 
-from simulate import cata
+from simulate import cata, cal_zxz_euler
+from denoise import basic_filter
+from detect import cal_threshold
+from extract import get_star_centroids
 from model import create_model
 from realshot import identify_realshot_by_nn, cal_attitude, load_h5data
-from test import draw_results
-from utils import cal_angdist, label_star_image
+from utils import gen_timestamp, cal_angdist, plot_line_chart
 
 
-DEBUG = True
+DEBUG = False
 
 
 # 仿真实验结果作图
@@ -79,7 +81,41 @@ if False:
         # }
     }
 
-    draw_results(res, save=True)
+    # 方法缩写
+    abbr_2_name = {
+        'rac_nn': '本文方法',
+        'lpt_nn': '基于Polestar模式的神经网络算法',
+        'grid': '栅格算法',
+        'lpt': '改进的LPT算法'
+    }
+    # 测试缩写
+    type_2_name = {
+        'pos': '位置噪声(pixel)',
+        'mag': '亮度噪声(Mv)',
+        'fs': '伪星数目',
+        'ms': '缺失星数目'
+    }
+
+    dir = os.path.join('res/chapter4/sim', gen_timestamp())
+    
+    # 英文缩写替换为中文名称
+    for mabbr, mname in abbr_2_name.items():
+        if mabbr not in res:
+            continue
+        res[mname] = res.pop(mabbr)
+        for tabbr, tname in type_2_name.items():
+                if tabbr not in res[mname]:
+                    continue
+                res[mname][tname] = res[mname].pop(tabbr)
+
+    # 作直线图
+    for tname in type_2_name.values():
+        sub_res = {}
+        for mname in abbr_2_name.values():
+            if mname not in res or tname not in res[mname]:
+                continue
+            sub_res[mname] = res[mname][tname]
+        plot_line_chart(sub_res, xlabel='噪声强度', ylabel='识别率(%)', img_name=tname+'.png', show=True, output_dir=dir)
 
 
 # 模型内存和计算消耗统计
@@ -172,6 +208,43 @@ if False:
     )
 
 
+# 验证降噪\二值化\连通域等算法和matlab实现一致性
+if False:
+    dir = 'realshot/xie/cdata'
+    name = 'cdata'
+    exten = '.bmp'
+
+    img0 = cv2.imread(os.path.join(dir, name+exten), cv2.IMREAD_GRAYSCALE)
+
+    # 验证中值滤波正确性
+    img1 = basic_filter(img0, 'MMedian')
+    img2 = cv2.imread(os.path.join(dir, name+'_median'+exten), cv2.IMREAD_GRAYSCALE)
+    assert np.sum(img1!=img2) == 0, 'Wrong median filter!'
+
+    # 验证阈值计算以及二值化正确性
+    thr_meth = 'Liebe3'
+    T = cal_threshold(img1, thr_meth)
+    bimg2 = np.where(img2 >= T, 1, 0)
+    img3 = cv2.imread(os.path.join(dir, thr_meth, name+'_binary'+exten), cv2.IMREAD_GRAYSCALE)
+    assert np.sum(bimg2!=img3) == 0, 'Wrong segementation!'
+
+    # 验证连通性标记正确性
+    num_label, limg3 = cv2.connectedComponents(img3, connectivity=4)
+    print(limg3.dtype)
+    img4 = cv2.imread(os.path.join(dir, thr_meth, name+'_label'+exten), cv2.IMREAD_GRAYSCALE)
+    assert num_label == len(np.unique(img4)), 'Wrong connected compononets labeling!'
+
+    esti_coords = np.array(get_star_centroids(
+        img0, 'MEDIAN', ['None', thr_meth, 'CCL', 'None'], 
+        'MCoG', pixel_limit=5, need_gray=True
+    ))
+    # matlab starpoints结果为行、列以及灰度和
+    # 其中，由于matlab计算时从1开始，所以理论上应该比esti_coords大0.5
+    with h5py.File(os.path.join(dir, thr_meth, 'starpoints.h5'), 'r') as f:
+        real_coords = f['/points'][:].T
+        print(real_coords, esti_coords)
+
+
 # 验证提取算法有效性——分别计算恒星在星敏感器坐标系以及天球坐标系下角距，比较对应值大小
 if False:
     name = 'cdata'
@@ -207,91 +280,63 @@ if False:
 
 
 # 使用单张图片验证识别算法有效性，并在原图中标出恒星ID
-if True:
-    # test image
-    img_path = './realshot/xie/cdata/cdata.bmp'
+if False:
+    img_path = 'realshot/xie/cdata/cdata.bmp'
+    save_dir = 'res/chapter4/single_realshot'
     img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
 
-    # test image config
     h, w, f = 1024, 1280, 35269.52/5.5
-    
-    # predict the star ids
+    simu_params={
+        'h': h,
+        'w': w,
+        'f': f,
+        'fovy': 2*np.degrees(np.arctan(h/(2*f))),
+        'fovx': 2*np.degrees(np.arctan(w/(2*f))),
+        'limit_mag': 5.5,
+        'rot': 1
+    }
+    meth_params={
+        'rac_nn': [
+            0.1,            # Rb
+            4.5,            # Rp
+            [25, 55, 85],   # arr_ring
+            18,             # num_sector
+            3,              # num_neighbor
+            0,              # use_prob
+        ],
+    }
+    extr_params={
+        'den': 'None',      # denoise
+        'seg': ['None', 'Liebe3', 'CCL', 'None'], # segmentation: [enhancement, threshold, label, operator]
+        'cen': 'MCoG',      # centroid
+        'pixel': 3,         # pixel number limit
+    }
     df_dict = identify_realshot_by_nn(
         [img_path],
-        simu_params={
-            'h': h,
-            'w': w,
-            'f': f,
-            'fovy': 2*np.degrees(np.arctan(h/(2*f))),
-            'fovx': 2*np.degrees(np.arctan(w/(2*f))),
-            'limit_mag': 5.5,
-            'rot': 1
-        },
-        meth_params={
-            'rac_nn': [
-                0.1,            # Rb
-                4.5,            # Rp
-                [25, 55, 85],   # arr_ring
-                18,             # num_sector
-                3,              # num_neighbor
-                0,              # use_prob
-            ],
-        },
-        extr_params={
-            'den': 'None',      # denoise
-            'seg': ['None', 'Liebe3', 'CCL', 'None'], # segmentation: [enhancement, threshold, label, operator]
-            'cen': 'MCoG',      # centroid
-            'pixel': 3,         # pixel number limit
-        },
+        simu_params=simu_params,
+        meth_params=meth_params,
+        extr_params=extr_params,
         model_types={
             'rac_nn': 'cnn3'
         },
-        gcata_path = 'catalogue/sao5.5_d0.03_9_10.csv' # guide star catalogue
+        gcata_path='catalogue/sao5.5_d0.03_9_10.csv', # guide star catalogue
+        output_dir=os.path.join(save_dir, gen_timestamp())
     )    
-
-    # get esti coords and id
-    df = df_dict['rac_nn']
-    esti = df.loc[df['img_id']==img_path, ['star_id', 'row', 'col']].to_numpy()
-    ids, coords = esti[:, 0].astype(int), esti[:, 1:3]
-
-    # sort the coords by row for label
-    ids = ids[np.argsort(coords[:, 0])]
-    coords = coords[np.argsort(coords[:, 0])]
-    mask = ids != -1
-    
-    # label star image
-    label_star_image(img, coords, auto_label=True, circle=True, axis_on=False)
-    label_star_image(img, coords[mask], ids[mask], circle=True, axis_on=False)
 
 
 # 多张实拍星图验证算法有效性
-if False:
-    # load test data
-    data = []
-    for prefix in [
-        '0P0', 
-        '1P0', 
-        '2P0',
-        '3P0'
-    ]:
-        data.extend(load_h5data(f'realshot/{prefix}/', f'{prefix}_liebe5_pixel5_eps00005.h5')) 
-
-    # get the path of test image
-    # target_paths = ['00000064_000000000198AA97.bmp', '00000071_000000000198AF3A.bmp', '00000084_000000000198B7D6.bmp', '00000129_000000000198D4C4.bmp', '00000255_000000000199265E.bmp']
-    # img_paths = [item['path'] for item in data if os.path.basename(item['path']) in target_paths]
-    img_paths = [item['path'] for item in data]
-
-    # test image config
+if True:
+    # 清华测试图像大小以及拍摄焦距
     h, w, f = 1040, 1288, 18500/4.8
 
-    # parameters
+    # 参数
     simu_params = {
         'h': h,
         'w': w,
         'f': f,
         'fovy': 2*np.degrees(np.arctan(h/(2*f))),
         'fovx': 2*np.degrees(np.arctan(w/(2*f))),
-        'limit_mag': 6,
+        'limit_mag': 5.5,
         'rot': 1
     }
     meth_params = {
@@ -305,71 +350,77 @@ if False:
         ],
     }
     extr_params = {
-        'den': 'Median',    # denoise
+        'den': 'MMedian',   # denoise
         'seg': ['None', 'Liebe5', 'CCL', 'None'], # segmentation: [enhancement, threshold, label, operator]
         'cen': 'MCoG',      # centroid
         'pixel': 5          # pixel number limit
     }
 
-    # identify realshots
-    df_dict = identify_realshot_by_nn(
-        img_paths, 
-        simu_params,
-        meth_params,
-        extr_params,
-        model_types={
-            'rac_nn': 'lcnn',
-        },
-        gcata_path='catalogue/sao5.5_d0.03_9_10.csv', # guide star catalogue，
-        eps1=5e-5,
-        eps2=1e-2,
-        # output_dir='res/chapter4/realshot',
-    )
+    data, dfs, img_paths = [], [], []
+    test_dir = 'realshot/tsinghua'
+    test_prefixs = ['0P0', '1P0', ]
+    save_dir = 'res/chapter4/multiple_realshot'
+    for prefix in test_prefixs:
+        # 加载每个数据集中的测试数据
+        subdata = load_h5data(os.path.join(test_dir, prefix), f'{prefix}_liebe5_pixel5_eps00005.h5')
+        subimg_paths = [item['path'] for item in subdata[:1]]
+        img_paths.extend(subimg_paths)
+        
+        # 使用模型进行识别，并保存识别结果
+        df_dict = identify_realshot_by_nn(
+            subimg_paths, 
+            simu_params,
+            meth_params,
+            extr_params,
+            model_types={
+                'rac_nn': 'cnn3',
+            },
+            gcata_path='catalogue/sao5.5_d0.03_9_10.csv', # guide star catalogue，
+            eps0=1e-4, # threshold for verify
+            eps1=5e-5, # threshold for postprocess triangle match
+            eps2=1e-3, # threshold for postprocess unidentified star angular match
+            output_dir=os.path.join(save_dir, prefix),
+        )
+        dfs.append(df_dict['rac_nn'])
+        data.extend(subdata)
 
-    # only take rac results
-    df = df_dict['rac_nn']
-
-    # the result dict
+    df = pd.concat(dfs, ignore_index=True, copy=False)
+    # 每张测试图片正确识别恒星数量
     res = {}
-    # failed star image paths
+    # 错误识别图片列表
     failed_img_paths = []
 
-    # check the results by image
     for item in data:
         img_path, real_coords, real_ids = item['path'], item['coords'], item['ids']
-
         if img_path not in img_paths:
             continue
-
-        # get esti coords and id
+        
+        # 读取每张图片测试结果
         esti = df.loc[df['img_id']==img_path, ['star_id', 'row', 'col', 'gray', 'valid', 'verified']].to_numpy()
         esti_ids, esti_coords, grays, flags = esti[:, 0].astype(int), esti[:, 1:3].astype(float), esti[:, 3].astype(int), esti[:, 4:6].astype(bool)
 
-        # add 0.5 offset, since row and column of matlab matrixs start with 1
+        # 由于MATLAB矩阵的行和列都以1开头，因此需要加上0.5的偏移量。
         esti_coords += 0.5
 
-        # get the attitude matrix
-        real_atti = cal_attitude(cata, real_coords, real_ids, h=h, w=w, f=f)
-
-        # search for matched coordinates
         cnt = 0
+        # 坐标误差阈值
+        err = 0.5
+        # 和matlab识别结果进行比较
         for real_coord, real_id in zip(real_coords, real_ids):
-            mask = np.isclose(esti_coords, real_coord, atol=1e-1).all(axis=1)
+            mask = np.isclose(esti_coords, real_coord, atol=err).all(axis=1)
             idx = np.where(mask)[0]
             if len(idx) == 0:
                 continue
             idx = idx[0]
 
-            assert np.allclose(esti_coords[idx], real_coord, atol=1e-1)
+            assert np.allclose(esti_coords[idx], real_coord, atol=err)
             cnt += 1 if esti_ids[idx] == real_id else 0
-
-        # add to result
+        
         res[img_path] = cnt
-
-        if DEBUG and cnt < 3:
+        if cnt < 3:
             failed_img_paths.append(img_path)
-            
-            # print debug info
+        
+        if True: 
             print(
                 'Image:', os.path.basename(img_path),
                 # '\nReal coords:\n', real_coords,
@@ -378,28 +429,36 @@ if False:
                 # '\nEsti coords:\n', esti_coords,
                 # '\nEsti ids:\n', esti_ids,
                 # '\nEsti attitude:\n', esti_atti,
+                '\nNumber of stars:', len(flags),
                 '\nNumber of valid patterns:', np.sum(flags[:, 0]),
                 '\nNumber of verified patterns:', np.sum(flags[:, 1]),
                 '\nNumber of correct match:', cnt, 
-                '\nNumber of stars:', len(flags),
                 '\n',
             )
-    
-    # average number of successfully identified star in each image
+
+    # 删除错误识别图像
+    for img_path in failed_img_paths:
+        prefix = os.path.basename(os.path.dirname(img_path))
+        img_id = os.path.splitext(os.path.basename(img_path))[0]+'.png'
+        dir = os.path.join(save_dir, prefix, 'identify')
+        print(dir, img_id, os.listdir(dir))
+        if img_id in os.listdir(dir):
+            os.remove(os.path.join(dir, img_id))
+
+    # 平均正确识别恒星数量
     avg_sistar_cnt = sum(map(lambda x: res[x], res)) / len(data)
-    # average number of valid reference star in each image
+    # 平均有效（模型输出概率大于阈值）数量
     avg_rstar_cnt = df.groupby('img_id')['valid'].sum().mean()
-    # average number of identified star in each image
+    # 平均识别恒星数量
     avg_istar_cnt = df[df['star_id']!=-1].groupby('img_id').size().mean()
-    # average number of star in each image
+    # 平均测试恒星数量
     avg_star_cnt = df.groupby('img_id').size().mean()
     
-    # number of successfully identified star image
+    # 成功识别图像数量
     img_cnt = sum(map(lambda x: res[x]>=3, res))
-    # accuracy
+    # 正确率
     acc = img_cnt / len(data) * 100
 
-    # describe the failed test star images
     if DEBUG:
         # df = gen_real_sample(failed_img_paths, meth_params, extr_params, simu_params['f'])['rac_nn']
         df = df[df['img_id'].isin(failed_img_paths)]

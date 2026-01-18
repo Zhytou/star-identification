@@ -1,15 +1,16 @@
-import os
-import cv2
+import os, cv2, json, datetime, timeit
 import numpy as np
-import timeit
+import matplotlib.pyplot as plt
 from math import radians
-
+from collections import defaultdict
 from simulate import draw_star, create_star_image, add_gaussian_and_pepper_noise, add_stellar_noise
 from denoise import denoise_image
 from detect import group_star, initialize_seeds, enhance_image, binarize_image, enhance_and_binarize_image
 from extract import get_star_centroids
-from utils import find_overlap_and_unique, cal_doh, plot_gray_3d, plot_grad_field, cal_mse_psnr_ssim, cal_rc_p_f1, label_detect_result
+from utils import gen_timestamp, find_overlap_and_unique, cal_doh, plot_gray_3d, cal_mse_psnr_ssim, cal_rc_p_f1, label_detect_result, label_grad_field, plot_line_chart
 
+
+DEBUG = False
 
 ra, de, roll=radians(29.2104), radians(-12.0386), radians(0)
 d=64
@@ -36,7 +37,7 @@ if False:
         sigma_psf=psf,
         background=background
     )
-    img1 = add_gaussian_and_pepper_noise(img0, 0.05, 0.005, clipped=True)
+    img1 = add_gaussian_and_pepper_noise(img0, 0.05, 0.005)
 
     for method in ['ORINGINAL', 'NOISED', 'MEAN', 'MEDIAN', 'GLF', 'WAVELET', 'NLM']:
         if method == 'ORINGINAL':
@@ -47,9 +48,6 @@ if False:
             img2 = denoise_image(img1, method)
         cv2.imwrite(f'{dir}/{method}.png', img2)
         cv2.imwrite(f'{dir}/{method}_S.png', img2[y-d:y+d, x-d:x+d])
-
-        # mse, psnr, ssim = cal_mse_psnr_ssim(img0, img2, ndigits=2)
-        # print(method, mse, psnr, ssim)
 
 
 # 改进双边滤波测试
@@ -67,7 +65,7 @@ if False:
         sigma_psf=psf,
         background=background
     )
-    img1 = add_gaussian_and_pepper_noise(img0, 0.05, 0.001, clipped=False)
+    img1 = add_gaussian_and_pepper_noise(img0, 0.05, 0.001)
 
     for method in ['NLM', 'BLF', 'MBLF']:
         if method == 'NLM':
@@ -93,100 +91,77 @@ d=128
 
 # 星图降噪效果测试（质量指标比较）
 if False:
+    dir = os.path.join('res/chapter3/denoise', gen_timestamp())
+    res = {stat: defaultdict(list) for stat in ['PSNR', 'SSIM']}
+
+    # 测试参数
+    noises = [
+        (0.03, 0.003), 
+        (0.06, 0.006), 
+        (0.09, 0.009)
+    ]
+    methods = [
+        # 'Oringinal','Noised', 
+        # 'Bilateral', 'NLM', 'AMF', 'Wavelet', 'NLM_BLF',
+        'EMF', 'CWM', 'CMG',
+        # 'CNB', 
+    ]
+
     img0, stars = create_star_image(
         ra, de, roll, 
-        w=w, 
-        h=h,
-        fovx=fov, 
-        fovy=fov, 
+        w=w, h=h,
+        fovx=fov, fovy=fov, 
         limit_mag=limit_mag, 
         sigma_psf=psf,
         roi=roi,
         background=background,
-        dtype=np.float32
+        # dtype=np.float32
     )
 
-    dir = f'res/chapter3/denoise'
-    for (g, p) in [
-        (0.03, 0.003),
-        # (0.06, 0.006), 
-        # (0.09, 0.009), 
-    ]:
+    for (sigma, prob) in noises:
         print(
             'DENOISE TEST'
-            '\nSigma of gaussian noise:', g, 
-            '\nProbability of pepper noise', p, 
+            '\n--------------------------------'
+            '\nSigma of gaussian noise:', sigma, 
+            '\nProbability of pepper noise', prob, 
             '\n--------------------------------'
         )
-
-        if save:
-            os.makedirs(f'{dir}/{g}_{p}', exist_ok=True)
-            os.makedirs(f'{dir}/{g}_{p}/scale', exist_ok=True)
-
-        img1 = add_gaussian_and_pepper_noise(img0, g, p, clipped=True)
-        for method in [
-            # 'Oringinal',
-            'Noised', 
-            'Bilateral', 
-            'NLM', 'AMF', 
-            'Wavelet',
-            # 'NLM_BLF',
-            'EMF',
-            'CWM', 
-            'CMG',
-            'CNB', 
-        ]:
-            if method == 'Oringinal':
-                img2 = img0
-            elif method == 'Noised':
+        intensity = f'{sigma} {prob}'
+        img1 = add_gaussian_and_pepper_noise(img0, sigma, prob)
+        for method in methods:
+            if method == 'Noised':
                 img2 = img1
             else:
                 img2 = denoise_image(img1, method)
 
             # 计算降噪前后图像质量指标
             mse, psnr, ssim = cal_mse_psnr_ssim(img0, img2, ndigits=2)
-            print(
-                method,
-                '\nPSNR:', psnr, 'SSIM:', ssim,
-                '\n',
-            )
+            print(method, ' PSNR:', psnr, ' SSIM:', ssim,'\n',)
 
+            res['PSNR'][method].append((intensity, psnr))
+            res['SSIM'][method].append((intensity, ssim))
             if save:
                 img3 = img2 if img2.dtype == np.uint8 else 255*img2
-                cv2.imwrite(f'{dir}/{g}_{p}/{method}.png', img3)
-                cv2.imwrite(f'{dir}/{g}_{p}/scale/{method}.png', img3[y-d:y+d, x-d:x+d])
+                cdir = os.path.join(dir, intensity)
+                os.makedirs(cdir, exist_ok=True)
+                cv2.imwrite(os.path.join(cdir, method+'.png'), img3)
 
-
-def find_miss_idxs(coords: np.ndarray, miss_coords: np.ndarray, atol: float=1e-8, rtol: float=1e-5):
-    '''
-        Find the indexs of missing coordinates.
-    '''
-    # broadcast comparison
-    mask = np.isclose(
-        coords[:, None, :],             # shape (n, 1, 2)
-        miss_coords[None, :, :],        # shape (1, m, 2)
-        atol=atol,                      # absolute error
-        rtol=rtol                       # relative error
-    )                                   # shape (n, m, 2)
-    
-    # a match exists if both x and y are close
-    mask = np.all(mask, axis=-1)    # shape (n, m)
-    matched = np.any(mask, axis=0)  # shape (m, )
-    
-    # return the indexs of miss_coords in the coods
-    idxs = np.full(len(miss_coords), -1)
-    idxs[matched] = np.argmax(mask[:, matched], axis=0)
-
-    return idxs
+    for stat in res:
+        plot_line_chart(
+            res[stat], xlabel='噪声强度', ylabel=stat,
+            yrange=(0, 1) if stat == 'SSIM' else (0, 50),
+            img_name=stat+'.png',
+            show=False, output_dir=dir
+        )
 
 
 # 选择一处恒星数量多、星等差异大的视场，从而说明检测算法针对不同星等的恒星均能有限检测
 ra, de, roll=radians(25.0588), radians(-21.7205), radians(0)
 limit_mag=6
 fov=12
-psf=3
-roi=4
-background=7
+psf=1
+roi=2
+background=6.7
 save=True
 
 
@@ -261,108 +236,124 @@ if False:
 
 # 梯度一致性效果
 if False:
-    if not os.path.exists('res/chapter3/gcm/img_0.png'):
-        img, stars = create_star_image(
-            ra, de, roll, 
-            h=h, w=w, 
-            fovy=fov, fovx=fov, 
-            limit_mag=limit_mag, 
-        )
-        img = add_stellar_noise(img, method='Gaussian', position=(h//2, w//4), luminosity=4.5, sigma_x=64, sigma_y=96)
-        img = add_gaussian_and_pepper_noise(img, sigma_g=0.07, prob_p=0.001)
-        img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-        cv2.imwrite('res/chapter3/gcm/img_0.png')
+    img0, stars = create_star_image(
+        ra, de, roll, 
+        h=h, w=w, 
+        fovy=fov, fovx=fov, 
+        background=background,
+        limit_mag=limit_mag, 
+        roi=roi, sigma_psf=psf,
+    )
+    if not os.path.exists('res/chapter3/gcm/img_1.png'):
+        img1 = img0
+        img1 = add_stellar_noise(img1, method='Gaussian', position=(h//2, -w//4), luminosity=4, sigma_x=128)
+        print(img1.dtype, img1.max())
+        img1 = add_gaussian_and_pepper_noise(img1, sigma_g=0.05, prob_p=0.005)
+        cv2.imwrite('res/chapter3/gcm/img_1.png', img1)
     else:
-        img = cv2.imread('res/chapter3/gcm/img_0.png')
+        img1 = cv2.imread('res/chapter3/gcm/img_1.png', cv2.IMREAD_GRAYSCALE)
 
-    for x, y in [()]:
-        x1, y1 = max(x - d, )
-        cv2.rectangle(img, (x1, y1), bot_right, line_color, line_width)
+    r = roi * 2
+    real_coords = stars[:, 1:3].astype(int)
+    img2 = cv2.cvtColor(img1, cv2.COLOR_GRAY2RGB)    
+    for y, x in [
+        real_coords[1],
+        np.argwhere(img1 == 255)[100],
+        # np.argwhere(img1 == 104)[100],
+    ]:
+        x1, y1 = max(x - r, 0), max(y - r, 0)
+        x2, y2 = min(x + r, w), min(y + r, h)
+        label_grad_field(img1[y1:y2+1, x1:x2+1], 0.5, show=False, output_path=f'res/chapter3/gcm/{y}_{x}.png')
+        
+        # bigger rectangular for display
+        x1, y1 = max(x - 3 * r, 0), max(y - 3 * r, 0)
+        x2, y2 = min(x + 3 * r, w), min(y + 3 * r, h)
+        cv2.rectangle(img2, (x1, y1), (x2, y2), (0, 255, 255), 2)
 
-    # cv2.imwrite('res/chapter2/sim/noise.png', img1)
-    # cv2.imwrite('res/chapter2/sim/noise_scale.png', crop_img1)
+    cv2.imwrite('res/chapter3/gcm/img_2.png', img2)
 
 
-fov=20
+fov=19.8
 psf=1
 roi=2
 deul=1 # detection error upper limit
 
 
 # 星点检测作图
-if True:
+if False:
     dir = 'res/chapter3/detect'
 
     img0, stars = create_star_image(
         ra, de, roll, h=h, w=w, 
         fovx=fov, fovy=fov, 
         limit_mag=limit_mag, 
-        background=6.5,
+        background=background,
         sigma_psf=psf,
         roi=roi
     )
     real_coords = stars[:, 1:3]
 
-    for (g, p, s, y, x, lum, roi) in [
+    # 测试参数
+    noises = [
         ## Constant stellar background
-        # (0.00, 0.000, 'Constant', 0, 0, 7.5, 0),
+        (0.00, 0.000, 'Constant', 0, 0, 6.5, 0),
 
         # Gasussian stellar background
-        (0.00, 0.003, 'Gaussian', h//2, -w//4, 5.5, 128), 
-        # (0.00, 0.000, 'Gaussian', h//3, w//5*3, 5, 64), 
+        (0.00, 0.000, 'Gaussian', h//2, -w//4, 5.5, 128), 
+        (0.00, 0.000, 'Gaussian', h//3, w//5*3, 5, 64), 
 
         ## Linear stellar background
-        # (0.00, 0.000, 'Linear_X', 0, 0, 5.3, 128), 
+        (0.00, 0.000, 'Linear_X', 0, 0, 5.7, 128), 
         # (0.00, 0.000, 'Linear_Y', 0, 0, 5.3, 128), 
-    ]:
-        img1 = add_stellar_noise(img0, method=s, position=(y, x), luminosity=lum, sigma_x=roi)
+    ]
+    methods = [
+        # CCL-Based
+        # ('None', ['None',  'Liebe3', 'CPL', 'None'], 3),
+        # ('None', ['LCM',  'Liebe3', 'CCL', 'None'], 3),
+        # ('None', ['ILCM',  'Liebe3', 'CCL', 'None'], 3),
+        # ('None', ['NLCM',  'Liebe3', 'CCL', 'None'], 3),
+        # ('None', ['RLCM',  'Liebe3', 'CCL', 'None'], 1),
+
+        # ('None', ['PCM',  'Liebe3', 'CCL', 'None'], 3),
+        # ('Median', ['IPCM',  'Liebe5', 'CCL', 'None'], 3),
+        
+        # ('None', ['Top-Hat', 'Liebe3', 'CCL', 'None'], 3),
+        # ('None', ['Max-Median', 'Liebe3', 'CCL', 'None'], 3),
+        # ('None', ['BEF', 'Liebe3', 'CCL', 'None'], 3),
+
+        # RGL-Based
+        # ('None', ['None', 'Liebe3', 'RGL',  'None'], 3),
+        ('None', ['None', 'Liebe2.5', 'RGL',  'CGC'], 3),
+    ]
+
+    for (sigma, prob, stype, pos_y, pos_x, lum, roi) in noises:
+        img1 = add_stellar_noise(img0, method=stype, position=(pos_y, pos_x), luminosity=lum, sigma_x=roi)
         img2 = add_gaussian_and_pepper_noise(img1, sigma_g=g, prob_p=p)
-    
-        cdir = f'{dir}/{g}_{p}_{s}_{x}_{y}_{lum}_{roi}'
-        for den_meth, seg_meth, pixel_num in [
-            # CCL-Based
-            # ('None', ['None',  'Liebe3', 'CPL', 'None'], 3),
-            # ('None', ['LCM',  'Liebe3', 'CCL', 'None'], 3),
-            # ('None', ['ILCM',  'Liebe3', 'CCL', 'None'], 3),
-            # ('None', ['NLCM',  'Liebe3', 'CCL', 'None'], 3),
-            # ('None', ['RLCM',  'Liebe3', 'CCL', 'None'], 1),
 
-            # ('None', ['PCM',  'Liebe3', 'CCL', 'None'], 3),
-            # ('Median', ['IPCM',  'Liebe5', 'CCL', 'None'], 3),
-            
-            # ('None', ['Top-Hat', 'Liebe3', 'CCL', 'None'], 3),
-            # ('None', ['Max-Median', 'Liebe3', 'CCL', 'None'], 3),
-            # ('None', ['BEF', 'Liebe3', 'CCL', 'None'], 3),
+        intensity = f'{sigma} {prob}'
+        stellar_type = f'{stype} {pos_y} {pos_x} {lum} {roi}'
+        cdir = os.path.join(dir, stellar_type, intensity)
 
-            # RGL-Based
-            # ('None', ['None', 'Liebe3', 'RGL',  'None'], 3),
-            ('None', ['None', 'Liebe3', 'RGL',  'CGC'], 3),
-        ]:
-            print(
-                'Deviation of Gaussian Noise:', g,
-                '\tProbability of Salt-Pepper Noise:', p,
-                '\tLuminosity of Background:', lum,
-                '\nSegmentation Method:', seg_meth,
-            )
+        for den_meth, seg_meth, pixel_num in methods:
+            esti_coords = get_star_centroids(img2, den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num)
+            cpath = os.path.join(cdir, ' '.join(seg_meth)+'.png')
+            label_detect_result(img2, real_coords, esti_coords, deul, output_path=cpath, info=True)
 
-            esti_coords = np.array(get_star_centroids(img2, den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num))
-            cpath = os.path.join(cdir, '_'.join(seg_meth)+'.png')
-            label_detect_result(img2, real_coords, esti_coords, deul, output_path=cpath)
-
-            # intermediate detection results
-            # coords, labels = initialize_seeds(img2, seg_meth[3], size=5)
-            # eimg = enhance_image(img2, seg_meth[0], size=5)
-            # bimg = enhance_and_binarize_image(eimg, seg_meth[0], seg_meth[1], coords, size=5) * 255
-            # cv2.imwrite('img_0.png', img0)
-            # cv2.imwrite('img_e.png', eimg)
-            # cv2.imwrite('img_b.png', bimg)
+            # 保存中间检测结果
+            if DEBUG:
+                coords, labels = initialize_seeds(img2, seg_meth[3], size=5)
+                eimg = enhance_image(img2, seg_meth[0], size=5)
+                bimg = enhance_and_binarize_image(eimg, seg_meth[0], seg_meth[1], coords, size=5) * 255
+                cv2.imwrite('img_0.png', img0)
+                cv2.imwrite('img_e.png', eimg)
+                cv2.imwrite('img_b.png', bimg)
 
 
 # 实拍红外小目标图像检测效果
 if False:
     # dataset_name = 'sirst' 
     dataset_name = 'irstd-1k'
-    os.makedirs(f'res/chapter3/realshot/{dataset_name}', exist_ok=True)
+    dir = os.path.join('res/chapter3/realshot', dataset_name)
 
     for name in os.listdir(f'realshot/{dataset_name}/images'):
         img1 = cv2.imread(f'realshot/{dataset_name}/images/{name}', cv2.IMREAD_GRAYSCALE)
@@ -374,8 +365,8 @@ if False:
             # ('None', ['Max-Median', 'Liebe3', 'CCL', 'None'], 3),
             # ('None', ['IGM', 'Liebe3', 'CCL', 'None'], 3),
         ]:
-            esti_coords = np.array(get_star_centroids(img1.copy(), den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num))
-            cpath = os.path.join(f'res/chapter3/realshot/{dataset_name}', '_'.join(seg_meth)+'.png')
+            esti_coords = get_star_centroids(img1.copy(), den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num)
+            cpath = os.path.join(dir, ' '.join(seg_meth)+'.png')
             label_detect_result(img2, real_coords, esti_coords, deul, output_path=cpath)
 
 
@@ -402,123 +393,128 @@ if False:
             ('None', ['IGM', 'Liebe3', 'CCL', 'None'], 3),
             ('None', ['MLCM', 'Liebe3', 'RGL',  'CGC'], 3),
         ]:
-            esti_coords = np.array(get_star_centroids(img2.copy(), den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num))
+            esti_coords = get_star_centroids(img2.copy(), den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num)
             label_detect_result(img2, real_coords, esti_coords, deul, output_path='_'.join(seg_meth))
 
 
 # 星点检测数量对比
-if False:
-    num_test = 5
+if True:
+    dir = 'res/chapter3/detect'
 
-    img0, stars = create_star_image(
-        ra, de, roll,
-        h=h,
-        w=w, 
-        fovx=fov, 
-        fovy=fov, 
-        sigma_psf=psf,
-        limit_mag=limit_mag, 
-        roi=roi
-    )
-    real_coords = stars[:, 1:3]
-    mags = stars[:, -1]
+    # 测试参数
+    n = 5
+    flag = True # 是否使用统一测试图片
+    ras = np.full(n, ra) if flag else np.random.uniform(0, 2*np.pi, n)
+    des = np.full(n, de) if flag else np.arcsin(np.random.uniform(-1, 1, n))
+    rolls = np.full(n, 0) if flag else np.random.uniform(0, 2*np.pi, n)
+    stellar_noises = [
+        # Constant stellar background
+        # (0.00, 0.000, 'Constant', 0, 0, 7, 0),
+        # (0.03, 0.003, 'Constant', 0, 0, 7, 0),
+        # (0.06, 0.006, 'Constant', 0, 0, 7, 0),
+        # (0.09, 0.009, 'Constant', 0, 0, 7, 0),
 
-    real_coord = real_coords[3]
+        # Gasussian stellar background
+        ('Gaussian', h//2, -w//4, 5.5, 128),
+    ]
+    gaussian_pepper_noises = [
+        (0.03, 0.003), 
+        (0.06, 0.006),
+        (0.09, 0.009)
+    ]
+    methods = [
+        # ('None', ['None',  'Otsu', 'CCL', 'None'], 3),
+        # ('None', ['Top-Hat',  'Liebe3', 'CCL', 'None'], 3),
+        # ('Median', ['MSobel', 'Liebe5', 'CCL', 'None'], 3),
+        ('None', ['BEF',  'Liebe3', 'CCL', 'None'], 3),
+        # ('Median', ['IPCM',  'Liebe3', 'CCL', 'None'], 3),
+        # ('None', ['None',  'Liebe3', 'RGL',  'Ly'], 3),
+        # ('None', ['None',  'Liebe3.5', 'RGL',  'CGC'], 3),
+    ]
+    abbr_2_name = {
+        'Recall': '召回率', 
+        'Precision': '精准率',
+        'F1-score': 'F1分数'
+    }
 
     # 打印测试相关信息
     print(
         'Detect Test',
         '\n-----------------------------',
-        '\nNumber of test:', num_test,
-        '\nRA:', ra, 'DE:', de,
-        '\nMag info:', np.sort(mags), #np.histogram(mags, range=(0, limit_mag), bins=int(limit_mag)),
-        '\n-----------------------------',
+        '\nNumber of test:', n,
+        '\nRas:', ras, '\nDes:', des,
     )
+    for stype, pos_y, pos_x, lum, roi in stellar_noises:
+        res = {stat: defaultdict(list) for stat in ['Recall', 'Precision', 'F1-score']}
+        cnts = np.zeros((len(methods), 3), dtype=np.int64)
 
-    for den_meth, seg_meth, pixel_num in [
-        # ('None', ['None',  'Otsu', 'CCL', 'None'], 3),
-        # ('None', ['Top-Hat',  'Liebe3', 'CCL', 'None'], 3),
-        # ('Median', ['MSobel', 'Liebe5', 'CCL', 'None'], 3),
-        # ('None', ['BEF',  'Liebe3', 'CCL', 'None'], 3),
-        ('None', ['IPCM',  'Liebe3', 'CCL', 'None'], 3),
-        # ('None', ['None',  'Liebe3', 'RGL',  'Ly'], 3),
-        # ('None', ['None',  'Liebe3', 'RGL',  'CGC'], 3),
-    ]:
-        avg_cnts = []                                                               # average correct/miss/false estimation count for each method under certain test scenario
-        for (g, p, s, y, x, lum, roi) in [
-            # Constant stellar background
-            # (0.00, 0.000, 'Constant', 0, 0, 7, 0),
-            # (0.03, 0.003, 'Constant', 0, 0, 7, 0),
-            # (0.06, 0.006, 'Constant', 0, 0, 7, 0),
-            # (0.09, 0.009, 'Constant', 0, 0, 7, 0),
+        stellar_type = f'{stype} {pos_y} {pos_x} {lum} {roi}'
+        for sigma, prob in gaussian_pepper_noises:
+            intensity = f'{sigma} {prob}'
 
-            # Gasussian stellar background
-            # (0.00, 0.000, 'Gaussian', h//2, -w//4, 5.5, 128),
-            (0.03, 0.003, 'Gaussian', h//2, -w//4, 5, 128), 
-            (0.06, 0.006, 'Gaussian', h//2, -w//4, 5, 128),
-            (0.09, 0.009, 'Gaussian', h//2, -w//4, 5, 128)
-        ]:    
-            cnts = []                                                               # correct/miss/false estimation count for each test
-            for _ in range(num_test):
-                img1 = add_stellar_noise(img0, method=s, position=(y, x), luminosity=lum, sigma_x=roi)
-                img2 = add_gaussian_and_pepper_noise(img1, sigma_g=g, prob_p=p)
+            for ra, de, roll in zip(ras, des, rolls):
+                img0, stars = create_star_image(
+                    ra, de, roll,
+                    h=h, w=w, 
+                    fovx=fov, fovy=fov, 
+                    sigma_psf=psf,
+                    limit_mag=limit_mag, 
+                    roi=roi
+                )
+                img1 = add_stellar_noise(img0, method=stype, position=(y, x), luminosity=lum, sigma_x=roi)
+                img2 = add_gaussian_and_pepper_noise(img1, sigma_g=sigma, prob_p=prob)
 
-                esti_coords = np.array(get_star_centroids(img2, den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num))
-                cnts.append(find_overlap_and_unique(real_coords, esti_coords, threshold=deul, return_count_only=True)[1:])
-            avg_cnts.append(np.mean(cnts, axis=0))
-        avg_cnts = np.array(avg_cnts)
-        rc, p, f1 = cal_rc_p_f1(avg_cnts[:, 0], avg_cnts[:, 1], avg_cnts[:, 2], percent=True, ndigits=2)
-        print(
-            'Method:', den_meth, seg_meth, pixel_num,
-            '\nDetect result:', avg_cnts,
-            '\nRecall:', rc,
-            '\nPrecsion:', p,
-            '\nF1-score:', f1,
-            '\n---------------------------------'
-        )
+                real_coords = stars[:, 1:3]
+                for midx, (den_meth, seg_meth, pixel_num) in enumerate(methods):
+                    esti_coords = get_star_centroids(img2, den_meth, seg_meth, cen_meth='CoG', pixel_limit=pixel_num)
+                    cnts[midx] += find_overlap_and_unique(real_coords, esti_coords, threshold=deul, return_count_only=True)[1:]
+            
+            rc, p, f1 = cal_rc_p_f1(cnts[:, 0], cnts[:, 1], cnts[:, 2], percent=False, ndigits=3)
+            for midx, (den_meth, seg_meth, pixel_num) in enumerate(methods):
+                res['Recall'][' '.join(seg_meth)].append((intensity, rc[midx]))
+                res['Precision'][' '.join(seg_meth)].append((intensity, rc[midx]))
+                res['F1-score'][' '.join(seg_meth)].append((intensity, rc[midx]))
+
+                print(
+                    'Method:', den_meth, seg_meth, pixel_num,
+                    '\nDetect result:', cnts[midx], 
+                    '\nRecall:', rc[midx], ' Precsion:', p[midx], ' F1-score:', f1[midx],
+                    '\n---------------------------------'
+                )
+
+        for stat in res:
+            plot_line_chart(
+                res[stat], xlabel='噪声强度', ylabel=abbr_2_name[stat],
+                img_name=stat+'.png',
+                output_dir=os.path.join(dir, gen_timestamp(), stellar_type),
+            )
 
 
 # 星点检测耗时测试
 if False:
-    # random ra & de test
-    num_test = 5
-    
-    # generate random right ascension[0, 360] and declination[-90, 90]
-    ras = np.random.uniform(0, 2*np.pi, num_test)
-    des = np.arcsin(np.random.uniform(-1, 1, num_test))
+    n = 5
+    ras = np.random.uniform(0, 2*np.pi, n)
+    des = np.arcsin(np.random.uniform(-1, 1, n))
+    rolls = np.random.uniform(0, 2*np.pi, n)
+    label_methods = ['RGL', 'DCCL', 'RLC', 'CPL']
+    res = {lab_meth: [] for lab_meth in label_methods}
 
-    # time test result
-    res = {
-        'RG_DOH': [],
-        'CCL': [],
-        'DCCL': [],
-        'RLC': [],
-        'CPL': []
-    }
-
-    # generate the star image
-    for i in range(num_test):
+    for _ in range(n):
         img1, _ = create_star_image(
             ra, de, roll, 
-            fovx=fov, 
-            fovy=fov, 
-            h=h,
-            w=w,
+            fovx=fov, fovy=fov, 
+            h=h, w=w,
+            sigma_g=0.05, prob_p=0.001, # 默认背景噪声对CCL检测耗时影响较大
             limit_mag=limit_mag, 
             sigma_psf=psf,
             background=background,
-            sigma_g=0.05, # default noise is important to time
-            prob_p=0.001,
         )
 
-        # denoise
-        img2 = denoise_image(img1, 'NLM')
-
-        for method in res:
-            res[method].append(timeit.timeit(lambda: group_star(img2, method, connectivity=4, pixel_limit=5), number=3))
-            # res[method].append(timeit.timeit(lambda: get_star_centroids(img1, 'MEDIAN', 'Liebe3', method, 'CoG', pixel_limit=5), number=3))
+        img2 = denoise_image(img1, 'Median')
+        for method in label_methods:
+            res[method].append(timeit.timeit(lambda: group_star(img2, ['None', 'Liebe3', method, 'CGC'], connectivity=4, pixel_limit=5), number=3))
         
-    for method in res:
+    for method in label_methods:
         print(
             'Method:', method, 
             'Mean:', round(np.mean(res[method]), 4), 
