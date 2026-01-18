@@ -13,11 +13,6 @@ eps = 1e-10
 def basic_filter(img: np.ndarray, method: str='Gaussian', size: int=3) -> np.ndarray:
     '''
         Conventional noise reducing filters.
-    Args:
-        img: the image to be processed
-        method: the method of filtering
-    Returns:
-        filtered_img: the image after filtering
     '''
 
     d = size
@@ -537,7 +532,7 @@ def denoise_image(img: np.ndarray, method: str):
         denoised_img = denoise_with_blf(img, 7, sigma_g=0.05*max_val, sigma_s=1.5, threshold=0.6*max_val)
     elif method == 'Wavelet':
         denoised_img = denoise_with_wavelet(img, 'db4', threshold=10)
-    elif method in ['Mean', 'Gaussian', 'Median', 'Bilateral', 'GLF']:
+    elif method in ['Mean', 'Gaussian', 'Median', 'MMedian', 'Bilateral', 'GLF']:
         denoised_img = basic_filter(img, method)
     else:
         denoised_img = img
