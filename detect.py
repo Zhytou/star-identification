@@ -271,6 +271,22 @@ def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=0.2):
     return measure
 
 
+def cal_threshold(img: np.ndarray, method: str):
+    '''
+        Calculate the segmentation threshold.
+    '''
+
+    if method == 'Otsu':
+        T = filters.threshold_otsu(img)
+    elif method.startswith('Liebe'):
+        k = float(method[5:])
+        mean = np.mean(img)
+        std = np.std(img)
+        T = mean + k * std
+    
+    return T
+
+
 def binarize_image(img: np.ndarray, method: str):
     '''
         Binarize the grayscale image.
@@ -278,15 +294,10 @@ def binarize_image(img: np.ndarray, method: str):
     assert img.dtype == np.uint8
 
     binary_img = np.zeros_like(img, dtype=np.uint8)
-    if method == 'Otsu':
-        T = filters.threshold_otsu(img)
-        binary_img[img > T] = 1
-    elif method.startswith('Liebe'):
-        k = float(method[5:])
-        mean = np.mean(img)
-        std = np.std(img)
-        T = mean + k * std
-        binary_img[img > T] = 1
+
+    if method == 'Otsu' or method.startswith('Liebe'):
+        T = cal_threshold(img, method)
+        binary_img[img >= T] = 1
     elif method == 'Xiao':
         'Entropic thresholding based on gray-level spatial correlation histogram https://ieeexplore.ieee.org/document/4761626/?arnumber=4761626'
         ## 0. Predefined parameters
@@ -336,7 +347,7 @@ def enhance_image(img: np.ndarray, method: str, size: int=3, preserve_dtype: boo
     r = size // 2                                                                               # half of patch size
     max_val = 255 if img.dtype == np.uint8 else 1.0
 
-    padded_img = np.pad(img, ((r, r), (r, r)), 'reflect')                                                  # padded raw image
+    padded_img = np.pad(img, ((r, r), (r, r)), 'reflect')                                       # padded raw image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))                      # raw patches (h, w, d, d)
 
     if method.endswith('LCM'):
@@ -376,7 +387,7 @@ def enhance_image(img: np.ndarray, method: str, size: int=3, preserve_dtype: boo
     elif method == 'MSobel':
         enhanced_img = cal_sobel(img, sigma=1)
     else: # method == 'None'
-        enhanced_img = img
+        return img
 
     if preserve_dtype and enhanced_img.dtype != img.dtype:
         enhanced_img = (enhanced_img / np.max(enhanced_img, initial=eps) * max_val).astype(img.dtype)
@@ -394,7 +405,7 @@ def enhance_image_multiscale(img: np.ndarray, method: str, sizes: list[int], pre
     return np.max(enhanced_imgs, axis=0)
 
 
-def enhance_and_binarize_image(img: np.ndarray, ehc_meth: str, thr_meth: str, coords: np.ndarray, size: list[int] | int, wind: int=11):
+def enhance_and_binarize_image(img: np.ndarray, ehc_meth: str, thr_meth: str, coords: np.ndarray, size: list[int] | int, wind: int=15):
     '''
         Enhance the image and perform local adaptive binarization around given coordinates.
     '''
@@ -435,7 +446,7 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
 
     ## 1. Preselect
     #!NOTE: only use local rank_filter, because the global background threshold might be too high under starry light interference
-    mask = is_local_topk(img, -1, connectivity) | is_near_local_max(img, connectivity) # possible seed mask (h, w)
+    mask = is_local_topk(img, -2, connectivity) | is_near_local_max(img, connectivity) # possible seed mask (h, w)
     if d >= 5:                                                                  # check the mean gray of inner ring is higher than the outter one
         rr = d // 4
         inner = np.zeros((d, d), dtype=bool)
@@ -455,7 +466,7 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
         # combined gradient and curvature
         res1, res2 = cal_gcm(img, 'PGCM', size=d, sigma=1), cal_doh(img, sigma=1.5)
         res2[mask] *= res1[mask]
-        mask = mask & (res1 > 0.2) & is_local_topk(res2, k=-2, connectivity=connectivity)
+        mask = mask & (res1 > 0.6) & is_local_topk(res2, k=-2, connectivity=connectivity)
     else:
         mask = np.zeros_like(mask, dtype=bool)
     # print('Number of seeds after operator double check:', np.sum(mask))
@@ -722,8 +733,11 @@ def group_star(img: np.ndarray, method: list[str], connectivity: int=4, pixel_li
     ehc_meth, thr_meth, lab_meth, opt_meth = method    
 
     ## 1. Generate seeds if opt_meth is valid
-    coords, labels = initialize_seeds(img, opt_meth, size=5, connectivity=connectivity)
-
+    if opt_meth != 'None':
+        coords, labels = initialize_seeds(img, opt_meth, size=5, connectivity=connectivity)
+    else:
+        coords, labels = np.array([]), np.array([])
+    
     ## 2. Enhance the input image, and then binarize the enhanced image
     if ehc_meth.startswith('MS_'):
         binary_img = enhance_and_binarize_image(img, ehc_meth, thr_meth, coords, size=[3, 5, 7])
