@@ -5,7 +5,7 @@ from itertools import combinations
 import matplotlib.pyplot as plt
 from datetime import datetime
 from matplotlib.lines import Line2D
-from scipy.ndimage import rank_filter, maximum_filter, gaussian_filter, correlate
+from scipy.ndimage import rank_filter, maximum_filter, gaussian_filter, sobel, convolve
 from skimage.metrics import mean_squared_error, peak_signal_noise_ratio, structural_similarity
 
 plt.rcParams['font.sans-serif']=['SimHei']
@@ -63,42 +63,6 @@ def cal_derivative(img: np.ndarray, order: tuple[int, int], sigma: float):
     return gaussian_filter(fimg, sigma=sigma, order=order, axes=(-2, -1))
 
 
-def cal_difference(img: np.ndarray, dir: int):
-    '''
-        Calculate directional finite difference of neighboring pixels.
-    '''
-    # change image data type to avoid overflow
-    fimg = img.astype(np.float64)
-
-    # calculate neighboring differences
-    dir %= 8
-    if dir == 0:      # ↓
-        kernel = np.array([[-1],
-                           [ 1]])
-    elif dir == 1:    # ↘
-        kernel = np.array([[-1,  0],
-                           [ 0,  1]])
-    elif dir == 2:    # →
-        kernel = np.array([[-1, 1]])
-    elif dir == 3:    # ↗
-        kernel = np.array([[ 0,  1],
-                           [-1,  0]])
-    elif dir == 4:    # ↑
-        kernel = np.array([[ 1],
-                           [-1]])
-    elif dir == 5:    # ↖
-        kernel = np.array([[ 1,  0],
-                           [ 0, -1]])
-    elif dir == 6:    # ←
-        kernel = np.array([[1, -1]])
-    elif dir == 7:    # ↙
-        kernel = np.array([[ 0, -1],
-                           [ 1,  0]])
-
-    diff = correlate(fimg, kernel, mode='constant')
-    return diff
-
-
 def cal_doh(img: np.ndarray, sigma: float):
     '''
         Calculate determination of hessian.
@@ -139,34 +103,30 @@ def cal_dog(img: np.ndarray, sigma1: float, sigma2: float):
     return img2 - img1
 
 
-def cal_ly(img: np.ndarray, sigma: float):
+def cal_ly(img: np.ndarray, size: int=3, sigma: float=0):
     '''
         Calculate the ly operator result.
     '''
     assert img.ndim == 2 or img.ndim == 3
+    kernel = np.ones((size, size))
 
-    # construct gradient covariance matrix with first derivatives
-    dx = cal_derivative(img, order=(0, 1), sigma=sigma)
-    dy = cal_derivative(img, order=(1, 0), sigma=sigma)
-
-    dx2 = dx * dx
-    dy2 = dy * dy
-    dxy = dx * dy
+    ## 1. Construct gradient covariance matrix with first derivatives
+    # gradient covariance matrix = np.array([[Σdx², Σ(dx·dy)], [Σ(dx·dy), Σdy²]])
+    if sigma > 0:
+        dx = cal_derivative(img, order=(0, 1), sigma=sigma)
+        dy = cal_derivative(img, order=(1, 0), sigma=sigma)
+    else:
+        dx = sobel(img, axis=1)
+        dy = sobel(img, axis=0)
     
-    # sum up dx2, dy2, dxy of area by gaussian filter
-    # gradient covariance matrix = np.array([[adx2, adxy], [adxy, ady2]])
-    adx2 = gaussian_filter(dx2, sigma=sigma, axes=(-2, -1))
-    ady2 = gaussian_filter(dy2, sigma=sigma, axes=(-2, -1))
-    adxy = gaussian_filter(dxy, sigma=sigma, axes=(-2, -1))
+    sum_dx2 = convolve(dx * dx, kernel)
+    sum_dxdy = convolve(dx * dy, kernel)
+    sum_dy2 = convolve(dy * dy, kernel)
 
-    # compute trace and determinant of the 2x2 structure tensor at every pixel
-    tr = adx2 + ady2
-    det = adx2 * ady2 - adxy * adxy
-
-    # avoid division by zero
-    eps = np.finfo(np.float64).eps  # ~2.2e-16
-
-    # compute LY features
+    ## 2. Compute trace and determinant of the 2x2 structure tensor at every pixel
+    tr = sum_dx2 + sum_dy2
+    det = sum_dxdy ** 2 - sum_dx2 * sum_dy2
+    eps = 1e-10                     # constant value to avoid division by zero
     q = 4.0 * det / (tr * tr + eps) # anisotropy measure
     w = det / (tr + eps)            # strength of the local structure
 
@@ -179,8 +139,12 @@ def cal_sobel(img: np.ndarray, sigma: float):
     '''
     assert img.ndim == 2 or img.ndim == 3
     
-    dx = cal_derivative(img, order=(0, 1), sigma=sigma)
-    dy = cal_derivative(img, order=(1, 0), sigma=sigma)
+    if sigma > 0:
+        dx = cal_derivative(img, order=(0, 1), sigma=sigma)
+        dy = cal_derivative(img, order=(1, 0), sigma=sigma)
+    else:
+        dx = sobel(img, axis=1)
+        dy = sobel(img, axis=0)
 
     return np.hypot(dx, dy)
 
@@ -344,39 +308,32 @@ def are_collinear(a: np.ndarray, b: np.ndarray, eps: float=1e-5):
     return np.linalg.norm(np.cross(a, b)) < eps
 
 
-def is_local_topk(img: np.ndarray, k: int, connectivity: int=4, footprint: np.ndarray=None):
+def is_local_topk(img: np.ndarray, k: int, connectivity: int=4):
     '''
         Determine whether each pixel in the image is among the top-k largest values within its local neighborhood.
     '''
-    if footprint is None:
-        if connectivity == 4:
-            footprint = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
-        else:  # connectivity == 8
-            footprint = np.ones((3, 3), dtype=bool)
+    if connectivity == 4:
+        footprint = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
+    else:  # connectivity == 8
+        footprint = np.ones((3, 3), dtype=bool)
 
     local_topk = rank_filter(img, rank=k, footprint=footprint, mode='constant', cval=-np.inf)
 
     return img >= local_topk
 
 
-def is_near_local_max(img: np.ndarray, connectivity: int=4, footprint: np.ndarray=None):
+def is_near_local_max(img: np.ndarray, threshold: float, connectivity: int=4):
     '''
         Determine whether each pixel in the image is close to the maximum values in its local neighborhood.
     '''
-
-    if footprint is None:
-        if connectivity == 4:
-            footprint = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
-        else:  # connectivity == 8
-            footprint = np.ones((3, 3), dtype=bool)
+    if connectivity == 4:
+        footprint = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
+    else:  # connectivity == 8
+        footprint = np.ones((3, 3), dtype=bool)
 
     max_map = maximum_filter(img, footprint=footprint, mode='constant', cval=-np.inf)
     
-    mean = np.mean(img)
-    std = np.std(img)
-    gap = min(5, 0.5 * mean, 0.5 * std)
-
-    return max_map - img < gap
+    return max_map - img < threshold
 
 
 def con_orthogonal_basis(a: np.ndarray, b: np.ndarray):
@@ -546,23 +503,22 @@ def plot_line_chart(res: dict, xlabel: str='x', ylabel: str='y', xrange: tuple=N
     '''
     # plot the results
     fig, ax = plt.subplots()
+    xmin, xmax, ymin, ymax = np.inf, -np.inf, np.inf, -np.inf
     for method in res:
         xs, ys = zip(*res[method])
-        if isinstance(xs[0], numbers.Number) and not isinstance(xs[0], bool):
-            ax.set_xticks(xs)
-        else:
-            xlabels, xs = xs, np.arange(len(xs), dtype=np.int32)
-            ax.set_xticks(xs)
+        xlabels = None
+        if not isinstance(xs[0], numbers.Number) or isinstance(xs[0], bool):
+            xlabels, xs = xs, np.arange(len(xs), dtype=np.float64)
+        xmin, xmax = np.min(xs, initial=xmin), np.max(xs, initial=xmax)
+        ymin, ymax = np.min(ys, initial=ymin), np.max(ys, initial=ymax)
+        ax.set_xticks(xs)
+        if xlabels:
             ax.set_xticklabels(xlabels)
-        if xrange == None:
-            xrange = (np.min(xs), np.max(xs))
-        if yrange == None:
-            yrange = (np.min(ys), np.max(ys))
         ax.plot(xs, ys, label=method, marker='o')
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
-    ax.set_xlim(xrange)
-    ax.set_ylim(yrange)
+    ax.set_xlim(xrange) if xrange else ax.set_xlim((xmin, xmax)) 
+    ax.set_ylim(yrange) if yrange else ax.set_ylim((ymin, ymax)) 
     ax.legend()
 
     # save and show figure
@@ -608,20 +564,20 @@ def label_star_image(img: np.ndarray, coords: np.ndarray, ids: np.ndarray=None, 
         ax.imshow(img, cmap='gray', vmin=0, vmax=255, origin='upper')
         ax.axis('off')
 
-    if np.all(ids==None):
-        ids = np.arange(len(coords))+1 if auto_label else np.full(len(coords), -1)
-
     if sort:
         idxs = np.lexsort((coords[:, 1], coords[:, 0]))
         coords = coords[idxs]
-        ids = ids[idxs]
+        ids = ids[idxs] if ids is not None else None
+
+    if ids is None and auto_label:
+        ids = np.arange(len(coords))+1
 
     for id, (row, col) in zip(ids, coords):
         row, col = int(row), int(col)
         if circle:
             ax.plot(col, row, 'o', mec='blue', mfc='none', ms=10, mew=2)
         if id != -1:
-            row, col = min(row+10, h-20), min(col-20, w-20)
+            row, col = np.clip(row+10, 0, h-30), np.clip(col-30, 0, w-60)
             ax.text(col, row, str(id), fontsize=10, color='white', ha='left', va='top')
 
     save_and_show(output_path, show)
