@@ -7,8 +7,8 @@ import skimage.restoration as restoration
 
 from utils import gen_gaussian_kernel
 
-
 eps = 1e-10
+
 
 def basic_filter(img: np.ndarray, method: str='Gaussian', size: int=3) -> np.ndarray:
     '''
@@ -372,7 +372,7 @@ def denoise_with_cwm(img: np.ndarray, size: int=3):
     return denoised_img
 
 
-def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sigma_g: int=20, sigma_s: int=20, sigma_i: int=20, sigma_j: int=20, count: int=5, trim: int=3):
+def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sigma_g: int=20, sigma_s: int=20, sigma_i: int=20, sigma_j: int=20, trim_mean: int=3, trim_road: int=5):
     '''
         Denoise with combined nlm and blf.
     '''
@@ -463,7 +463,7 @@ def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sig
     padded_img = np.pad(img, ((r, r), (r, r)), mode='constant')                     # padded image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))          # patches (h, w, d, d)
 
-    tmmap = np.mean(np.sort(patches.reshape(h, w, -1))[..., trim:-trim], axis=-1)   # trimmed mean map
+    tmmap = np.mean(np.sort(patches.reshape(h, w, -1))[..., trim_mean:-trim_mean], axis=-1) # trimmed mean map
     mean = np.mean(img)                                                             # mean
     devi = np.std(img)                                                              # standard deviation
 
@@ -496,9 +496,109 @@ def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sig
 
     ## 5. Process outliers and non-star pixels with BLF
     padded_img[r:-r, r:-r] = denoised_img
-    weights = compute_blf_weights(denoised_img, patches, count)
+    weights = compute_blf_weights(denoised_img, patches, trim_road)
     denoised_img = np.sum(weights * patches, axis=(-1, -2))
 
+    return denoised_img
+
+
+def denoise_with_mnlm(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sigma_i: int=20, sigma_j: int=20, trim_mean: int=3, trim_road: int=5):
+    '''
+        Denoise with modified nlm.
+    '''
+
+    def preselect_similar(mean: np.ndarray, threshold: int=10):
+        '''
+            Preselect the similar patches and return the mask.
+        '''
+        padded_mean = np.pad(mean, ((k//2, k//2), (k//2, k//2)), constant_values=0)
+        grouped_mean = np.lib.stride_tricks.sliding_window_view(padded_mean, (k, k))
+
+        mask = (np.abs(grouped_mean - mean[..., None, None]) < threshold) 
+        return mask
+
+    def compute_mix_weights(fpatches: np.ndarray, mask: np.ndarray):
+        '''
+            Compute non-local mean weights.
+        '''
+        winds = np.lib.stride_tricks.sliding_window_view(                       # search windows (h, w, k, k, d²)
+            np.pad(fpatches, ((k // 2, k // 2), (k // 2, k // 2), (0, 0)), mode='constant'),
+            window_shape=(k, k),
+            axis=(0, 1)
+        ).transpose(0, 1, 3, 4, 2)                                              #! NOTE: By default, sliding_window_view pushes the newly generated window dimensions to the end of the array.
+        sims = np.where(                                                        # similarities (h, w, k, k)
+            mask,
+            np.mean((winds - fpatches[:, :, None, None, :])**2, axis=-1),
+            np.inf,
+        )
+        nwt = np.exp(-sims / sigma**2)                                          # nlm weights (h, w, k, k)
+        nwt = nwt / np.sum(nwt, axis=(-1, -2), keepdims=True)
+    
+        ad = np.abs(img[..., None] - fpatches)                                  # absolute differences between center pixels and other pixels
+        ead = np.exp(-ad ** 2 / (2 * sigma_i ** 2))                             # exponential absolute differences
+        road = np.sort(ad, axis=-1)                                             # rank ordered absolute differences
+        stroad = np.sum(road[..., :trim_road], axis=-1)                         # sum of trimmed rank ordered absolute differences
+        stroadp = np.lib.stride_tricks.sliding_window_view(                     # stroad patches
+            np.pad(stroad, ((k // 2, k // 2), (k // 2, k // 2))), 
+            (k, k)
+        )
+
+        # iwt = np.minimum((np.sum(ead, axis=-1) - 1) / k, 1)                   # calculate impulse weights with ead
+        iwt = np.exp(-stroad ** 2 / (2 * sigma_i ** 2))                         # calculate impulse weights with exponential stroad
+        iwt = np.lib.stride_tricks.sliding_window_view(                         # impulse weights (h, w) -> (h, w, k, k)
+            np.pad(iwt, ((k // 2, k // 2), (k // 2, k // 2))), 
+            (k, k)
+        )
+        
+        jcoef = 1 - np.exp(-(stroad[..., None, None] + stroadp) ** 2 / (8 * sigma_j ** 2))  # joint modulation coefficient between gray weights and impulse weights
+        wt = nwt ** (1 - jcoef) * iwt ** jcoef  
+        wt = wt / np.maximum(np.sum(wt, axis=(-1, -2), keepdims=True), eps)    # normalize the weights
+
+        return wt
+
+    ## 1. Prepare data
+    h, w = img.shape
+    d = size                                    # the diameter of image patch
+    k = wind                                    # the diameter of search window
+    r = d // 2                                  # the radius of image patch
+
+    fimg = img.astype(np.float64)
+    denoised_img = np.copy(img)                                                     # denoised image
+    patches = np.lib.stride_tricks.sliding_window_view(
+        np.pad(fimg, ((r, r), (r, r)), mode='constant'), 
+        (d, d)
+    )                                                                               # patches (h, w, d, d)
+    winds = np.lib.stride_tricks.sliding_window_view(
+        np.pad(fimg, ((k // 2, k // 2), (k // 2, k // 2)), mode='constant'), 
+        (k, k)
+    )                                                                               # windows (h, w, d, d)
+    fpatches = patches.reshape(h, w, -1)                                            # flatten patches (h, w, d*d)
+
+    tmmap = np.mean(np.sort(fpatches, axis=-1)[..., trim_mean:-trim_mean], axis=-1) # trimmed mean map
+    mean = np.mean(img)                                                             # mean
+    devi = np.std(img)                                                              # standard deviation
+
+    ## 2. Process outlier
+    ot_mask = (img == ndi.maximum_filter(img, size=d)) \
+           & (np.abs(img-tmmap) > 15*devi) \
+           & (np.abs(tmmap-mean) < 1.5*devi)                                        # outlier mask / peper noise
+    if False: # replace with median
+        pot_mask = np.pad(ot_mask, ((r, r), (r, r)), constant_values=True)          # padded outlier mask
+        got_mask = np.lib.stride_tricks.sliding_window_view(
+            pot_mask, (d, d)
+        )[ot_mask]                                                                  # grouped outlier mask  
+        denoised_img[ot_mask] = np.nanmedian(
+            np.where(got_mask, np.NAN, patches[ot_mask]),  
+            axis=(1, 2)
+        )
+    else: # replace with trimmed mean
+        denoised_img[ot_mask] = tmmap[ot_mask]
+
+    ## 3. Compute weights
+    sp_mask = preselect_similar(tmmap, devi)                                         # similar patch indexs (h, w, k, k)
+    weights = compute_mix_weights(fpatches, sp_mask)                                 # weights (h, w, k, k)
+    denoised_img = np.sum(winds * weights, axis=(-1, -2))
+    
     return denoised_img
 
 
@@ -511,10 +611,7 @@ def denoise_image(img: np.ndarray, method: str):
 
     if method == 'CNB': # combined nlm and blf
         # when the deviation of the guassian noise is lower than 0.6
-        denoised_img = denoise_with_cnb(img, 7, 17, sigma=0.05*max_val, sigma_g=0.15*max_val, sigma_s=3, sigma_i=0.8*max_val, sigma_j=0.6*max_val, count=7, trim=3)
-    
-        # when the deviation of the guassian noise is higher than 0.8
-        # denoised_img = denoise_with_cnb(img, 7, 17, sigma=0.03*max_val, sigma_g=0.1*max_val, sigma_s=3, sigma_i=0.4*max_val, sigma_j=0.3*max_val, count=7, trim=3)
+        denoised_img = denoise_with_cnb(img, 7, 17, sigma=0.05*max_val, sigma_g=0.15*max_val, sigma_s=3, sigma_i=0.8*max_val, sigma_j=0.6*max_val, trim_mean=3, trim_road=7)
     elif method == 'CWM':
         denoised_img = denoise_with_cwm(img, size=5)
     elif method == 'CMG':
@@ -528,6 +625,8 @@ def denoise_image(img: np.ndarray, method: str):
         denoised_img = denoise_with_blf(denoised_img, size=3, sigma_g=0.05*max_val, sigma_s=1, threshold=0.4*max_val)
     elif method == 'NLM': # non local mean
         denoised_img = denoise_with_nlm(img, 5, 21, sigma=0.1*max_val)
+    elif method == 'MNLM': # non local mean
+        denoised_img = denoise_with_mnlm(img, 5, 11, sigma=0.1*max_val, sigma_i=0.8*max_val, sigma_j=0.6*max_val,)
     elif method == 'MBLF': # modified bilateral filter
         denoised_img = denoise_with_blf(img, 7, sigma_g=0.05*max_val, sigma_s=1.5, threshold=0.6*max_val)
     elif method == 'Wavelet':
