@@ -379,58 +379,54 @@ def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sig
 
     def preselect_similar(mean: np.ndarray, threshold: int=10):
         '''
-            Preselect the similar patches and return the indexs.
+            Preselect the similar patches and return the mask.
         '''
-        index_img = np.arange(0, h*w).reshape(h, w)                                         # index image for patch search
-        padded_img = np.pad(index_img, ((k//2, k//2), (k//2, k//2)), constant_values=-1)    # padded index image
-        windows = np.lib.stride_tricks.sliding_window_view(padded_img, (k, k))              # search windows (h, w, k, k)
-
         padded_mean = np.pad(mean, ((k//2, k//2), (k//2, k//2)), constant_values=0)
         grouped_mean = np.lib.stride_tricks.sliding_window_view(padded_mean, (k, k))
 
-        # padded_devi = np.pad(devi, ((k//2, k//2), (k//2, k//2)), constant_values=0)
-        # grouped_devi = np.lib.stride_tricks.sliding_window_view(padded_devi, (k, k))  
-
         mask = (np.abs(grouped_mean - mean[..., None, None]) < threshold) 
-            # & (np.abs(grouped_devi - devi[..., None, None]) < threshold)  
-        indexs = np.where(mask, windows, -1)
+        return mask
 
-        return indexs
-
-    def compute_nlm_weights(p: np.ndarray, sp: np.ndarray, idx: np.ndarray):
+    def compute_nlm_weights(fpatches: np.ndarray, fg_mask: np.ndarray, sp_mask: np.ndarray):
         '''
             Compute non-local mean weights.
         '''
-        ssp = p[idx]                            # similar patches for star patches
-        sim = np.where(                         # similarity between two patches
-            idx==-1,                            # avoid invalid patch index(-1)
-            np.inf,                         
-            np.mean((sp[:, None, :] - ssp)**2, axis=-1),
+        winds = np.lib.stride_tricks.sliding_window_view(                       # search windows (h, w, k, k, d²)
+            np.pad(fpatches, ((hk, hk), (hk, hk), (0, 0)), mode='constant'),
+            window_shape=(k, k),
+            axis=(0, 1)
+        ).transpose(0, 1, 3, 4, 2)                                              #! NOTE: By default, sliding_window_view pushes the newly generated window dimensions to the end of the array.
+
+        spatches = fpatches[fg_mask]                                            # star patches (n, d²)
+        swinds = winds[fg_mask]                                                 # search windows for star patches (n, k, k, d²)
+        sims = np.where(                                                        # similarities
+            sp_mask[fg_mask],                                                   # similar patches for star patches (n, k, k)
+            np.mean((swinds - spatches[:, None, None, :])**2, axis=-1),
+            np.inf, 
         )
-        wt = np.exp(-sim/(sigma**2))            # weights (n, k*k)
-        ci = k**2//2                            # central pixel index
-        wt[ci] = np.maximum(                    # central pixel weight
-            np.max(wt[:ci]),
-            np.max(wt[ci+1:])
-        )
-        wts = np.sum(wt, axis=-1, keepdims=True) # sum of weights (n, 1)
-        return wt / wts
+        wt = np.exp(-sims / sigma**2)                                           # nlm weights (n, k, k)
+        wt[:, hk, hk] = eps      
+        wt[:, hk, hk] = np.max(wt, axis=(-1, -2))                               # central nlm weight
+        wt = wt / np.maximum(np.sum(wt, axis=(-1, -2), keepdims=True), eps)     # normalize the weights
+
+        return wt
     
-    def compute_blf_weights(g: np.ndarray, p: np.ndarray, k: int, f: bool=False):
+    def compute_blf_weights(patches: np.ndarray, flag: bool=False):
         '''
             Compute bilateral filter weights.
         '''
-        gwt = np.exp(-(g[..., None, None] - p) ** 2 / (2 * sigma_g ** 2))       # gray weights
-
         x, y = np.meshgrid(np.arange(-r, r + 1), np.arange(-r, r + 1))
         swt = np.exp(-(x ** 2 + y ** 2) / (2 * sigma_s ** 2))                   # spatial weights
 
-        ad = np.abs(g[..., None, None] - p).reshape(h, w, -1)                   # absolute differences between center pixels and other pixels
+        cpixels = patches[..., r, r].reshape(h, w, 1, 1)
+        gwt = np.exp(-(cpixels - patches) ** 2 / (2 * sigma_g ** 2))            # gray weights
+
+        ad = np.abs(cpixels - patches).reshape(h, w, -1)                        # absolute differences between center pixels and other pixels
         ead = np.exp(-ad ** 2 / (2 * sigma_i ** 2))                             # exponential absolute differences
         road = np.sort(ad, axis=-1)                                             # rank ordered absolute differences
-        stroad = np.sum(road[..., :k], axis=-1)                                 # sum of trimmed rank ordered absolute differences
+        stroad = np.sum(road[..., :trim_road], axis=-1)                         # sum of trimmed rank ordered absolute differences
 
-        if f:                                                                   # calculate impulse weights with ead
+        if flag:                                                                # calculate impulse weights with ead
             iwt = np.minimum((np.sum(ead, axis=-1) - 1) / k, 1)                 
         else:                                                                   # calculate impulse weights with exponential stroad
             iwt = np.exp(-stroad ** 2 / (2 * sigma_i ** 2))     
@@ -445,11 +441,11 @@ def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sig
         )
         jcoef = 1 - np.exp(-(stroad[..., None, None] + stroadp) ** 2 / (8 * sigma_j ** 2))  # joint modulation coefficient between gray weights and impulse weights
         
-        if f:
+        if flag:
             wt = swt * gwt * iwt                                                # bilateral weights (h, w, d, d)
         else:
             wt = swt * gwt ** (1 - jcoef) * iwt ** jcoef                        # bilateral weights (h, w, d, d)
-        wt = wt / np.maximum(np.sum(wt, axis=(-1, -2), keepdims=True), eps)    # normalize the weights
+        wt = wt / np.maximum(np.sum(wt, axis=(-1, -2), keepdims=True), eps)     # normalize the weights
 
         return wt
 
@@ -457,13 +453,20 @@ def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sig
     h, w = img.shape
     d = size                                    # the diameter of image patch
     k = wind                                    # the diameter of search window
-    r = d // 2                                  # the radius of image patch
+    r = d // 2                                  # the radius of image patch, namely half of d
+    hk = k // 2                                 # the radius of search window, namely half of k
 
+    fimg = img.astype(np.float64)
     denoised_img = np.copy(img)                                                     # denoised image
-    padded_img = np.pad(img, ((r, r), (r, r)), mode='constant')                     # padded image
+    padded_img = np.pad(fimg, ((r, r), (r, r)), mode='constant')                    # padded image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))          # patches (h, w, d, d)
+    winds = np.lib.stride_tricks.sliding_window_view(
+        np.pad(fimg, ((hk, hk), (hk, hk)), mode='constant'), 
+        (k, k)
+    )                                                                               # windows (h, w, d, d)
+    fpatches = patches.reshape(h, w, -1)                                            # flatten patches (h, w, d²)
 
-    tmmap = np.mean(np.sort(patches.reshape(h, w, -1))[..., trim_mean:-trim_mean], axis=-1) # trimmed mean map
+    tmmap = np.mean(np.sort(fpatches, axis=-1)[..., trim_mean:-trim_mean], axis=-1) # trimmed mean map
     mean = np.mean(img)                                                             # mean
     devi = np.std(img)                                                              # standard deviation
 
@@ -487,17 +490,14 @@ def denoise_with_cnb(img: np.ndarray, size: int, wind: int=7, sigma: int=10, sig
         denoised_img[ot_mask] = tmmap[ot_mask]
 
     ## 4. Process star pixels with NLM
-    fimg = img.reshape(-1)                                      # flatten image
-    fpatches = patches.reshape(-1, d**2)                        # flatten patches (h*w, d*d)
-    spatches = patches[fg_mask].reshape(-1, d**2)               # flatten star patches (n, d*d)
-    indexs = preselect_similar(tmmap, devi)[fg_mask].reshape(-1, k*k) # similar patch indexs (n, k*k)
-    weights = compute_nlm_weights(fpatches, spatches, indexs)   # nlm weights (n, k*k)
-    denoised_img[fg_mask] = np.sum(fimg[indexs] * weights, axis=-1)
+    sp_mask = preselect_similar(tmmap, devi)                                        # similar patch mask (h, w, k, k)
+    weights = compute_nlm_weights(fpatches, fg_mask, sp_mask)                       # nlm weights (n, k, k)
+    denoised_img[fg_mask] = np.sum(winds[fg_mask] * weights, axis=(-1, -2))
 
     ## 5. Process outliers and non-star pixels with BLF
     padded_img[r:-r, r:-r] = denoised_img
-    weights = compute_blf_weights(denoised_img, patches, trim_road)
-    denoised_img = np.sum(weights * patches, axis=(-1, -2))
+    weights = compute_blf_weights(patches)
+    denoised_img = np.sum(patches * weights, axis=(-1, -2))
 
     return denoised_img
 
@@ -572,7 +572,7 @@ def denoise_with_mnlm(img: np.ndarray, size: int, wind: int=7, sigma: int=10, si
         np.pad(fimg, ((k // 2, k // 2), (k // 2, k // 2)), mode='constant'), 
         (k, k)
     )                                                                               # windows (h, w, d, d)
-    fpatches = patches.reshape(h, w, -1)                                            # flatten patches (h, w, d*d)
+    fpatches = patches.reshape(h, w, -1)                                            # flatten patches (h, w, d²)
 
     tmmap = np.mean(np.sort(fpatches, axis=-1)[..., trim_mean:-trim_mean], axis=-1) # trimmed mean map
     mean = np.mean(img)                                                             # mean
