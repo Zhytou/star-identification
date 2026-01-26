@@ -5,7 +5,7 @@ import scipy.ndimage as ndi
 import skimage.filters as filters
 import skimage.morphology as morph
 
-from utils import cal_derivative, cal_difference, cal_doh, cal_log, cal_ly, cal_sobel, is_local_topk, is_near_local_max, gen_gaussian_kernel
+from utils import cal_derivative, cal_doh, cal_log, cal_ly, cal_msobel, is_local_topk, is_near_local_max, gen_gaussian_kernel
 
 eps = 1e-10
 
@@ -225,13 +225,8 @@ def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=0.2):
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))                      # raw patches (h, w, d, d)
     flatten_patches = np.reshape(patches, (h, w, -1))                                           # flatten patches (h, w, d²)
 
-    if True:
-        grad_y = cal_derivative(img, order=(1, 0), sigma=sigma)                                 # gradient y map (h, w)
-        grad_x = cal_derivative(img, order=(0, 1), sigma=sigma)                                 # gradient x map (h, w)
-    else:
-        diffs = np.stack([cal_difference(img, dir) for dir in range(8)], axis=0)                # neighoring pixel difference map (8, h, w)
-        grad_y = diffs[0]
-        grad_x = diffs[2]
+    grad_y = cal_derivative(img, order=(1, 0), sigma=sigma)                                 # gradient y map (h, w)
+    grad_x = cal_derivative(img, order=(0, 1), sigma=sigma)                                 # gradient x map (h, w)
     padded_grad_x, padded_grad_y = np.pad(grad_x, ((r, r), (r, r))), np.pad(grad_y, ((r, r), (r, r)))  # padded gradient x and gradient y map (h, w, d, d)
 
     grad = np.stack([
@@ -373,10 +368,10 @@ def enhance_image(img: np.ndarray, method: str, size: int=3, preserve_dtype: boo
 
         if method == 'Max-Median':
             median_map = np.stack([np.median(patches[:, :, mask], axis=-1) for mask in opt_mask], axis=-1)
-            enhanced_img = img - np.max(median_map, axis=-1)
+            enhanced_img = np.maximum(img - np.max(median_map, axis=-1), eps)
         else:
             mean_map = np.stack([np.mean(patches[:, :, mask], axis=-1) for mask in opt_mask], axis=-1)
-            enhanced_img = img - np.max(mean_map, axis=-1)
+            enhanced_img = np.maximum(img - np.max(mean_map, axis=-1), eps)
     elif method == 'BEF':
         '星敏感器抗杂光背景滤波图像处理方法研究 https://doi.org/10.19328/j.cnki.1006-1630.2016.04.005'
         kernel = gen_gaussian_kernel(sigma=1, size=d)                                           # default gaussian kernel with a size of d
@@ -385,7 +380,7 @@ def enhance_image(img: np.ndarray, method: str, size: int=3, preserve_dtype: boo
         kernel /= kernel.sum()                                                                  # normalize the kernel
         enhanced_img = np.clip((img - np.sum(patches * kernel[None, None, ...], axis=(-1, -2))), 0, max_val) # background estimation via convolution and subtract
     elif method == 'MSobel':
-        enhanced_img = cal_sobel(img, sigma=1)
+        enhanced_img = cal_msobel(img)
     else: # method == 'None'
         return img
 
@@ -446,7 +441,8 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
 
     ## 1. Preselect
     #!NOTE: only use local rank_filter, because the global background threshold might be too high under starry light interference
-    mask = is_local_topk(img, -2, connectivity) | is_near_local_max(img, connectivity) # possible seed mask (h, w)
+    std = np.std(img)
+    mask = is_local_topk(img, -1, connectivity) | is_near_local_max(img, std, connectivity) # possible seed mask (h, w)
     if d >= 5:                                                                  # check the mean gray of inner ring is higher than the outter one
         rr = d // 4
         inner = np.zeros((d, d), dtype=bool)
@@ -455,12 +451,12 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
         inner[r, r] = False                                                     # exclude central pixel
         imean = np.maximum(np.mean(patches[..., inner], axis=-1), eps)          # inner ring mean map 
         mask = mask & ((img == max_intensity) | (img - 1. * imean >= 0)) & (imean - 1. * omean >= 0)
-    # print('Number of seeds after preselection:', np.sum(mask))
+    print('Number of seeds after preselection:', np.sum(mask))
 
     ## 2. Double check with different operators 
     if method == 'DoH' or method == 'Ly':
         # https://doi.org/10.16251/j.cnki.1009-2307.2012.01.033
-        res = cal_doh(img, sigma=1) if method == 'DoH' else cal_ly(img, sigma=1)[0] # operator results (h, w)
+        res = cal_doh(img, sigma=1) if method == 'DoH' else cal_ly(img, size=3)[1] # operator results (h, w)
         mask = mask & is_local_topk(res, k=-1, connectivity=connectivity)
     elif method == 'CGC':
         # combined gradient and curvature
@@ -469,7 +465,7 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
         mask = mask & (res1 > 0.6) & is_local_topk(res2, k=-2, connectivity=connectivity)
     else:
         mask = np.zeros_like(mask, dtype=bool)
-    # print('Number of seeds after operator double check:', np.sum(mask))
+    print('Number of seeds after operator double check:', np.sum(mask))
 
     ## 3. Generate unique label for each seed, namely merge possible connected seeds
     n = np.sum(mask)                                                            # number of initial unconnected seeds
@@ -498,7 +494,7 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
             labels[i] = label_cnt
     assert label_cnt == label_tab.count(), ''
     assert label_cnt == 0 or labels.min() >= 1 and labels.max() <= label_cnt
-    # print('Number of seeds after merging:', label_cnt)
+    print('Number of seeds after merging:', label_cnt)
 
     return coords, labels
 
@@ -726,7 +722,7 @@ def find_ranges(nums: np.ndarray, threshold: int=0) -> list[tuple[int, int]]:
     return np.vstack([begs, ends]).transpose()
 
 
-def group_star(img: np.ndarray, method: list[str], connectivity: int=4, pixel_limit: int=5) -> list[tuple[np.ndarray, np.ndarray]]:
+def group_star(img: np.ndarray, method: list[str], size: int | list[int]=5, connectivity: int=4, pixel_limit: int=5) -> list[tuple[np.ndarray, np.ndarray]]:
     '''
         Group the potential star in the image.
     '''
@@ -734,15 +730,15 @@ def group_star(img: np.ndarray, method: list[str], connectivity: int=4, pixel_li
 
     ## 1. Generate seeds if opt_meth is valid
     if opt_meth != 'None':
-        coords, labels = initialize_seeds(img, opt_meth, size=5, connectivity=connectivity)
+        coords, labels = initialize_seeds(img, opt_meth, size=size, connectivity=connectivity)
     else:
         coords, labels = np.array([]), np.array([])
     
     ## 2. Enhance the input image, and then binarize the enhanced image
     if ehc_meth.startswith('MS_'):
-        binary_img = enhance_and_binarize_image(img, ehc_meth, thr_meth, coords, size=[3, 5, 7])
+        binary_img = enhance_and_binarize_image(img, ehc_meth, thr_meth, coords, size=size) # size is a list
     else:
-        binary_img = enhance_and_binarize_image(img, ehc_meth, thr_meth, coords, size=5)
+        binary_img = enhance_and_binarize_image(img, ehc_meth, thr_meth, coords, size=size)
     
     ## 3. Label the connected regions in the binary image
     group_coords = []
