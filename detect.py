@@ -139,7 +139,7 @@ def cal_lcm(img: np.ndarray, method: str, size: int):
             ), axis=0
         )                                                                                       # novel local contrast measure (h, w)
     elif method  == 'RLCM':
-        'Infrared Small Target Detection Utilizing the  Multiscale Relative Local Contrast Measure http://ieeexplore.ieee.org/document/8289318/'
+        'Infrared Small Target Detection Utilizing the Multiscale Relative Local Contrast Measure http://ieeexplore.ieee.org/document/8289318/'
         measure = np.nanmin(
             np.where(
                 shift_mask,                                                                     # (8, h, w)
@@ -147,15 +147,15 @@ def cal_lcm(img: np.ndarray, method: str, size: int):
                 np.nan
             ), axis=0
         )                                                                                       # relative local contrast measure (h, w)
-    elif method == 'MLCM':
-        'Self-defined Modified Local Contrast Measure'
+    elif method == 'DLCM':
+        'Difference-based Local Contrast Measure'
         measure = np.nanmin(
             np.where(
                 shift_mask,                                                                     # (8, h, w)
-                np.clip(tmean_map[None, ...] / shifted_tmean_map - 1, 0, np.inf) * tmean_map,   # (8, h, w)
+                np.abs(mean_map[None, ...] - shifted_mean_map),                                 # (8, h, w)
                 np.nan
             ), axis=0
-        )                                                                                     # euclidean difference measure (h, w) 
+        )
     else:
         measure = np.zeros_like(img, dtype=img.dtype)
 
@@ -178,7 +178,7 @@ def cal_pcm(img: np.ndarray, method: str, size: int):
     mean_map = np.mean(patches, axis=(-1, -2))                                                  # mean map (h, w)
     shift_mask, shifted_mean_map = con_shift_map(mean_map, size=d)                              # shifted mean map(neighbor patches' mean) (8, h, w)
     
-    mean_residual_map = mean_map[None, ...] - shifted_mean_map                                  # mean residual  map (8, h, w)
+    mean_residual_map = mean_map[None, ...] - shifted_mean_map                                  # mean residual map (8, h, w)
     bright_mask = mean_residual_map > 0                                                         # bright target mask
     mean_residual_map = np.where(shift_mask & bright_mask, mean_residual_map, np.nan)           # apply mask and set invalid/negative to NaN
 
@@ -225,8 +225,8 @@ def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=0.2):
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))                      # raw patches (h, w, d, d)
     flatten_patches = np.reshape(patches, (h, w, -1))                                           # flatten patches (h, w, d²)
 
-    grad_y = cal_derivative(img, order=(1, 0), sigma=sigma)                                 # gradient y map (h, w)
-    grad_x = cal_derivative(img, order=(0, 1), sigma=sigma)                                 # gradient x map (h, w)
+    grad_y = cal_derivative(img, order=(1, 0), sigma=sigma)                                     # gradient y map (h, w)
+    grad_x = cal_derivative(img, order=(0, 1), sigma=sigma)                                     # gradient x map (h, w)
     padded_grad_x, padded_grad_y = np.pad(grad_x, ((r, r), (r, r))), np.pad(grad_y, ((r, r), (r, r)))  # padded gradient x and gradient y map (h, w, d, d)
 
     grad = np.stack([
@@ -282,17 +282,45 @@ def cal_threshold(img: np.ndarray, method: str):
     return T
 
 
-def binarize_image(img: np.ndarray, method: str):
+def binarize_image(img: np.ndarray, method: str, size: int=5):
     '''
         Binarize the grayscale image.
     '''
     assert img.dtype == np.uint8
 
-    binary_img = np.zeros_like(img, dtype=np.uint8)
+    d = size
+    r = d // 2
+    padded_img = np.pad(img, ((r, r), (r, r)))
+    patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))
+    max_val = 255 if img.dtype == np.uint8 else 1.0
 
+    fimg = img.astype(np.float64)
+    bimg = np.zeros_like(img, dtype=np.uint8)
     if method == 'Otsu' or method.startswith('Liebe'):
         T = cal_threshold(img, method)
-        binary_img[img >= T] = 1
+        bimg[img >= T] = 1
+    elif method == 'Zhang':
+        '杂光背景下星点提取与星图识别技术的研究 https://kns.cnki.net/KCMS/detail/detail.aspx?dbcode=CMFD&dbname=CMFD201902&filename=1019159575.nh'
+        n = -1 # connected region count
+        while True:
+            fimg = np.maximum(fimg - np.sum(fimg) / fimg.size, 0)
+            bimg[fimg > 0] = 1
+            nn = cv2.connectedComponents(bimg, connectivity=4)[0]
+            if n != -1 and abs(n - nn) < 5:# and n < 30:
+                break
+            fimg = fimg / fimg.max() * max_val
+            n = nn
+    elif method == 'Xu':
+        'A novel star image thresholding method for effective segmentation and centroid statistics https://linkinghub.elsevier.com/retrieve/pii/S0030402613002490'
+        T = cal_threshold(img, 'Liebe3')
+        delta = 0.2
+        while True:
+            mean1, mean2 = np.mean(img[img >= T]), np.mean(img[img < T])
+            Tn = (1 - delta) * mean1 + (1 + delta) * mean2
+            if abs(Tn - T) < 10:
+                break
+            T = Tn
+        bimg[img > T] = 1
     elif method == 'Xiao':
         'Entropic thresholding based on gray-level spatial correlation histogram https://ieeexplore.ieee.org/document/4761626/?arnumber=4761626'
         ## 0. Predefined parameters
@@ -300,26 +328,22 @@ def binarize_image(img: np.ndarray, method: str):
         gray_diff = 10
         gray_step = 8
         num_step = 1
-
-        d = size
-        r = d // 2
-        padded_img = np.pad(img, ((r, r), (r, r)))
-        patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))
         
         ## 1. Initialize f(x, y) and g(x, y)
         # f(x, y) is the gray value of the pixel located at the point (x, y) in a digital image.
         # g(x, y) is the number of the pixels of which the gray value is close to it in the corresponding N × N neighborhood,
-        f = img        
-        g = np.sum(patches - img[:, :, None, None] < gray_diff, axis=(-2, -1))
+        f_xy = img        
+        g_xy = np.sum(patches - img[:, :, None, None] < gray_diff, axis=(-2, -1))
 
         ## 2. Construct joint histogram h(k, m) 
         # h(k, m) = prob(f(x, y) == k and g(x, y) == m)
         k_max = 256
         m_max = d**2
 
-        h = np.zeros((k_max, m_max), np.float64)
-        np.add.at(h, (f.flatten(), f.flatten()), 1)
-        h /= np.sum(h)
+        # h(x, y) is the histgram function
+        h_xy = np.zeros((k_max, m_max), np.float64)
+        np.add.at(h_xy, (f_xy.flatten(), g_xy.flatten()), 1)
+        h_xy /= np.sum(h_xy)
 
         ## 3. Get the optimal threshold for f(x, y) and g(x, y)
         k_vals, m_vals = np.arange(0, k_max, gray_step), np.arange(0, m_max, num_step)
@@ -328,15 +352,20 @@ def binarize_image(img: np.ndarray, method: str):
         T_k_opt, T_m_opt = 0, 0
 
         ## 4. Do segmentation
-        binary_img[(f > T_k_opt) | (g > T_m_opt)] = 1
+        bimg[(f_xy > T_k_opt) | (g_xy > T_m_opt)] = 1
 
-    return binary_img
+    return bimg
 
 
-def enhance_image(img: np.ndarray, method: str, size: int=3, preserve_dtype: bool=True):
+def enhance_image(img: np.ndarray, method: str, size: int | list[int]=3, preserve_dtype: bool=True):
     '''
         Enhance the image.
     '''
+
+    if method.startswith('MS_'):                                                                # enhance image under multiscale
+        assert type(size) is list 
+        enhanced_imgs = np.stack([enhance_image(img, method[3:], size_i, preserve_dtype) for size_i in size])
+        return np.max(enhanced_imgs, axis=0)
 
     d = size                                                                                    # patch size
     r = size // 2                                                                               # half of patch size
@@ -351,10 +380,12 @@ def enhance_image(img: np.ndarray, method: str, size: int=3, preserve_dtype: boo
         enhanced_img = cal_pcm(img, method, size=d)
     elif method.endswith('GCM'):
         enhanced_img = cal_gcm(img, method, size=d, sigma=1)
-    elif method == 'IGM':
-        lcm = cal_lcm(img, 'MLCM', size=d)
-        gcm = cal_gcm(img, 'BGCM', size=d, sigma=1)
-        enhanced_img = lcm * gcm
+    elif method == 'Lu':
+        '基于梯度特征的弱小目标检测 https://kns.cnki.net/KCMS/detail/detail.aspx?dbcode=CJFQ&dbname=CJFDLAST2022&filename=JGHW202201021'
+        grad_y = cal_derivative(img, order=(1, 0), sigma=1)                                     # gradient y map
+        grad_x = cal_derivative(img, order=(0, 1), sigma=1)                                     # gradient x map
+        grad = np.where(np.logical_and(grad_x > 0, grad_y > 0), grad_x * grad_y, 0)
+        enhanced_img = cal_lcm(grad, 'DLCM', size)
     elif method == 'Top-Hat':
         selem = np.ones((d, d), dtype=bool)                                                     # structural element
         enhanced_img = morph.white_tophat(img, footprint=selem)                                 # enhanced image based on white top-hat
@@ -388,44 +419,6 @@ def enhance_image(img: np.ndarray, method: str, size: int=3, preserve_dtype: boo
         enhanced_img = (enhanced_img / np.max(enhanced_img, initial=eps) * max_val).astype(img.dtype)
 
     return enhanced_img
-
-
-def enhance_image_multiscale(img: np.ndarray, method: str, sizes: list[int], preserve_dtype: bool=True):
-    '''
-        Enhance the image under multiscale.
-    '''
-    assert method.startswith('MS_')
-    enhanced_imgs = np.stack([enhance_image(img, method[3:], size, preserve_dtype) for size in sizes])
-
-    return np.max(enhanced_imgs, axis=0)
-
-
-def enhance_and_binarize_image(img: np.ndarray, ehc_meth: str, thr_meth: str, coords: np.ndarray, size: list[int] | int, wind: int=15):
-    '''
-        Enhance the image and perform local adaptive binarization around given coordinates.
-    '''
-    assert img.dtype == np.uint8
-
-    h, w = img.shape
-    d = wind
-    r = d // 2
-    
-    binary_img = np.zeros_like(img, dtype=np.uint8)
-    if len(coords) > 0:
-        assert coords.shape[1] == 2
-        
-        y, x = coords[:, 0], coords[:, 1]
-        ymin, ymax = np.maximum(0, y - r), np.minimum(h, y + r + 1)             # top and bottom boundary
-        xmin, xmax = np.maximum(0, x - r), np.minimum(w, x + r + 1)             # left and right boundary
-
-        for y1, y2, x1, x2 in zip(ymin, ymax, xmin, xmax):
-            enhanced_roi = enhance_image(img[y1:y2, x1:x2], ehc_meth, size)
-            binary_img[y1:y2, x1:x2] = binary_img[y1:y2, x1:x2] | binarize_image(enhanced_roi, thr_meth) #!NOTE: use union to avoid overlap
-    else:
-        enhanced_img = enhance_image(img, ehc_meth, size)
-        binary_img = binarize_image(enhanced_img, thr_meth)
-    
-    return binary_img
 
 
 def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: int=4):
@@ -700,7 +693,7 @@ def cross_project_label(img: np.ndarray, connectivity: int=4):
     return label_cnt, label_img
 
 
-def find_ranges(nums: np.ndarray, threshold: int=0) -> list[tuple[int, int]]:
+def find_ranges(nums: np.ndarray, threshold: int=0):
     '''
         Find the ranges of the continuous values in the list.
     '''
@@ -722,10 +715,11 @@ def find_ranges(nums: np.ndarray, threshold: int=0) -> list[tuple[int, int]]:
     return np.vstack([begs, ends]).transpose()
 
 
-def group_star(img: np.ndarray, method: list[str], size: int | list[int]=5, connectivity: int=4, pixel_limit: int=5) -> list[tuple[np.ndarray, np.ndarray]]:
+def group_star(img: np.ndarray, method: list[str], size: int | list[int]=5, wind: int=15, connectivity: int=4, pixel_limit: int=5):
     '''
         Group the potential star in the image.
     '''
+    h, w = img.shape
     ehc_meth, thr_meth, lab_meth, opt_meth = method    
 
     ## 1. Generate seeds if opt_meth is valid
@@ -735,11 +729,20 @@ def group_star(img: np.ndarray, method: list[str], size: int | list[int]=5, conn
         coords, labels = np.array([]), np.array([])
     
     ## 2. Enhance the input image, and then binarize the enhanced image
-    if ehc_meth.startswith('MS_'):
-        binary_img = enhance_and_binarize_image(img, ehc_meth, thr_meth, coords, size=size) # size is a list
+    enhanced_img = enhance_image(img, ehc_meth, size)
+    if len(coords) > 0:
+        assert coords.shape[1] == 2
+        
+        y, x = coords[:, 0], coords[:, 1]
+        ymin, ymax = np.maximum(0, y - wind // 2), np.minimum(h, y + wind // 2 + 1)             # top and bottom boundary
+        xmin, xmax = np.maximum(0, x - wind // 2), np.minimum(w, x + wind // 2 + 1)             # left and right boundary
+
+        binary_img = np.zeros_like(img, dtype=np.uint8)
+        for y1, y2, x1, x2 in zip(ymin, ymax, xmin, xmax):
+            binary_img[y1:y2, x1:x2] = binary_img[y1:y2, x1:x2] | binarize_image(enhanced_img[y1:y2, x1:x2], thr_meth, size) #!NOTE: use union to avoid overlap
     else:
-        binary_img = enhance_and_binarize_image(img, ehc_meth, thr_meth, coords, size=size)
-    
+        binary_img = binarize_image(enhanced_img, thr_meth, size)
+
     ## 3. Label the connected regions in the binary image
     group_coords = []
     if lab_meth == 'RGL':
