@@ -5,7 +5,7 @@ import scipy.ndimage as ndi
 import skimage.filters as filters
 import skimage.morphology as morph
 
-from utils import cal_derivative, cal_doh, cal_log, cal_ly, cal_msobel, is_local_topk, is_near_local_max, gen_gaussian_kernel
+from utils import cal_derivative, cal_doh, cal_ly, is_local_topk, is_near_local_max, gen_gaussian_kernel
 
 eps = 1e-10
 
@@ -152,7 +152,7 @@ def cal_lcm(img: np.ndarray, method: str, size: int):
         measure = np.nanmin(
             np.where(
                 shift_mask,                                                                     # (8, h, w)
-                np.abs(mean_map[None, ...] - shifted_mean_map),                                 # (8, h, w)
+                np.abs(mean_map[None, ...] - shifted_mean_map) * mean_map[None, ...],           # (8, h, w)
                 np.nan
             ), axis=0
         )
@@ -213,9 +213,9 @@ def cal_pcm(img: np.ndarray, method: str, size: int):
     return measure
 
 
-def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=0.2):
+def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=1):
     '''
-        Calculate gradient consistency measure.
+        Calculate gradient based/enhanced local contrast measure.
     '''
     h, w = img.shape
     d = size
@@ -225,29 +225,31 @@ def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=0.2):
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))                      # raw patches (h, w, d, d)
     flatten_patches = np.reshape(patches, (h, w, -1))                                           # flatten patches (h, w, d²)
 
-    grad_y = cal_derivative(img, order=(1, 0), sigma=sigma)                                     # gradient y map (h, w)
-    grad_x = cal_derivative(img, order=(0, 1), sigma=sigma)                                     # gradient x map (h, w)
+    if False:
+        grad_x = cal_derivative(img, order=(0, 1), sigma=sigma)                                 # gradient x map (h, w)
+        grad_y = cal_derivative(img, order=(1, 0), sigma=sigma)                                 # gradient y map (h, w)
+    else:
+        grad_x = ndi.sobel(img, axis=1)
+        grad_y = ndi.sobel(img, axis=0)
     padded_grad_x, padded_grad_y = np.pad(grad_x, ((r, r), (r, r))), np.pad(grad_y, ((r, r), (r, r)))  # padded gradient x and gradient y map (h, w, d, d)
 
-    grad = np.stack([
+    grad_patches = np.stack([
         np.lib.stride_tricks.sliding_window_view(padded_grad_x, (d, d)), 
         np.lib.stride_tricks.sliding_window_view(padded_grad_y, (d, d))
-    ], axis=-1)                                                                                 # gradient map (h, w, d, d, 2)
-    gnorm = np.maximum(np.linalg.norm(grad, axis=-1, keepdims=True), eps)
-    grad = grad / gnorm
+    ], axis=-1)                                                                                 # gradient patches (h, w, d, d, 2)
+    grad_patches = grad_patches / np.maximum(np.linalg.norm(grad_patches, axis=-1, keepdims=True), eps)
 
-    if method == 'PGCM':
-        'Self-defined Pixel-wise GCM'
+    if method == 'GCM':
+        'Gradient Consistency Measure'
         y, x = np.indices((d, d))                                                               # !careful first row index, then column index
         radial = np.stack([r - x, r - y], axis=-1)                                              # radial vectors (d, d, 2)
         rnorm = np.maximum(np.linalg.norm(radial, axis=-1, keepdims=True), eps)                 # radial vectors' norm
         radial = radial / rnorm
 
-        dot_product = np.sum(grad * radial[None, None, ...], axis=-1)                           # dot product (h, w, d, d)
-        measure = np.clip(np.sum(dot_product, axis=(-2, -1)) / (d**2 - 1), 0, 1)                # gradient consistency measure (h, w)
-        # measure[measure < 0.8] = 0
-    elif method == 'BGCM': 
-        'Self-defined Block-wise GCM'
+        dot_product = np.sum(grad_patches * radial[None, None, ...], axis=-1)                   # dot product (h, w, d, d)
+        measure = np.clip(np.sum(dot_product, axis=(-2, -1)) / (d**2 - 1), 0, 1)
+    elif method == 'PGCM': 
+        'Patch Based Gradient Consistency Measure'
         max_indexs = np.argmax(flatten_patches, axis=-1)                                        # the index of maximum values
         y0, x0 = max_indexs // d, max_indexs % d                                                # the local coordinates(row, column) of each maximum values(h, w)
         y, x = np.meshgrid(np.arange(d), np.arange(d), indexing='ij')
@@ -258,8 +260,27 @@ def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=0.2):
         rnorm = np.maximum(np.linalg.norm(radial, axis=-1, keepdims=True), eps)
         radial = radial / rnorm
 
-        dot_product = np.sum(grad * radial, axis=-1)                                            # dot product (h, w, d, d)
-        measure = np.clip(np.sum(dot_product, axis=(-2, -1)) / (d**2 - 1), 0, 1)                # gradient consistency measure (h, w)
+        dot_product = np.sum(grad_patches * radial, axis=-1)                                    # dot product (h, w, d, d)
+        measure = np.clip(np.sum(dot_product, axis=(-2, -1)) / (d**2 - 1), 0, 1)
+    elif method == 'Lu-GCM':
+        '基于梯度特征的弱小目标检测 https://kns.cnki.net/KCMS/detail/detail.aspx?dbcode=CJFQ&dbname=CJFDLAST2022&filename=JGHW202201021'
+        grad = np.where(np.logical_and(grad_x > 0, grad_y > 0), grad_x * grad_y, 0)
+        measure = cal_lcm(grad, 'DLCM', size)
+    elif method == 'Zhang-GCM':
+        '天基星图预处理技术研究 https://kns.cnki.net/KCMS/detail/detail.aspx?dbcode=CJFQ&dbname=CJFDLAST2024&filename=JGDJ202412041'
+        # 0. Sobel operator
+        grad = np.hypot(grad_x, grad_y).astype(np.float32)
+
+        # 1. Morphology close
+        kernel = np.zeros((size, size), dtype=bool)
+        kernel[:, r] = True
+        kernel[r, :] = True
+        grad = morph.closing(grad, footprint=kernel)
+
+        # 2. Edge suppression via 4-neighbor rule
+        T = cal_threshold(img, 'Liebe3')
+        count = ndi.convolve(img < T, kernel)
+        measure = np.where(count < 2, grad, 0)
     else:
         measure = np.zeros_like(img)
 
@@ -380,12 +401,13 @@ def enhance_image(img: np.ndarray, method: str, size: int | list[int]=3, preserv
         enhanced_img = cal_pcm(img, method, size=d)
     elif method.endswith('GCM'):
         enhanced_img = cal_gcm(img, method, size=d, sigma=1)
-    elif method == 'Lu':
-        '基于梯度特征的弱小目标检测 https://kns.cnki.net/KCMS/detail/detail.aspx?dbcode=CJFQ&dbname=CJFDLAST2022&filename=JGHW202201021'
-        grad_y = cal_derivative(img, order=(1, 0), sigma=1)                                     # gradient y map
-        grad_x = cal_derivative(img, order=(0, 1), sigma=1)                                     # gradient x map
-        grad = np.where(np.logical_and(grad_x > 0, grad_y > 0), grad_x * grad_y, 0)
-        enhanced_img = cal_lcm(grad, 'DLCM', size)
+    elif method == 'BEF':
+        '星敏感器抗杂光背景滤波图像处理方法研究 https://doi.org/10.19328/j.cnki.1006-1630.2016.04.005'
+        kernel = gen_gaussian_kernel(sigma=1, size=d)                                           # default gaussian kernel with a size of d
+        kernel[1:-1, 1:-1] = 0                                                                  # zero out the inner region of gaussian kernel to estimate the bacground
+        kernel[0, 0], kernel[0, -1], kernel[-1, 0], kernel[-1, -1] = kernel[0, 0] + 1, kernel[0, -1] + 1, kernel[-1, 0] + 1, kernel[-1, -1] + 1 # emphasize corner contributions for background estimation
+        kernel /= kernel.sum()                                                                  # normalize the kernel
+        enhanced_img = np.clip((img - np.sum(patches * kernel[None, None, ...], axis=(-1, -2))), 0, max_val) # background estimation via convolution and subtract
     elif method == 'Top-Hat':
         selem = np.ones((d, d), dtype=bool)                                                     # structural element
         enhanced_img = morph.white_tophat(img, footprint=selem)                                 # enhanced image based on white top-hat
@@ -403,15 +425,6 @@ def enhance_image(img: np.ndarray, method: str, size: int | list[int]=3, preserv
         else:
             mean_map = np.stack([np.mean(patches[:, :, mask], axis=-1) for mask in opt_mask], axis=-1)
             enhanced_img = np.maximum(img - np.max(mean_map, axis=-1), eps)
-    elif method == 'BEF':
-        '星敏感器抗杂光背景滤波图像处理方法研究 https://doi.org/10.19328/j.cnki.1006-1630.2016.04.005'
-        kernel = gen_gaussian_kernel(sigma=1, size=d)                                           # default gaussian kernel with a size of d
-        kernel[1:-1, 1:-1] = 0                                                                  # zero out the inner region of gaussian kernel to estimate the bacground
-        kernel[0, 0], kernel[0, -1], kernel[-1, 0], kernel[-1, -1] = kernel[0, 0] + 1, kernel[0, -1] + 1, kernel[-1, 0] + 1, kernel[-1, -1] + 1 # emphasize corner contributions for background estimation
-        kernel /= kernel.sum()                                                                  # normalize the kernel
-        enhanced_img = np.clip((img - np.sum(patches * kernel[None, None, ...], axis=(-1, -2))), 0, max_val) # background estimation via convolution and subtract
-    elif method == 'MSobel':
-        enhanced_img = cal_msobel(img)
     else: # method == 'None'
         return img
 
@@ -453,7 +466,7 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
         mask = mask & is_local_topk(res, k=-1, connectivity=connectivity)
     elif method == 'CGC':
         # combined gradient and curvature
-        res1, res2 = cal_gcm(img, 'PGCM', size=d, sigma=1), cal_doh(img, sigma=1.5)
+        res1, res2 = cal_gcm(img, 'GCM', size=d, sigma=1), cal_doh(img, sigma=1.5)
         res2[mask] *= res1[mask]
         mask = mask & (res1 > 0.6) & is_local_topk(res2, k=-2, connectivity=connectivity)
     else:
