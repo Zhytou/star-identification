@@ -1,4 +1,4 @@
-import cv2
+import os, cv2
 import bisect as bis
 import numpy as np
 import scipy.ndimage as ndi
@@ -152,7 +152,7 @@ def cal_lcm(img: np.ndarray, method: str, size: int):
         measure = np.nanmin(
             np.where(
                 shift_mask,                                                                     # (8, h, w)
-                np.abs(mean_map[None, ...] - shifted_mean_map) * mean_map[None, ...],           # (8, h, w)
+                np.abs(mean_map[None, ...] - shifted_mean_map) * tmean_map[None, ...],           # (8, h, w)
                 np.nan
             ), axis=0
         )
@@ -225,7 +225,7 @@ def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=1):
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))                      # raw patches (h, w, d, d)
     flatten_patches = np.reshape(patches, (h, w, -1))                                           # flatten patches (h, w, d²)
 
-    if False:
+    if True:
         grad_x = cal_derivative(img, order=(0, 1), sigma=sigma)                                 # gradient x map (h, w)
         grad_y = cal_derivative(img, order=(1, 0), sigma=sigma)                                 # gradient y map (h, w)
     else:
@@ -268,16 +268,16 @@ def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=1):
         measure = cal_lcm(grad, 'DLCM', size)
     elif method == 'Zhang-GCM':
         '天基星图预处理技术研究 https://kns.cnki.net/KCMS/detail/detail.aspx?dbcode=CJFQ&dbname=CJFDLAST2024&filename=JGDJ202412041'
-        # 0. Sobel operator
+        ## 0. Sobel operator
         grad = np.hypot(grad_x, grad_y).astype(np.float32)
 
-        # 1. Morphology close
+        ## 1. Morphology close
         kernel = np.zeros((size, size), dtype=bool)
         kernel[:, r] = True
         kernel[r, :] = True
         grad = morph.closing(grad, footprint=kernel)
 
-        # 2. Edge suppression via 4-neighbor rule
+        ## 2. Edge suppression via 4-neighbor rule
         T = cal_threshold(img, 'Liebe3')
         count = ndi.convolve(img < T, kernel)
         measure = np.where(count < 2, grad, 0)
@@ -285,6 +285,54 @@ def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=1):
         measure = np.zeros_like(img)
 
     return measure
+
+
+def cal_morph(img: np.ndarray, method: str, size: int=7, margin: int=2):
+    '''
+        Calculate response under morphology operations.
+    '''
+    assert (size % 2 == 1 and margin % 2 == 0)
+
+    h, w = img.shape
+    d, dd = size, margin
+    r, rr = size // 2, margin // 2
+
+    if method == 'Morph':
+        selem = np.ones((d, d), dtype=bool)                                                     # structural element
+        response = morph.white_tophat(img, footprint=selem)                                     # enhanced image based on white top-hat
+
+    elif method == 'Jiang-Morph':
+        'Robust and accurate star segmentation algorithm based on morphology http://opticalengineering.spiedigitallibrary.org/article.aspx?doi=10.1117/1.OE.55.6.063101'
+        selem_m = np.ones((d + dd, d + dd), dtype=bool)                                         # structural element margin
+        selem_m[dd:-dd, dd:-dd] = 0
+        selem_e = np.ones((d, d), dtype=bool)                                                   # structural element
+        selem_s = np.ones((r, r), dtype=bool)                                                   # structural element
+
+        ## 1. Star Detection
+        response1 = morph.erosion(
+            morph.dilation(img, selem_m, mode='nearest'), 
+            selem_e, mode='nearest'
+        )
+        ## 2. Noise suppression
+        response2 = morph.dilation(
+            morph.erosion(img, selem_s, mode='nearest'), 
+            selem_s, mode='nearest'
+        )
+        ## 3. Combine two responses with modified top-hat
+        response = response2 - np.minimum(response1, response2)
+
+    elif method == 'Xu-Morph':
+        'Stray Light Elimination Method Based on Recursion Multi-Scale Gray-Scale Morphology for Wide-Field Surveillance https://ieeexplore.ieee.org/document/9333588'
+        response = np.zeros_like(img)
+
+    elif method == 'Xi-Morph':
+        '基于局部对比度的自适应Top-Hat红外小目标检测 http://www.opticsjournal.net/Articles/OJf9b777891546d03b/FullText'
+        response = np.zeros_like(img)
+
+    else:
+        response = np.zeros_like(img)
+
+    return response
 
 
 def cal_threshold(img: np.ndarray, method: str):
@@ -345,7 +393,6 @@ def binarize_image(img: np.ndarray, method: str, size: int=5):
     elif method == 'Xiao':
         'Entropic thresholding based on gray-level spatial correlation histogram https://ieeexplore.ieee.org/document/4761626/?arnumber=4761626'
         ## 0. Predefined parameters
-        size = 5
         gray_diff = 10
         gray_step = 8
         num_step = 1
@@ -401,6 +448,8 @@ def enhance_image(img: np.ndarray, method: str, size: int | list[int]=3, preserv
         enhanced_img = cal_pcm(img, method, size=d)
     elif method.endswith('GCM'):
         enhanced_img = cal_gcm(img, method, size=d, sigma=1)
+    elif method.endswith('Morph'):
+        enhanced_img = cal_morph(img, method, size=d)
     elif method == 'BEF':
         '星敏感器抗杂光背景滤波图像处理方法研究 https://doi.org/10.19328/j.cnki.1006-1630.2016.04.005'
         kernel = gen_gaussian_kernel(sigma=1, size=d)                                           # default gaussian kernel with a size of d
@@ -408,9 +457,6 @@ def enhance_image(img: np.ndarray, method: str, size: int | list[int]=3, preserv
         kernel[0, 0], kernel[0, -1], kernel[-1, 0], kernel[-1, -1] = kernel[0, 0] + 1, kernel[0, -1] + 1, kernel[-1, 0] + 1, kernel[-1, -1] + 1 # emphasize corner contributions for background estimation
         kernel /= kernel.sum()                                                                  # normalize the kernel
         enhanced_img = np.clip((img - np.sum(patches * kernel[None, None, ...], axis=(-1, -2))), 0, max_val) # background estimation via convolution and subtract
-    elif method == 'Top-Hat':
-        selem = np.ones((d, d), dtype=bool)                                                     # structural element
-        enhanced_img = morph.white_tophat(img, footprint=selem)                                 # enhanced image based on white top-hat
     elif method == 'Max-Median' or method == 'Max-Mean':
         'Max-Mean and Max-Median filters for detection of small-targets http://proceedings.spiedigitallibrary.org/proceeding.aspx?articleid=905421'
         opt_mask = np.zeros((4, d, d), dtype=bool)                                              # operation mask
@@ -441,7 +487,7 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
 
     d = size
     r = size // 2
-    padded_img = np.pad(img, ((r, r), (r, r)), mode='constant')                 # padded image
+    padded_img = np.pad(img, ((r, r), (r, r)))                                  # padded image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))      # image patches (h, w, d, d)
     max_intensity = 255 if img.dtype == 255 else 1.0                            # max intensity for image data type
 
@@ -462,9 +508,9 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
     ## 2. Double check with different operators 
     if method == 'DoH' or method == 'Ly':
         # https://doi.org/10.16251/j.cnki.1009-2307.2012.01.033
-        res = cal_doh(img, sigma=1) if method == 'DoH' else cal_ly(img, size=3)[1] # operator results (h, w)
+        res = cal_doh(img, sigma=1) if method == 'DoH' else cal_ly(img, size, sigma=1)[1] # operator results (h, w)
         mask = mask & is_local_topk(res, k=-1, connectivity=connectivity)
-    elif method == 'CGC':
+    elif method == 'Cgc':
         # combined gradient and curvature
         res1, res2 = cal_gcm(img, 'GCM', size=d, sigma=1), cal_doh(img, sigma=1.5)
         res2[mask] *= res1[mask]
@@ -510,14 +556,15 @@ def region_growth_label(img: np.ndarray, coords: np.ndarray, labels: np.ndarray,
         Label the image with region growth.
     '''
 
-    h, w = img.shape
+    assert np.all((img == 0) | (img == 1))
 
+    h, w = img.shape
     ## 1. Retain only foreground seeds
-    valid = img[coords[:, 0], coords[:, 1]] != 0
+    valid = img[coords[:, 0], coords[:, 1]] == 1
     coords, labels = coords[valid], labels[valid]
 
     ## 2. Do region growth on binary image, namely breadth first search
-    label_img, label_tab = np.zeros_like(img, np.uint32), UnionSet(arr=np.unique(labels)) #!NOTE: label equivalence table must be initialized with `np.unique(labels)` because the label indices  since labels may no longer form a contiguous sequence after foreground check
+    label_img, label_tab = np.zeros_like(img, np.uint32), UnionSet(arr=np.unique(labels)) #!NOTE: label equivalence table must be initialized with `np.unique(labels)` because the labels may no longer form a contiguous sequence after foreground check
     offsets = np.array([[1, 0], [-1, 0], [0, 1], [0, -1]]) if connectivity == 4 else np.array([[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]])
     while steps > 0 and len(coords) > 0:
         assert np.all(img[coords[:, 0], coords[:, 1]] == 1) and len(coords) == len(labels)
@@ -728,7 +775,7 @@ def find_ranges(nums: np.ndarray, threshold: int=0):
     return np.vstack([begs, ends]).transpose()
 
 
-def group_star(img: np.ndarray, method: list[str], size: int | list[int]=5, wind: int=15, connectivity: int=4, pixel_limit: int=5):
+def group_star(img: np.ndarray, method: list[str], size: int | list[int]=5, wind: int=15, connectivity: int=4, pixel_limit: int=5, output_dir: str=None):
     '''
         Group the potential star in the image.
     '''
@@ -781,5 +828,19 @@ def group_star(img: np.ndarray, method: list[str], size: int | list[int]=5, wind
         else:
             pass
             # print(i, rows, cols)
+
+    ## 5. Save intermediate results
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        cv2.imwrite(os.path.join(output_dir, 'img_d.png'), img)
+        cv2.imwrite(os.path.join(output_dir, 'img_e.png'), enhanced_img)
+        cv2.imwrite(os.path.join(output_dir, 'img_b.png'), binary_img * 255)
+
+        seed_img = np.zeros_like(img)
+        seed_img[coords[:, 0], coords[:, 1]] = 255
+        cv2.imwrite(os.path.join(output_dir, 'img_s.png'), seed_img)
+
+        combined_img = np.where((binary_img == 1) & (seed_img == 255), 255, 0)
+        cv2.imwrite(os.path.join(output_dir, 'img_c.png'), combined_img)
 
     return group_coords
