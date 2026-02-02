@@ -27,26 +27,23 @@ def gen_timestamp(fmt: str='%Y%m%d_%H'):
     return datetime.now().strftime(fmt)
 
 
-def gen_gaussian_kernel(sigma: float, size: int, x: np.ndarray=None, order: int=2, normalize: bool=True):
+def gen_gaussian_kernel(sigma: float, size: int=None, x: np.ndarray=None, normalize: bool=True):
     '''
         Generate a gaussian kernel.
     '''
-    assert size % 2 == 1 and (order in (1, 2) or (x is not None and x.ndim in (1, 2)))
+    assert (x is not None or (size is not None and size % 2 == 1))
 
-    r = size // 2
     if x is None:
+        r = size // 2
         x = np.arange(-r, r + 1)
-        if order == 1:
-            xx = x ** 2
-        else:  # order == 2
-            x1, x2 = np.meshgrid(x, x)
-            xx = x1 ** 2 + x2 ** 2
+        x1, x2 = np.meshgrid(x, x)
+        xx = x1 ** 2 + x2 ** 2
     else:
         xx = x ** 2
         
     kernel = np.exp(- xx / (2 * sigma **2))
     if normalize:
-        kernel /= kernel.sum()
+        kernel /= np.sum(kernel, axis=(-1, -2), keepdims=True)
 
     return kernel
 
@@ -60,7 +57,7 @@ def cal_derivative(img: np.ndarray, order: tuple[int, int], sigma: float):
     # change image data type to avoid overflow
     fimg = img.astype(np.float64)
 
-    return gaussian_filter(fimg, sigma=sigma, order=order, axes=(-2, -1))
+    return gaussian_filter(fimg, sigma=sigma, order=order, axes=(-2, -1), mode='nearest')
 
 
 def cal_doh(img: np.ndarray, sigma: float):
@@ -106,6 +103,7 @@ def cal_dog(img: np.ndarray, sigma1: float, sigma2: float):
 def cal_ly(img: np.ndarray, size: int=3, sigma: float=0):
     '''
         Calculate the ly operator result.
+        基于改进的Ly算子的快速星图质心确定方法 https://doi.org/10.16251/j.cnki.1009-2307.2012.01.033
     '''
     assert img.ndim == 2 or img.ndim == 3
     kernel = np.ones((size, size))
@@ -116,12 +114,12 @@ def cal_ly(img: np.ndarray, size: int=3, sigma: float=0):
         dx = cal_derivative(img, order=(0, 1), sigma=sigma)
         dy = cal_derivative(img, order=(1, 0), sigma=sigma)
     else:
-        dx = sobel(img, axis=1)
-        dy = sobel(img, axis=0)
+        dx = sobel(img, axis=1, mode='nearest')
+        dy = sobel(img, axis=0, mode='nearest')
     
-    sum_dx2 = convolve(dx * dx, kernel)
-    sum_dxdy = convolve(dx * dy, kernel)
-    sum_dy2 = convolve(dy * dy, kernel)
+    sum_dx2 = convolve(dx * dx, kernel, mode='nearest')
+    sum_dxdy = convolve(dx * dy, kernel, mode='nearest')
+    sum_dy2 = convolve(dy * dy, kernel, mode='nearest')
 
     ## 2. Compute trace and determinant of the 2x2 structure tensor at every pixel
     tr = sum_dx2 + sum_dy2
@@ -133,20 +131,54 @@ def cal_ly(img: np.ndarray, size: int=3, sigma: float=0):
     return q, w
 
 
-def cal_sobel(img: np.ndarray, sigma: float):
+def cal_msobel(img: np.ndarray, sigma: float=1):
     '''
-        Calculate the sobel operator result.
+        Calculate the modified sobel operator result.
+        基于星敏感器的星图预处理与星点提取技术研究 https://doi.org/10.27060/d.cnki.ghbcu.2020.001632
     '''
-    assert img.ndim == 2 or img.ndim == 3
-    
-    if sigma > 0:
-        dx = cal_derivative(img, order=(0, 1), sigma=sigma)
-        dy = cal_derivative(img, order=(1, 0), sigma=sigma)
-    else:
-        dx = sobel(img, axis=1)
-        dy = sobel(img, axis=0)
+    assert img.ndim == 2
 
-    return np.hypot(dx, dy)
+    h, w = img.shape
+    kenerls = np.array([
+        # 0
+        [[-1, -2, -1],
+        [0, 0, 0],
+        [1, 2, 1]],
+        # 45
+        [[-2, -1, 0],
+        [-1, 0, 1],
+        [0, 1, 2]],
+        # 90
+        [[-1, 0, 1],
+        [-2, 0, 2],
+        [-1, 0, 1]],
+        # 135
+        [[0, 1, 2],
+        [-1, 0, 1],
+        [-2, -1, 0]],
+        # 180
+        [[1, 2, 1],
+        [0, 0, 0],
+        [-1, -2, -1]],
+        # 225
+        [[2, 1, 0],
+        [1, 0, -1],
+        [0, -1, -2]],
+        # 270
+        [[1, 0, -1],
+        [2, 0, -2],
+        [1, 0, -1]],
+        # 315
+        [[0, -1, -2],
+        [1, 0, -1],
+        [2, 1, 0]],
+    ])
+
+    responses = np.zeros((8, h, w))
+    for i in range(8):
+        responses[i] = convolve(img, kenerls[i], mode='reflect')
+
+    return np.linalg.norm(responses, axis=0)
 
 
 def cal_angdist(points1: np.ndarray, points2: np.ndarray=None):
@@ -240,7 +272,7 @@ def find_overlap_and_unique(a: np.ndarray, b: np.ndarray, threshold: float=2, re
         Find the overlap and unique parts of two point sets.
     '''
     if a.size == 0 or b.size == 0:
-        res = np.array([]), np.array([]), a, b
+        res = np.zeros((0, 2)), np.zeros((0, 2)), a, b
         if return_count_only:
             return tuple(map(len, res))
         else:
@@ -317,7 +349,7 @@ def is_local_topk(img: np.ndarray, k: int, connectivity: int=4):
     else:  # connectivity == 8
         footprint = np.ones((3, 3), dtype=bool)
 
-    local_topk = rank_filter(img, rank=k, footprint=footprint, mode='constant', cval=-np.inf)
+    local_topk = rank_filter(img, rank=k, footprint=footprint, mode='nearest')
 
     return img >= local_topk
 
@@ -331,7 +363,7 @@ def is_near_local_max(img: np.ndarray, threshold: float, connectivity: int=4):
     else:  # connectivity == 8
         footprint = np.ones((3, 3), dtype=bool)
 
-    max_map = maximum_filter(img, footprint=footprint, mode='constant', cval=-np.inf)
+    max_map = maximum_filter(img, footprint=footprint, mode='nearest')
     
     return max_map - img < threshold
 
@@ -451,6 +483,22 @@ def plot_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gr
         ax.plot_surface(
             x, y, z, 
             cmap=color_map, 
+            linewidth=0,
+            antialiased=True,
+            alpha=0.9,
+            edgecolor='none'
+        )
+        ax.contour(
+            x, y, z, 
+            zdir='z', 
+            offset=np.min(z)-10, 
+            cmap=color_map, 
+            alpha=0.5
+        )
+    elif method == 'plot_wireframe':
+        ax.plot_wireframe(
+            x, y, z, rstride=1, cstride=1, 
+            color='royalblue', linewidth=0.8, alpha=0.7
         )
     else: # method == 'bar3d'
         x, y = x.flatten(), y.flatten()
@@ -592,7 +640,8 @@ def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: n
     _, matched_coords, missed_coords, false_coords = find_overlap_and_unique(real_coords, esti_coords, dist_threshold)
     detect_res = np.vstack([
         np.hstack([coords, np.full((coords.shape[0], 1), i, dtype=int)])
-        for i, coords in enumerate([real_coords, esti_coords])
+        # for i, coords in enumerate([real_coords, esti_coords])
+        for i, coords in enumerate([real_coords, matched_coords, false_coords])
     ])
 
     _, ax = plt.subplots(figsize=(10, 10))
@@ -609,8 +658,8 @@ def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: n
 
     legends = [
         Line2D([0], [0], marker='+', linestyle='None', mec='red', mfc='red', ms=14, mew=3, label='真实星点位置'),
-        Line2D([0], [0], marker='^', linestyle='None', mec='yellow', mfc='none', ms=14, mew=3, label='算法输出位置'),
-        # Line2D([0], [0], marker='o', linestyle='None', mec='blue', mfc='none', ms=14, mew=3, label='错误检测')
+        Line2D([0], [0], marker='^', linestyle='None', mec='yellow', mfc='none', ms=14, mew=3, label='正确检测目标'),
+        Line2D([0], [0], marker='o', linestyle='None', mec='blue', mfc='none', ms=14, mew=3, label='错误检测目标')
     ]
     ax.legend(
         handles=legends, 
@@ -624,12 +673,15 @@ def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: n
             ax.plot(col, row, 'r+', ms=10, mew=2)                           # red cross
         elif label == 1:
             ax.plot(col, row, '^', mec='yellow', mfc='none', ms=10, mew=2)  # yellow triangle
-        else: # label == 2
+        elif label == 2:
             ax.plot(col, row, 'o', mec='blue', mfc='none', ms=10, mew=2)    # blue circle
-
+        else: # label == 3:
+            ax.plot(col, row, 's', mec='green', mfc='none', ms=10, mew=2)   # green rectangle
+    
     if info:
         print(
-            'Total Number of Stars:', len(real_coords),
+            'Detect by:', os.path.basename(output_path),
+            '\nTotal Number of Stars:', len(real_coords),
             '\nNumber of Matched Stars:', len(matched_coords),
             '\nNumber of Miss Stars:', len(missed_coords),
             '\nNumber of False Stars:', len(false_coords),
@@ -642,29 +694,48 @@ def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: n
     save_and_show(output_path, show)
 
 
-def label_grad_field(img: np.ndarray, sigma: float, scale: float=1, show: bool=True, output_path: str=None):
+def label_grad_field(img: np.ndarray, coords: np.ndarray, size: int=7, sigma: float=1, scale: float=1, show: bool=True, output_dir: str=None, file_name: str='result.png'):
     '''
         Plot the gradient vector field.
     '''
+
     eps = 1e-10
     h, w = img.shape
+    d = size
+    r = d // 2
 
     # compute gradients
-    grad_y, grad_x = cal_derivative(img, order=(1, 0), sigma=sigma), cal_derivative(img, order=(0, 1), sigma=sigma)
+    if False:
+        grad_y = sobel(img, axis=0, mode='nearest')
+        grad_x = sobel(img, axis=1, mode='nearest')
+    else:
+        grad_y = cal_derivative(img, order=(1, 0), sigma=sigma)
+        grad_x = cal_derivative(img, order=(0, 1), sigma=sigma)
     grad = np.hypot(grad_y, grad_x)
-    max_grad = np.max(grad, initial=eps)
-    grad_y, grad_x = grad_y / max_grad, grad_x / max_grad
     
-    # create grid
-    y, x = np.meshgrid(np.arange(0, h), np.arange(0, w), indexing='ij')
+    # plot sub-image gradients
+    for y, x in coords:
+        x1, y1 = max(x - r, 0), max(y - r, 0)
+        x2, y2 = min(x + r + 1, w), min(y + r + 1, h)
+        grad_max = max(np.max(grad[y1:y2, x1:x2]), eps)
 
-    # create ax and quiver
-    _, ax = plt.subplots(figsize=(10, 10))
-    ax.imshow(img, cmap='gray', vmin=0, vmax=255, origin='upper')
-    ax.axis('off')
-    ax.quiver(x, y, grad_x, grad_y, color='r', angles='xy', scale_units='xy', scale=scale)
+        # create grid
+        yy, xx = np.meshgrid(np.arange(0, d), np.arange(0, d), indexing='ij')
 
-    save_and_show(output_path, show)
+        # create ax and quiver
+        _, ax = plt.subplots(figsize=(10, 10))
+        ax.imshow(img[y1:y2, x1:x2], cmap='gray', vmin=0, vmax=255, origin='upper')
+        ax.axis('off')
+        ax.quiver(xx, yy, grad_x[y1:y2, x1:x2] / grad_max, grad_y[y1:y2, x1:x2] / grad_max, color='r', angles='xy', scale_units='xy', scale=scale)
+
+        save_and_show(os.path.join(output_dir, f'{y} {x}.png'), show)
+
+    # plot labelled image
+    plt.imshow(img, cmap='gray', vmin=0, vmax=255, origin='upper')
+    for y, x in coords:
+        plt.plot(x, y, 's', mec='yellow', mfc='none', ms=d, mew=2)
+    plt.axis('off')
+    save_and_show(os.path.join(output_dir, file_name), show)
 
 
 def describe_database(db: pd.DataFrame):
