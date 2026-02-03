@@ -1,9 +1,12 @@
 import os, json, numbers
+from datetime import datetime
+from itertools import combinations
+from math import gcd
+from functools import reduce
 import numpy as np
 import pandas as pd
-from itertools import combinations
 import matplotlib.pyplot as plt
-from datetime import datetime
+import matplotlib.patches as patches
 from matplotlib.lines import Line2D
 from scipy.ndimage import rank_filter, maximum_filter, gaussian_filter, sobel, convolve
 from skimage.metrics import mean_squared_error, peak_signal_noise_ratio, structural_similarity
@@ -46,6 +49,20 @@ def gen_gaussian_kernel(sigma: float, size: int=None, x: np.ndarray=None, normal
         kernel /= np.sum(kernel, axis=(-1, -2), keepdims=True)
 
     return kernel
+
+
+def gen_integer_approximation(kernel: np.ndarray, scale_factor: int=1000):
+    '''
+        Generate integer approximation of input kernel.
+    '''
+
+    scaled = np.round(kernel * scale_factor).astype(np.int64)
+    non_zeros = np.abs(scaled[scaled != 0])
+    if non_zeros.size == 0:
+        return scaled
+    
+    common_divisor = reduce(gcd, non_zeros)
+    return (scaled // common_divisor)
 
 
 def cal_derivative(img: np.ndarray, order: tuple[int, int], sigma: float):
@@ -461,7 +478,56 @@ def quest(v: np.ndarray, w: np.ndarray, weights: np.ndarray=None):
     return u @ vh
 
 
-def plot_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gray', label_text: bool=False):
+def plot_well_grid(img: np.ndarray, grid_len:int, show: bool=True, output_path: str=None):
+    '''
+        Plot a 3x3 grid ("well" pattern) over a grayscale image.
+    '''
+
+    h, w = img.shape
+    d = grid_len
+    assert h == w and h == 3 * d
+
+    # 1. Initialize figure
+    _, ax = plt.subplots(figsize=(8, 8))
+    ax.imshow(img, cmap='gray', interpolation='nearest')
+    ax.axis('off')
+
+    # 2. Draw grid lines (between cells)
+    line_style = dict(color='yellow', linewidth=2, linestyle='--')
+    for i in range(1, 3):
+        ax.axvline(x=i * d - 0.5, **line_style)
+        ax.axhline(y=i * d - 0.5, **line_style)
+
+    # 3. Draw inner rectangle
+    rect_inner = patches.Rectangle((d - 0.5, d - 0.5), d, d, linewidth=3, edgecolor='red', facecolor='none')
+    ax.add_patch(rect_inner)
+
+    # 4. Draw outer rectangle
+    rect_outer = patches.Rectangle((-0.5, -0.5), 3 * d, 3 * d, linewidth=4, edgecolor='red', facecolor='none')
+    ax.add_patch(rect_outer)
+
+    # 5. Label the rectangle
+    labels = [
+        [1, 2, 3],
+        [4, 0, 5],
+        [6, 7, 8],
+    ]
+    
+    centers = [d // 2, d + d // 2, 2 * d + d // 2]
+    for r in range(3):
+        for c in range(3):
+            label_val = labels[r][c]
+            ax.text(
+                centers[c], centers[r], str(label_val), 
+                color='white' if label_val != 0 else 'red',
+                fontsize=20, fontweight='bold',
+                va='center', ha='center'
+            )
+
+    save_and_show(output_path, show)
+
+
+def plot_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gray', basis_plane: bool=True, label_text: bool=False, show: bool=True, output_path: str=None):
     '''
         Plot the gray image in 3 dimension.
     '''
@@ -485,22 +551,25 @@ def plot_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gr
             cmap=color_map, 
             linewidth=0,
             antialiased=True,
+            rcount=100, ccount=100,
             alpha=0.9,
             edgecolor='none'
         )
-        ax.contour(
-            x, y, z, 
-            zdir='z', 
-            offset=np.min(z)-10, 
-            cmap=color_map, 
-            alpha=0.5
-        )
+        # ax.contour(
+        #     x, y, z, 
+        #     zdir='z', 
+        #     offset=np.min(z)-10, 
+        #     cmap=color_map, 
+        #     alpha=0.5
+        # )
     elif method == 'plot_wireframe':
         ax.plot_wireframe(
             x, y, z, rstride=1, cstride=1, 
             color='royalblue', linewidth=0.8, alpha=0.7
         )
-    else: # method == 'bar3d'
+    elif method == 'contour3D':
+        ax.contour3D(x, y, z, 50, cmap='magma')
+    elif method == 'bar3d':
         x, y = x.flatten(), y.flatten()
         dx = dy = 0.9       # bar width
         dz = z.flatten()    # bar height
@@ -511,6 +580,12 @@ def plot_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gr
             linewidth=0.3,
             alpha=0.9
         )
+    else: # method == 'imshow':
+        plt.imshow(img, cmap=color_map)
+
+    if basis_plane:
+        ax.set_zlim(-50, 50)
+        ax.plot_surface(x, y, np.zeros_like(img), color='black', alpha=0.2, zorder=0)
 
     # label text
     if label_text:
@@ -522,7 +597,9 @@ def plot_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gr
     
     # image title
     # ax.set_title(title)
-    plt.show()
+
+    # save and show figure
+    save_and_show(output_path, show)
 
 
 def plot_freq_spectrum(img: np.ndarray):
@@ -728,7 +805,7 @@ def label_grad_field(img: np.ndarray, coords: np.ndarray, size: int=7, sigma: fl
         ax.axis('off')
         ax.quiver(xx, yy, grad_x[y1:y2, x1:x2] / grad_max, grad_y[y1:y2, x1:x2] / grad_max, color='r', angles='xy', scale_units='xy', scale=scale)
 
-        save_and_show(os.path.join(output_dir, f'{y} {x}.png'), show)
+        save_and_show(os.path.join(output_dir, f'{y}_{x}.png'), show)
 
     # plot labelled image
     plt.imshow(img, cmap='gray', vmin=0, vmax=255, origin='upper')
