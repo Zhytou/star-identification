@@ -346,7 +346,7 @@ def create_star_image(ra: float, de: float, roll: float, sigma_g: float=0.0, pro
     # set image background
     if isinstance(background, np.ndarray):
         img = np.copy(background).astype(dtype)
-    elif background == np.inf or np.isnan(background):
+    elif np.isinf(background) or np.isnan(background):
         img = np.zeros((h, w), dtype)
     else:
         I_max = 255 if dtype == np.uint8 else 1.0
