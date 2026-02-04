@@ -25,7 +25,7 @@ def add_stellar_noise(img: np.ndarray, method: str='Gaussian', luminosity: float
     I0 = get_stellar_intensity(luminosity, I_max)
     y0, x0 = position
 
-    if sigma_y == -1:
+    if sigma_y < 0 or sigma_y == None:
         sigma_y = sigma_x
 
     if method == 'Constant':

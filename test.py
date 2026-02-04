@@ -367,6 +367,8 @@ def verify(cata: pd.DataFrame, coords: np.ndarray, ids: np.ndarray, probs: np.nd
     ids[mask] = np.where(verified, ids[mask], -1)
 
     ### 3.calculate the attitude matrix
+    if np.sum(verified) < 2:
+        return ids, None
     att_mat = traid(vvs[verified].T, rvs[verified].T)
 
     return ids, att_mat

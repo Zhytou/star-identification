@@ -615,7 +615,8 @@ def gen_real_sample(img_paths: list[str], meth_params: dict, extr_params: dict, 
             seg_meth=extr_params['seg'],
             cen_meth=extr_params['cen'],
             pixel_limit=extr_params['pixel'],
-            need_gray=True,
+            size=5,
+            gray=True,
         )
         coords = points[:, :2]
         grays = points[:, 2]

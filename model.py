@@ -494,6 +494,48 @@ class ConvBlock(nn.Module):
         return y
 
 
+class OLightCNN(nn.Module):
+    '''
+        The one dimension convolutional neural network model.
+    '''
+    def __init__(self, num_feat: int, num_class: int):
+        '''
+            input_dim: the dimension of the features
+            output_dim: the number of the class(guide star)
+        '''
+
+        super(OLightCNN, self).__init__()
+        
+        self.conv = nn.Sequential(
+            ConvBlock(1, 32),
+            
+            ConvBlock(32, 32),
+
+            ConvBlock(32, 64),
+
+            ConvBlock(64, 64),
+            
+            ConvBlock(64, 128),
+
+            nn.Conv1d(128, num_class, kernel_size=1),
+
+            # global avg pool
+            # output batch_size*64*1
+            nn.AdaptiveAvgPool1d(output_size=1)
+        )
+
+    def forward(self, x):
+        # x is composed of two input: raidal features and cyclic features
+        # convert x.shape from [batch_size, num_ring+num_sector*num_neighbor]
+        # into [batch_size, 1, num_ring+num_sector*num_neighbor]
+        x = x.unsqueeze(1)
+
+        # apply the convolutional layers and remove the last dimension
+        y = self.conv(x).squeeze(-1)
+
+        return y
+
+
 class LightCNN(nn.Module):
     '''
         The one dimension convolutional neural network model.
@@ -588,7 +630,8 @@ def create_model(method: str, model_type: str, meth_params: list, num_class: int
         'cnn3': CNN3,
         'cnn4': CNN4,
         'cnn5': CNN5,
-        'lcnn': LightCNN,
+        'lcnn': OLightCNN,
+        # 'lcnn': LightCNN,
     }
 
     method_mapping = {
