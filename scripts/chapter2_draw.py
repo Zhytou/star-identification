@@ -9,7 +9,7 @@ from utils import cal_angdist, plot_gray_3d, label_star_image
 
 
 # 灰度分布模型
-if True:
+if False:
     mag = 3
     psf = 0.7
     img = draw_star(np.zeros((7, 7), dtype=np.uint8), (3.5, 3.5), mag, sigma=psf)
@@ -100,6 +100,7 @@ if False:
         h=h, w=w, 
         fovy=fov, fovx=fov, 
         limit_mag=limit_mag, 
+        background=7,
     )
 
     row, col = 100, 200
@@ -107,10 +108,10 @@ if False:
     top_left = (col-d-1, row-d-1)
     bot_right = (col+d+1, row+d+1)
 
-    # img1 = add_gaussian_and_pepper_noise(img0, sigma_g=0.07, prob_p=0.001)
-    # img1, crop_img1 = extract_rect(img1, top_left, bot_right)    
-    # cv2.imwrite('res/chapter2/sim/noise.png', img1)
-    # cv2.imwrite('res/chapter2/sim/noise_scale.png', crop_img1)
+    img1 = add_gaussian_and_pepper_noise(img0, sigma_g=0.05, prob_p=0.001)
+    img1, crop_img1 = extract_rect(img1, top_left, bot_right)    
+    cv2.imwrite('res/chapter2/sim/noise.png', img1)
+    cv2.imwrite('res/chapter2/sim/noise_scale.png', crop_img1)
 
     img2 = add_stellar_noise(img0, method='Gaussian', position=(h//2, w//3), luminosity=4, sigma_x=64)
     img2, crop_img2 = extract_rect(img2, top_left, bot_right)

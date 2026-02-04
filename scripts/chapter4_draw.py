@@ -2,16 +2,16 @@ import os, cv2, torch, h5py
 import numpy as np
 import pandas as pd
 
-from simulate import cata, cal_zxz_euler
+from simulate import cata
 from denoise import basic_filter
 from detect import cal_threshold
 from extract import get_star_centroids
 from model import create_model
-from realshot import identify_realshot_by_nn, cal_attitude, load_h5data
+from realshot import identify_realshot_by_nn, load_h5data
 from utils import gen_timestamp, cal_angdist, plot_line_chart
 
 
-DEBUG = False
+DEBUG = True
 
 
 # 仿真实验结果作图
@@ -230,14 +230,13 @@ if False:
 
     # 验证连通性标记正确性
     num_label, limg3 = cv2.connectedComponents(img3, connectivity=4)
-    print(limg3.dtype)
     img4 = cv2.imread(os.path.join(dir, thr_meth, name+'_label'+exten), cv2.IMREAD_GRAYSCALE)
     assert num_label == len(np.unique(img4)), 'Wrong connected compononets labeling!'
 
-    esti_coords = np.array(get_star_centroids(
-        img0, 'MEDIAN', ['None', thr_meth, 'CCL', 'None'], 
-        'MCoG', pixel_limit=5, need_gray=True
-    ))
+    esti_coords = get_star_centroids(
+        img0, 'MMedian', ['None', thr_meth, 'CCL', 'None'], 
+        'MCoG', pixel_limit=5, gray=True
+    )
     # matlab starpoints结果为行、列以及灰度和
     # 其中，由于matlab计算时从1开始，所以理论上应该比esti_coords大0.5
     with h5py.File(os.path.join(dir, thr_meth, 'starpoints.h5'), 'r') as f:
@@ -328,7 +327,9 @@ if False:
 if True:
     # 清华测试图像大小以及拍摄焦距
     h, w, f = 1040, 1288, 18500/4.8
-
+    # 和matlab结果比较时，坐标误差阈值
+    cen_err_threshold = 0.2
+    
     # 参数
     simu_params = {
         'h': h,
@@ -339,6 +340,7 @@ if True:
         'limit_mag': 5.5,
         'rot': 1
     }
+
     meth_params = {
         'rac_nn': [
             0.5,            # Rb
@@ -358,14 +360,16 @@ if True:
 
     data, dfs, img_paths = [], [], []
     test_dir = 'realshot/tsinghua'
-    test_prefixs = ['0P0', '1P0', ]
+    test_num = 100
+    test_prefixs = ['0P0', ]
+    # target_img_paths = ['realshot/tsinghua/0P0/00000008_000000000198857B.bmp', 'realshot/tsinghua/1P0/00005088_0000000001B4D132.bmp', 'realshot/tsinghua/1P0/00005188_0000000001B51271.bmp', 'realshot/tsinghua/2P0/00003067_0000000001A9C63A.bmp', 'realshot/tsinghua/3P0/00001051_00000000019D162E.bmp']
     save_dir = 'res/chapter4/multiple_realshot'
     for prefix in test_prefixs:
         # 加载每个数据集中的测试数据
-        subdata = load_h5data(os.path.join(test_dir, prefix), f'{prefix}_liebe5_pixel5_eps00005.h5')
-        subimg_paths = [item['path'] for item in subdata[:1]]
-        img_paths.extend(subimg_paths)
-        
+        subdata = load_h5data(os.path.join(test_dir, prefix), f'{prefix}_liebe5_pixel5_eps00005.h5')[:test_num]
+        subimg_paths = [item['path'] for item in subdata]
+        # subimg_paths = [item['path'] for item in subdata if item['path'] in target_img_paths]
+
         # 使用模型进行识别，并保存识别结果
         df_dict = identify_realshot_by_nn(
             subimg_paths, 
@@ -373,16 +377,17 @@ if True:
             meth_params,
             extr_params,
             model_types={
-                'rac_nn': 'cnn3',
+                'rac_nn': 'lcnn',
             },
             gcata_path='catalogue/sao5.5_d0.03_9_10.csv', # guide star catalogue，
-            eps0=1e-4, # threshold for verify
-            eps1=5e-5, # threshold for postprocess triangle match
+            eps0=3e-4, # threshold for verify
+            eps1=3e-4, # threshold for postprocess triangle match
             eps2=1e-3, # threshold for postprocess unidentified star angular match
-            output_dir=os.path.join(save_dir, prefix),
+            # output_dir=os.path.join(save_dir, prefix),
         )
         dfs.append(df_dict['rac_nn'])
         data.extend(subdata)
+        img_paths.extend(subimg_paths)
 
     df = pd.concat(dfs, ignore_index=True, copy=False)
     # 每张测试图片正确识别恒星数量
@@ -403,36 +408,32 @@ if True:
         esti_coords += 0.5
 
         cnt = 0
-        # 坐标误差阈值
-        err = 0.5
         # 和matlab识别结果进行比较
         for real_coord, real_id in zip(real_coords, real_ids):
-            mask = np.isclose(esti_coords, real_coord, atol=err).all(axis=1)
+            mask = np.isclose(esti_coords, real_coord, atol=cen_err_threshold).all(axis=1)
             idx = np.where(mask)[0]
             if len(idx) == 0:
                 continue
             idx = idx[0]
 
-            assert np.allclose(esti_coords[idx], real_coord, atol=err)
+            assert np.allclose(esti_coords[idx], real_coord, atol=cen_err_threshold)
             cnt += 1 if esti_ids[idx] == real_id else 0
         
         res[img_path] = cnt
         if cnt < 3:
             failed_img_paths.append(img_path)
         
-        if True: 
+        if DEBUG and cnt < 3: 
             print(
                 'Image:', os.path.basename(img_path),
-                # '\nReal coords:\n', real_coords,
-                # '\nReal ids:\n', real_ids,
-                # '\nReal attitude:\n', real_atti,
-                # '\nEsti coords:\n', esti_coords,
-                # '\nEsti ids:\n', esti_ids,
-                # '\nEsti attitude:\n', esti_atti,
                 '\nNumber of stars:', len(flags),
                 '\nNumber of valid patterns:', np.sum(flags[:, 0]),
                 '\nNumber of verified patterns:', np.sum(flags[:, 1]),
                 '\nNumber of correct match:', cnt, 
+                '\nReal coords:\n', real_coords,
+                '\nReal ids:\n', real_ids,
+                '\nEsti coords:\n', esti_coords,
+                '\nEsti ids:\n', esti_ids,
                 '\n',
             )
 
@@ -441,7 +442,6 @@ if True:
         prefix = os.path.basename(os.path.dirname(img_path))
         img_id = os.path.splitext(os.path.basename(img_path))[0]+'.png'
         dir = os.path.join(save_dir, prefix, 'identify')
-        print(dir, img_id, os.listdir(dir))
         if img_id in os.listdir(dir):
             os.remove(os.path.join(dir, img_id))
 
