@@ -127,20 +127,16 @@ def cal_ly(img: np.ndarray, size: int=3, sigma: float=0):
 
     ## 1. Construct gradient covariance matrix with first derivatives
     # gradient covariance matrix = np.array([[Σdx², Σ(dx·dy)], [Σ(dx·dy), Σdy²]])
-    if sigma > 0:
-        dx = cal_derivative(img, order=(0, 1), sigma=sigma)
-        dy = cal_derivative(img, order=(1, 0), sigma=sigma)
-    else:
-        dx = sobel(img, axis=1, mode='nearest')
-        dy = sobel(img, axis=0, mode='nearest')
-    
-    sum_dx2 = convolve(dx * dx, kernel, mode='nearest')
-    sum_dxdy = convolve(dx * dy, kernel, mode='nearest')
-    sum_dy2 = convolve(dy * dy, kernel, mode='nearest')
+    dx = cal_derivative(img, order=(0, 1), sigma=sigma)
+    dy = cal_derivative(img, order=(1, 0), sigma=sigma)
+
+    sum_dx2 = convolve(dx * dx, kernel)
+    sum_dxdy = convolve(dx * dy, kernel)
+    sum_dy2 = convolve(dy * dy, kernel)
 
     ## 2. Compute trace and determinant of the 2x2 structure tensor at every pixel
     tr = sum_dx2 + sum_dy2
-    det = sum_dxdy ** 2 - sum_dx2 * sum_dy2
+    det = sum_dx2 * sum_dy2 - sum_dxdy ** 2
     eps = 1e-10                     # constant value to avoid division by zero
     q = 4.0 * det / (tr * tr + eps) # anisotropy measure
     w = det / (tr + eps)            # strength of the local structure
@@ -527,9 +523,40 @@ def plot_well_grid(img: np.ndarray, grid_len:int, show: bool=True, output_path: 
     save_and_show(output_path, show)
 
 
-def plot_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gray', basis_plane: bool=True, label_text: bool=False, show: bool=True, output_path: str=None):
+def plot_gray_2d(img: np.ndarray, color_map: str='gray', color_bar: bool=False, axis_on: bool=False, text: bool=False, show: bool=True, output_path: str=None):
     '''
-        Plot the gray image in 3 dimension.
+        Plot the gray image in 2 dimensions.
+    '''
+
+    h, w = img.shape
+
+    fig, ax = plt.subplots(figsize=(8, 8))    
+    im = ax.imshow(img, cmap=color_map, aspect='equal')
+
+    if color_bar:
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    
+    if axis_on:
+        ax.set_xticks(np.arange(w))
+        ax.set_yticks(np.arange(h))
+        ax.set_xticklabels(np.arange(1, w + 1))
+        ax.set_yticklabels(np.arange(1, h + 1))
+    
+    if text:
+        T = img.max() / 2.
+        for i in range(h):
+            for j in range(w):
+                ax.text(
+                    j, i, int(img[i, j]), ha="center", va="center",
+                    fontsize=10, color="white" if img[i, j] < T else "black",
+                )
+
+    save_and_show(output_path, show)
+
+
+def plot_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gray', basis_plane: bool=False, zrange: tuple=None, label_text: bool=False, show: bool=True, output_path: str=None):
+    '''
+        Plot the gray image in 3 dimensions.
     '''
     # get the image size
     h, w = img.shape
@@ -541,7 +568,7 @@ def plot_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gr
     z = img
     
     # create 3d axes
-    fig = plt.figure()
+    fig = plt.figure(figsize=(8, 8))
     ax = fig.add_subplot(111, projection='3d')
 
     # plot surface/bar3d
@@ -587,17 +614,16 @@ def plot_gray_3d(img: np.ndarray, method: str='plot_surface', color_map: str='gr
         ax.set_zlim(-50, 50)
         ax.plot_surface(x, y, np.zeros_like(img), color='black', alpha=0.2, zorder=0)
 
+    if zrange:
+        ax.set_zlim(zrange)
+
     # label text
     if label_text:
         plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
         ax.set_xlabel('X/像素', labelpad=5)
         ax.set_ylabel('Y/像素', labelpad=5)
-        # ax.set_zlabel('Z')
         ax.set_zlabel('灰度', rotation=90)
     
-    # image title
-    # ax.set_title(title)
-
     # save and show figure
     save_and_show(output_path, show)
 
