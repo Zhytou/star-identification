@@ -13,38 +13,6 @@ cata['Y'] = np.sin(cata['Ra'])*np.cos(cata['De'])
 cata['Z'] = np.sin(cata['De'])
 
 
-def add_stellar_noise(img: np.ndarray, method: str='Gaussian', luminosity: float=5.5, position: tuple[int, int]=(0, 0), sigma_x: int=100, sigma_y: int=-1):
-    '''
-        Add stellar noise.
-    '''
-    h, w = img.shape
-    y, x = np.linspace(0, h-1, h), np.linspace(0, w-1, w)
-    y, x = np.meshgrid(y, x, indexing='ij')
-
-    I_max = 255 if img.dtype == np.uint8 else 1.0
-    I0 = get_stellar_intensity(luminosity, I_max)
-    y0, x0 = position
-
-    if sigma_y < 0 or sigma_y == None:
-        sigma_y = sigma_x
-
-    if method == 'Constant':
-        noise = np.full((h, w), I0)
-    elif method == 'Gaussian':
-        x2, y2 = (x - x0)**2, (y - y0)**2
-        noise = np.clip(I0 * np.exp(- x2 / (2 * sigma_x**2) - y2 / (2 * sigma_y**2)), 0, I_max)
-    elif method == 'Linear_X': # column direction
-        noise = np.clip((1 - (x - x0) / (w - x0)) * I0, 0, I_max)
-    elif method == 'Linear_Y': # row direction
-        noise = np.clip((1 - (y - y0) / (h - y0)) * I0, 0, I_max)
-    else: # method == 'None':
-        return img
-        
-    noised_img = np.clip(img + noise, 0, I_max).astype(img.dtype)
-
-    return noised_img
-
-
 def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float) -> np.ndarray:
     """
         Add gaussian and pepper-salt noise.
@@ -74,6 +42,36 @@ def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float
     noised_img = np.clip(noised_img, 0, max_value).astype(img.dtype)
 
     return noised_img
+
+
+def gen_stellar_background(h: int, w: int, method: str='Gaussian', luminosity: float=5.5, position: tuple[int, int]=(0, 0), sigma_x: int=100, sigma_y: int=-1, rho: float=0.0, dtype: type=np.uint8):
+    '''
+        Add stellar noise.
+    '''
+    y, x = np.linspace(0, h-1, h), np.linspace(0, w-1, w)
+    y, x = np.meshgrid(y, x, indexing='ij')
+
+    I_max = 255 if dtype == np.uint8 else 1.0
+    I0 = get_stellar_intensity(luminosity, I_max)
+    y0, x0 = position
+
+    if sigma_y == None or sigma_y < 0:
+        sigma_y = sigma_x
+
+    if method == 'Constant':
+        background = np.full((h, w), I0)
+    elif method == 'Gaussian':
+        dy, dx = (y - y0) / sigma_y, (x - x0) / sigma_x
+        exp_term = - (dy**2 + dx**2 - 2 * rho * dy * dx) / (2 * (1 - rho**2))
+        background = np.clip(I0 * np.exp(exp_term), 0, I_max)
+    elif method == 'Linear_X': # column direction
+        background = np.clip((1 - (x - x0) / (w - x0)) * I0, 0, I_max)
+    elif method == 'Linear_Y': # row direction
+        background = np.clip((1 - (y - y0) / (h - y0)) * I0, 0, I_max)
+    else: # method == 'None':
+        background = np.zeros((h, w))
+        
+    return background.astype(dtype)
 
 
 def gen_false_stars(num: int, pos: np.array, min_d: int=6, mag_range: tuple=(3, 6), size: tuple=(512, 512)) -> np.ndarray:
@@ -519,8 +517,6 @@ if __name__ == '__main__':
     
     ids = stars[:, 0].astype(int)
     coords = stars[:, 1:3].astype(int)
-
-    img = add_stellar_noise(img)
 
     label_star_image(img, coords, ids)
 
