@@ -125,7 +125,7 @@ def denoise_with_wavelet(img: np.ndarray, wavelet: str, level: int=3, threshold:
             denoised_coeffs.append(denoised_cd)
         denoised_image = pywt.waverec2(denoised_coeffs, wavelet)
     else:
-        denoised_image = restoration.denoise_wavelet(img, wavelet=wavelet, wavelet_levels=level)
+        denoised_image = restoration.denoise_wavelet(img, wavelet=wavelet, wavelet_levels=level, rescale_sigma=True, sigma=0.065)
 
     return denoised_image
 
@@ -285,11 +285,10 @@ def denoise_with_cmg(img: np.ndarray, size: int=5, sigma: float=1):
         https://doi.org/10.27241/d.cnki.gnjgu.2024.001923
     '''
 
-    Id = np.percentile(img, 90)
-    T1 = 1.4
-    T2 = 1.2
-    T3 = 3
-    Atten = 4
+    T1 = 3
+    T2 = 1.3
+    T3 = 1.0
+    Atten = 2
 
     d = size
     r = d // 2
@@ -298,20 +297,21 @@ def denoise_with_cmg(img: np.ndarray, size: int=5, sigma: float=1):
     denoised_img = morph_filter(img, size=d, method='Erode', selem='Disk') 
 
     # 2. select non-star pixels
-    cross = np.array([
+    neighbor_4 = np.array([
         [False, True, False],
-        [True,  True, True],
+        [True,  False, True],
         [False, True, False],
     ], dtype=bool)
-    img = np.maximum(img, eps)                                                          # avoid division by 0 in later operation
-    min_map = ndi.minimum_filter(img, footprint=cross, mode='constant', cval=np.inf)    # min map
-    max_map = ndi.maximum_filter(img, footprint=cross, mode='constant', cval=-np.inf)   # max map
+    denoised_img = np.maximum(denoised_img, eps)                                                    # avoid division by 0 in later operation
+    min_map = ndi.minimum_filter(denoised_img, footprint=neighbor_4, mode='constant', cval=np.inf)  # min map
+    max_map = ndi.maximum_filter(denoised_img, footprint=neighbor_4, mode='constant', cval=-np.inf) # max map
     
-    S1 = (img < Id) & (img / min_map > T1)                                                      # non star pixels
-    S2 = (img > Id) & ((img / max_map < T2) | (max_map / img < T2)) & (max_map / min_map < T3)  # star pixels
+    Id = np.percentile(denoised_img, 95)
+    S1 = (denoised_img < Id) & (denoised_img / min_map > T1)                                        # non star pixels
+    S2 = (denoised_img > Id) & ((denoised_img / max_map < T2) | (max_map / denoised_img < T2)) & (max_map / min_map < T3) # star pixels
 
     # 3. apply sliding window guassian filter for S1
-    padded_img = np.pad(img, ((r, r), (r, r)))                              # padded image
+    padded_img = np.pad(denoised_img, ((r, r), (r, r)))                     # padded image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))  # patches for guassian filter
 
     x, y = np.meshgrid(np.arange(-r, r+1), np.arange(-r, r+1))              # offsets
@@ -325,6 +325,8 @@ def denoise_with_cmg(img: np.ndarray, size: int=5, sigma: float=1):
         (x >= 0) & (y >= 0),                                                # south east sub window
     ], axis=0)                                                              # all the sliding window weights (8, d, d)
     weights /= weights.sum(axis=(-2, -1), keepdims=True)                    # normalized weights
+    # cv2.imwrite('S1.png', S1 * 255)
+    # cv2.imwrite('S2.png', S2 * 255)
 
     n = np.sum(S1)
     vals = np.sum(patches[S1][:, None, ...] * weights[None, ...], axis=(-2, -1))    # swf all possible outputs
@@ -340,13 +342,66 @@ def denoise_with_cmg(img: np.ndarray, size: int=5, sigma: float=1):
     return denoised_img
 
 
+def denoise_with_swf(img: np.ndarray, size: int=5, sigma: float=1):
+    '''
+        Denoise with side window filter.
+        https://doi.org/10.27543/d.cnki.gkgdk.2022.000001
+    '''
+
+    Tdmin = 20 / 255
+    Tdmax = 1
+    Td = 0
+
+    ## 0. Initialize
+    d = size
+    r = d // 2
+    padded_img = np.pad(img, ((r, r), (r, r)))                     # padded image
+    patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))  # patches for guassian filter
+
+    ## 1. Side window filter
+    x, y = np.meshgrid(np.arange(-r, r+1), np.arange(-r, r+1))              # offsets
+    kernel = gen_gaussian_kernel(sigma=sigma, size=d)                       # default gaussian kernel
+    weights = kernel * np.stack([
+        (y <= x) & (y <= -x),
+        (y >= x) & (y >= -x),
+        (x <= y) & (x <= -y),
+        (x >= y) & (x >= -y),
+    ], axis=0)                                                              # all the sliding window weights (4, d, d)
+    weights /= weights.sum(axis=(-2, -1), keepdims=True)                    # normalized weights
+    filtered_imgs = np.sum(patches[None, ...] * weights[:, None, None, ...], axis=(-1, -2)) # side window filter response(4, h, w)
+
+    ## 2. Segment the image
+    diffs = np.abs(filtered_imgs - img[None, ...])
+    min_idxs, max_idxs = np.argmin(diffs, axis=0), np.argmax(diffs, axis=0)
+    min_img = np.take_along_axis(filtered_imgs, min_idxs[None, :, :], axis=0).squeeze(0)
+    max_img = np.take_along_axis(filtered_imgs, max_idxs[None, :, :], axis=0).squeeze(0)
+
+    # mask_outlier = np.all(img[None, ...] > filtered_imgs, axis=0) & np.all(diffs < Tdmin, axis=0) & (img - min_img > Tdmin)
+    # mask_target = np.all(img[None, ...] > filtered_imgs, axis=0) & ((img - min_img > Tdmax) | (max_img - min_img > Td))
+    max_map, min_map = ndi.maximum_filter(img, size=d), ndi.minimum_filter(img, size=d)
+    mean_map, mean2_map = ndi.uniform_filter(img, size=d), ndi.uniform_filter(img**2.0, size=d)
+    devi_map = np.sqrt(np.maximum(mean2_map - mean_map**2.0, eps))
+    mask_outlier = ((img == max_map) | (img == min_map)) & (np.abs(img - mean_map) > 3 * devi_map)
+    mask_target = ndi.maximum_filter(img, size=d) == img
+
+    cv2.imwrite('m_outlier.png', mask_outlier * 255)
+    cv2.imwrite('m_target.png', mask_target * 255)
+
+    ## 3. Output
+    denoised_img = img.copy()
+    denoised_img[mask_outlier] = 0.1 * max_img[mask_outlier]
+    denoised_img[~(mask_outlier & mask_target)] = min_img[~(mask_outlier & mask_target)]
+
+    return denoised_img
+
+
 def denoise_with_cwm(img: np.ndarray, size: int=3):
     '''
         Denoise with combined wavelet transform and morphology.
         https://doi.org/10.27060/d.cnki.ghbcu.2020.001632
     '''
-    img1 = denoise_with_wavelet(img, 'sym4', level=4, threshold=40)
-    img2 = morph_filter(morph_filter(img, size, 'Open'), size, 'Close')
+    img1 = denoise_with_wavelet(img, 'sym4', level=4, threshold=20)
+    img2 = morph_filter(morph_filter(img, size, 'Open', selem='Disk'), size, 'Close', selem='Disk')
 
     frac = 0.85
     denoised_img = frac * img1 + (1 - frac) * img2
@@ -465,8 +520,9 @@ def denoise_with_cnb(img: np.ndarray, patch_size: int, wind_size: int=11, sigma:
     ## 2. Segment image
     outlier_mask = ((img == max_map) | (img == min_map)) & (np.abs(img - mean_map) > 3 * devi_map) # outlier mask / peper noise
     target_mask = (measure > np.mean(measure) + 3 * np.std(measure)) & (~outlier_mask)             # target mask / star pixels
-    target_mask = morph_filter(target_mask, method='Open', selem='Rect')
-    cv2.imwrite('mm.png', target_mask * 255)
+    target_mask = morph_filter(target_mask, method='Dilate', selem='Rect')
+    cv2.imwrite('m_outlier.png', outlier_mask * 255)
+    cv2.imwrite('m_target.png', target_mask * 255)
 
     ## 3. Replace outliers with median values
     grouped_outlier_mask = np.lib.stride_tricks.sliding_window_view(
@@ -479,9 +535,10 @@ def denoise_with_cnb(img: np.ndarray, patch_size: int, wind_size: int=11, sigma:
     )[outlier_mask]
 
     ## 4. Process star pixels with NLM
-    similar_mask = preselect_similar(tmean_map, devi_map)                           # similar patch mask (h, w, k, k)
-    weights = compute_nlm_weights(patches.reshape(h, w, -1), target_mask, similar_mask) # nlm weights (n, k, k)
-    denoised_img[target_mask] = np.sum(winds[target_mask] * weights, axis=(-1, -2))
+    # similar_mask = preselect_similar(tmean_map, devi_map)                           # similar patch mask (h, w, k, k)
+    # weights = compute_nlm_weights(patches.reshape(h, w, -1), target_mask, similar_mask) # nlm weights (n, k, k)
+    # denoised_img[target_mask] = np.sum(winds[target_mask] * weights, axis=(-1, -2))
+    denoised_img[target_mask] = denoise_with_nlm(img, patch_size, wind_size, sigma)[target_mask]
 
     ## 5. Process all the pixels with MBLF
     weights = compute_blf_weights(winds, tmean_map, devi_map)
@@ -504,9 +561,11 @@ def denoise_image(img: np.ndarray, method: str):
     if method == 'CNB': # combined nlm and blf
         denoised_img = denoise_with_cnb(img, 5, 11, sigma=0.1, sigma_g=0.05, sigma_s=3, sigma_i=0.2, sigma_j=0.5, road_kth=6)
     elif method == 'CWM':
-        denoised_img = denoise_with_cwm(img, size=5)
+        denoised_img = denoise_with_cwm(img, size=3)
     elif method == 'CMG':
         denoised_img = denoise_with_cmg(img, size=5, sigma=2)
+    elif method == 'SWF':
+        denoised_img = denoise_with_swf(img, size=5, sigma=1.2)
     elif method == 'AMF':
         denoised_img = denoise_with_amf(img, size1=3, size2=11)
     elif method == 'EMF':
