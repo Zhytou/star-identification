@@ -94,7 +94,7 @@ def extract_rect(img, top_left: tuple[int, int], bot_right: tuple[int, int], lin
 
 
 # 成像噪声/杂散光干扰
-if False:
+if True:
     img0, stars = create_star_image(
         ra, de, roll, 
         h=h, w=w, 
@@ -102,7 +102,8 @@ if False:
         limit_mag=limit_mag, 
         background=7,
     )
-
+    cv2.imwrite('res/chapter2/sim/original.png', img0)
+    
     row, col = 100, 200
     d = 32
     top_left = (col-d-1, row-d-1)
@@ -113,7 +114,12 @@ if False:
     cv2.imwrite('res/chapter2/sim/noise.png', img1)
     cv2.imwrite('res/chapter2/sim/noise_scale.png', crop_img1)
 
-    img2 = add_stellar_noise(img0, method='Gaussian', position=(h//2, w//3), luminosity=4, sigma_x=64)
+    img2 = add_stellar_noise(img0, method='Gaussian', position=(h//2, w//3), luminosity=5.3, sigma_x=64)
     img2, crop_img2 = extract_rect(img2, top_left, bot_right)
-    cv2.imwrite('res/chapter2/sim/stellar.png', img2)
-    cv2.imwrite('res/chapter2/sim/stellar_scale.png', crop_img2)
+    cv2.imwrite('res/chapter2/sim/gaussian.png', img2)
+    cv2.imwrite('res/chapter2/sim/gaussian_scale.png', crop_img2)
+
+    img3 = add_stellar_noise(img0, method='Linear_X', position=(h//2, 0), luminosity=5.4, sigma_x=64)
+    img3, crop_img3 = extract_rect(img3, top_left, bot_right)
+    cv2.imwrite('res/chapter2/sim/linear.png', img3)
+    cv2.imwrite('res/chapter2/sim/linear_scale.png', crop_img3)

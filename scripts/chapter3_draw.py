@@ -7,7 +7,7 @@ from simulate import create_star_image, add_gaussian_and_pepper_noise, gen_stell
 from denoise import denoise_image
 from detect import group_star
 from extract import get_star_centroids
-from utils import gen_timestamp, gen_integer_approximation, find_overlap_and_unique, plot_well_grid, plot_gray_3d, cal_mse_psnr_ssim, cal_rc_p_f1, label_star_image, label_detect_result, label_grad_field, plot_line_chart
+from utils import gen_timestamp, gen_integer_approximation, find_overlap_and_unique, plot_well_grid, plot_gray_3d, plot_gray_2d, cal_mse_psnr_ssim, cal_rc_p_f1, label_star_image, label_detect_result, label_grad_field, plot_line_chart, cal_doh
 
 
 DEBUG = True
@@ -32,7 +32,7 @@ def get_star_image(dir: str, file: str, ra: float, de: float, roll: float, fov: 
         Get star image.
     '''
 
-    bg = gen_stellar_background(h, w, method=stellar_type, position=(pos_y, pos_x), luminosity=lum, sigma_x=sigma_x, sigma_y=sigma_y, rho=rho)
+    bg = gen_stellar_background(h, w, method=stellar_type, position=(pos_y, pos_x), luminosity=lum, sigma_x=sigma_x, sigma_y=sigma_y, rho=rho) if stellar_type != 'None' else background
     img, stars = create_star_image(
         ra, de, roll, 
         h=h, w=w, 
@@ -149,24 +149,23 @@ if False:
 
     # 测试参数
     noises = [
-        (0.05, 0.005),
+        # (0.05, 0.005),
 
         # (0.03, 0.003),
         # (0.06, 0.006),
         # (0.09, 0.009),
 
-        # (0.02, 0.002), 
-        # (0.04, 0.004), 
-        # (0.06, 0.006),
-        # (0.08, 0.008)
+        (0.02, 0.002), 
+        (0.04, 0.004), 
+        (0.06, 0.006),
+        (0.08, 0.008)
     ]
     methods = [
-        'Original', 'Noised', 
+        # 'Original', 'Noised', 
         # 'NLM', 'AMF', 
         # 'Bilateral', 'Wavelet',
-        'SWF',
-        # 'EMF', 'CWM', 'CMG',
-        # 'CNB', 
+        'SWF', 'EMF', 'CWM',
+        'CNB', 
     ]
     method_2_zh = {
         'CNB': '本文方法',
@@ -226,7 +225,7 @@ if False:
     for stat in res:
         plot_line_chart(
             res[stat], xlabel='噪声强度', ylabel=stat,
-            yrange=(0, 1) if stat == 'SSIM' else (0, 50),
+            yrange=(0, 1) if stat == 'SSIM' else (20, 50),
             img_name=stat+'.png',
             show=False, output_dir=dir
         )
@@ -277,24 +276,51 @@ if False:
 if False:
     dir = 'res/chapter3/doh_gcm'
     img, stars = get_star_image(
-        dir, 'img.png', 
+        dir, 'background_noise.png', 
+        ra=ra, de=de, roll=roll, fov=fov,
+        sigma_g=0.05, prob_p=0.005,
+    )
+    print(stars[:, 1:3].astype(int), stars[:, -1])
+
+    # DOH响应
+    d = 7
+    r = d // 2
+    coords = np.array([
+        stars[1, 1:3],     # star mag 3.9
+        stars[3, 1:3],     # star mag 5.5
+        np.argwhere(img == 255)[85],      # pepper noise 
+    ]).astype(int)
+    doh = cal_doh(img, sigma=1.5)
+    for y, x in coords:
+        print(y, x)
+        x1, y1 = max(x - r, 0), max(y - r, 0)
+        x2, y2 = min(x + r + 1, w), min(y + r + 1, h)
+        plot_gray_2d(
+            img[y1:y2, x1:x2], axis_on=False, text=False,
+            show=False, output_path=os.path.join(dir, 'subimg', f'{y}_{x}.png')
+        )
+        plot_gray_2d(
+            doh[y1:y2, x1:x2].astype(int), axis_on=False, text=True,
+            show=False, output_path=os.path.join(dir, 'doh_2d', f'{y}_{x}.png')
+        )
+
+    # 梯度分布
+    img, _ = get_star_image(
+        dir, 'stellar_noise.png', 
         ra=ra, de=de, roll=roll, fov=fov,
         sigma_g=0.05, prob_p=0.005,
         stellar_type='Gaussian', pos_y=h//2, pos_x=-w//4, lum=4, sigma_x=128
     )
-    # print(stars[:, 1:3].astype(int), stars[:, -1])
-
-    # 梯度分布
-    d = 15
+    d = 7
     coords = np.array([
         stars[2, 1:3],     # star mag 4.8
         np.argwhere(img == 255)[85],      # pepper noise 
         (182, 54),      # stary light edge
     ]).astype(int)
-    label_grad_field(
-        img, coords, d, sigma=3, show=True, 
-        output_dir=os.path.join(dir, 'gcm'), file_name='img.png'
-    )
+    # label_grad_field(
+    #     img, coords, d, sigma=3, show=True, 
+    #     output_dir=os.path.join(dir, 'gcm'), file_name='img.png'
+    # )
 
 
 # 检测算法测试参数
@@ -320,11 +346,11 @@ if False:
         (0.03, 0.003, 'Linear_X', 0, 0, 5.7, 128, 0, 0), 
     ]
     methods = [
-        ('None', ['MS_PCM',  'Liebe3', 'CCL', 'None'], [3, 5, 7], 3),
-        ('None', ['Zhang-GCM',  'Liebe3', 'CCL', 'None'], 3, 25),
-        ('None', ['Jiang-Morph',  'Liebe3', 'CCL', 'None'], 3, 3),
-        ('None', ['Lu-GCM',  'Liebe3', 'CCL', 'None'], 5, 1),
-        ('None', ['None', 'Liebe3', 'RGL', 'Cgc'], 5, 3),
+        # ('None', ['MS_PCM',  'Liebe3', 'CCL', 'None'], [3, 5, 7], 3),
+        # ('None', ['Zhang-GCM',  'Liebe3', 'CCL', 'None'], 3, 25),
+        # ('None', ['Jiang-Morph',  'Liebe3', 'CCL', 'None'], 3, 3),
+        # ('None', ['Lu-GCM',  'Liebe3', 'CCL', 'None'], 5, 1),
+        ('None', ['Mine-GCM', 'Liebe3', 'CCL', 'None'], 5, 3),
 
         # ('None', ['BEF',  'Liebe3', 'CCL', 'None'], 5, 3),
         # ('None', ['None', 'Liebe3', 'CCL', 'Ly'], 5, 3),
@@ -414,7 +440,7 @@ if False:
 
 
 # 星点检测数量对比
-if True:
+if False:
     dir = 'res/chapter3/multi_detect'
 
     # 测试参数
@@ -455,7 +481,7 @@ if True:
         # ('None', ['MS_PCM',  'Liebe3', 'CCL', 'None'], [3, 5, 7], 4),
         # ('None', ['Zhang-GCM',  'Liebe3', 'CCL', 'None'], 3, 25),
         # ('None', ['Jiang-Morph',  'Liebe3', 'CCL', 'None'], 5, 3),
-        ('None', ['None', 'Liebe3', 'RGL', 'Cgc'], 5, 3),
+        ('None', ['None', 'Liebe3', 'RGL', 'Cgc'], 5, 1),
     ]
     stat_2_zh = {
         'Recall': '召回率', 
