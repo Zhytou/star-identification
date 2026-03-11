@@ -125,7 +125,11 @@ def denoise_with_wavelet(img: np.ndarray, wavelet: str, level: int=3, threshold:
             denoised_coeffs.append(denoised_cd)
         denoised_image = pywt.waverec2(denoised_coeffs, wavelet)
     else:
-        denoised_image = restoration.denoise_wavelet(img, wavelet=wavelet, wavelet_levels=level, rescale_sigma=True, sigma=0.065)
+        sigma = np.std(img) * 0.78
+        denoised_image = restoration.denoise_wavelet(
+            img, wavelet=wavelet, wavelet_levels=level, rescale_sigma=True, 
+            sigma=sigma
+        )
 
     return denoised_image
 
@@ -382,15 +386,22 @@ def denoise_with_swf(img: np.ndarray, size: int=5, sigma: float=1):
     mean_map, mean2_map = ndi.uniform_filter(img, size=d), ndi.uniform_filter(img**2.0, size=d)
     devi_map = np.sqrt(np.maximum(mean2_map - mean_map**2.0, eps))
     mask_outlier = ((img == max_map) | (img == min_map)) & (np.abs(img - mean_map) > 3 * devi_map)
-    mask_target = ndi.maximum_filter(img, size=d) == img
 
+    shift_mask, shifted_mean_map = con_shift_map(mean_map, size=d)
+    bright_mask = mean_map[None, ...] - shifted_mean_map > 0
+    residual_map = np.where(shift_mask & bright_mask, mean_map[None, ...] - shifted_mean_map, np.nan)
+    products = residual_map[0:8:2] * residual_map[1:8:2]
+    measure = np.nanmin(products, axis=0, initial=np.inf)
+    measure[np.isinf(measure)] = eps
+    mask_target = (measure > np.mean(measure) + 3 * np.std(measure)) & (~mask_outlier) 
+    
     cv2.imwrite('m_outlier.png', mask_outlier * 255)
     cv2.imwrite('m_target.png', mask_target * 255)
 
     ## 3. Output
     denoised_img = img.copy()
     denoised_img[mask_outlier] = 0.1 * max_img[mask_outlier]
-    denoised_img[~(mask_outlier & mask_target)] = min_img[~(mask_outlier & mask_target)]
+    denoised_img[~(mask_outlier | mask_target)] = min_img[~(mask_outlier | mask_target)]
 
     return denoised_img
 
@@ -400,10 +411,10 @@ def denoise_with_cwm(img: np.ndarray, size: int=3):
         Denoise with combined wavelet transform and morphology.
         https://doi.org/10.27060/d.cnki.ghbcu.2020.001632
     '''
-    img1 = denoise_with_wavelet(img, 'sym4', level=4, threshold=20)
+    img1 = denoise_with_wavelet(img, 'sym4', level=6, threshold=20)
     img2 = morph_filter(morph_filter(img, size, 'Open', selem='Disk'), size, 'Close', selem='Disk')
 
-    frac = 0.85
+    frac = 0.65
     denoised_img = frac * img1 + (1 - frac) * img2
 
     return denoised_img
@@ -470,7 +481,7 @@ def denoise_with_cnb(img: np.ndarray, patch_size: int, wind_size: int=11, sigma:
             np.pad(devi_map, ((kk, kk), (kk, kk))), 
             (k, k)
         )
-        diff = grouped_tmean_map - tmean_map[..., None, None] + grouped_devi_map - devi_map[..., None, None]
+        diff = grouped_tmean_map - tmean_map[..., None, None] #+ grouped_devi_map - devi_map[..., None, None]
 
         gwt = np.exp(-diff ** 2.0 / (2 * sigma_g ** 2))                         # gray weights (h, w, d, d)
         iwt = np.exp(-stroad ** 2.0 / (2 * sigma_i ** 2))                       # impulse weights based on ead or exponential stroad (h, w)
@@ -520,7 +531,7 @@ def denoise_with_cnb(img: np.ndarray, patch_size: int, wind_size: int=11, sigma:
     ## 2. Segment image
     outlier_mask = ((img == max_map) | (img == min_map)) & (np.abs(img - mean_map) > 3 * devi_map) # outlier mask / peper noise
     target_mask = (measure > np.mean(measure) + 3 * np.std(measure)) & (~outlier_mask)             # target mask / star pixels
-    target_mask = morph_filter(target_mask, method='Dilate', selem='Rect')
+    target_mask = morph_filter(target_mask, size=wind_size, method='Dilate', selem='Rect')
     cv2.imwrite('m_outlier.png', outlier_mask * 255)
     cv2.imwrite('m_target.png', target_mask * 255)
 
@@ -559,17 +570,17 @@ def denoise_image(img: np.ndarray, method: str):
         img = img / img.max()
 
     if method == 'CNB': # combined nlm and blf
-        denoised_img = denoise_with_cnb(img, 5, 11, sigma=0.1, sigma_g=0.05, sigma_s=3, sigma_i=0.2, sigma_j=0.5, road_kth=6)
+        denoised_img = denoise_with_cnb(img, 5, 7, sigma=0.1, sigma_g=0.005, sigma_s=3, sigma_i=0.1, sigma_j=0.5, road_kth=6)
     elif method == 'CWM':
         denoised_img = denoise_with_cwm(img, size=3)
     elif method == 'CMG':
         denoised_img = denoise_with_cmg(img, size=5, sigma=2)
     elif method == 'SWF':
-        denoised_img = denoise_with_swf(img, size=5, sigma=1.2)
+        denoised_img = denoise_with_swf(img, size=21, sigma=3)
     elif method == 'AMF':
         denoised_img = denoise_with_amf(img, size1=3, size2=11)
     elif method == 'EMF':
-        denoised_img = denoise_with_emf(img, size=5, threshold=10)
+        denoised_img = denoise_with_emf(img, size=5, threshold=0.1)
     elif method == 'NLM_BLF':
         denoised_img = denoise_with_nlm(img, patch_size=3, wind_size=11, sigma=0.05)
         denoised_img = denoise_with_blf(denoised_img, size=3, sigma_g=0.05, sigma_s=1, threshold=0.4)

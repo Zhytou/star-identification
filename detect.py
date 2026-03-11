@@ -2,13 +2,14 @@ import os, cv2
 import bisect as bis
 import numpy as np
 import scipy.ndimage as ndi
+from skimage import img_as_ubyte, img_as_float
 import skimage.filters as filters
 import skimage.morphology as morph
 
 from utils import cal_derivative, cal_doh, cal_ly, is_local_topk, is_near_local_max, gen_gaussian_kernel
 
 eps = 1e-10
-
+DEBUG = False
 
 class UnionSet:
     '''
@@ -149,10 +150,10 @@ def cal_lcm(img: np.ndarray, method: str, size: int):
         )                                                                                       # relative local contrast measure (h, w)
     elif method == 'DLCM':
         'Difference-based Local Contrast Measure'
-        measure = np.nanmin(
+        measure = np.nanmax(
             np.where(
                 shift_mask,                                                                     # (8, h, w)
-                np.abs(mean_map[None, ...] - shifted_mean_map) * tmean_map[None, ...],           # (8, h, w)
+                np.abs(mean_map[None, ...] - shifted_mean_map) * img[None, ...],                # (8, h, w)
                 np.nan
             ), axis=0
         )
@@ -174,7 +175,9 @@ def cal_pcm(img: np.ndarray, method: str, size: int):
     fimg = img.astype(np.float64)                                                               # change data type to avoid overflow
     padded_img = np.pad(fimg, ((r, r), (r, r)))                                                 # padded raw image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))                      # raw patches (h, w, d, d)
-    
+    flatten_patches = np.reshape(patches, (h, w, -1))
+    sorted_pactches = np.sort(flatten_patches, axis=-1)
+
     mean_map = np.mean(patches, axis=(-1, -2))                                                  # mean map (h, w)
     shift_mask, shifted_mean_map = con_shift_map(mean_map, size=d)                              # shifted mean map(neighbor patches' mean) (8, h, w)
     
@@ -269,7 +272,7 @@ def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=1):
     elif method == 'Zhang-GCM':
         '天基星图预处理技术研究 https://kns.cnki.net/KCMS/detail/detail.aspx?dbcode=CJFQ&dbname=CJFDLAST2024&filename=JGDJ202412041'
         ## 0. Sobel operator
-        grad = np.hypot(grad_x, grad_y).astype(np.float32)
+        grad = np.hypot(grad_x, grad_y)
 
         ## 1. Morphology close
         kernel = np.zeros((size, size), dtype=bool)
@@ -277,10 +280,12 @@ def cal_gcm(img: np.ndarray, method: str, size: int=5, sigma: float=1):
         kernel[r, :] = True
         grad = morph.closing(grad, footprint=kernel)
 
-        ## 2. Edge suppression via 4-neighbor rule
-        T = cal_threshold(img, 'Liebe3')
+        # ## 2. Edge suppression via 4-neighbor rule
+        T = cal_threshold(img, 'Liebe5')
         count = ndi.convolve(img < T, kernel)
         measure = np.where(count < 2, grad, 0)
+    elif method == 'Mine-GCM':
+        measure = cal_gcm(img, 'GCM', size, sigma) * cal_doh(img, sigma)
     else:
         measure = np.zeros_like(img)
 
@@ -304,31 +309,28 @@ def cal_morph(img: np.ndarray, method: str, size: int=7, margin: int=2):
     elif method == 'Jiang-Morph':
         'Robust and accurate star segmentation algorithm based on morphology http://opticalengineering.spiedigitallibrary.org/article.aspx?doi=10.1117/1.OE.55.6.063101'
         selem_m = np.ones((d + dd, d + dd), dtype=bool)                                         # structural element margin
-        selem_m[dd:-dd, dd:-dd] = 0
+        selem_m[rr:-rr, rr:-rr] = 0
         selem_e = np.ones((d, d), dtype=bool)                                                   # structural element
-        selem_s = np.ones((r, r), dtype=bool)                                                   # structural element
+        selem_s = np.ones((2, 2), dtype=bool)                                                   # structural element
 
         ## 1. Star Detection
-        response1 = morph.erosion(
-            morph.dilation(img, selem_m, mode='nearest'), 
-            selem_e, mode='nearest'
-        )
+        response1 = morph.erosion(morph.dilation(img, selem_m), selem_e)
         ## 2. Noise suppression
-        response2 = morph.dilation(
-            morph.erosion(img, selem_s, mode='nearest'), 
-            selem_s, mode='nearest'
-        )
+        response2 = morph.dilation(morph.erosion(img, selem_s), selem_s)
         ## 3. Combine two responses with modified top-hat
         response = response2 - np.minimum(response1, response2)
-
     elif method == 'Xu-Morph':
         'Stray Light Elimination Method Based on Recursion Multi-Scale Gray-Scale Morphology for Wide-Field Surveillance https://ieeexplore.ieee.org/document/9333588'
-        response = np.zeros_like(img)
-
+        selem_d = np.pad(morph.disk(radius=r, dtype=bool), ((dd, dd), (dd, dd)))                        # structural element for dilation
+        selem_e = morph.disk(radius=r, dtype=bool)                                                      # structural element for erosion
+        response = np.minimum(img, morph.erosion(morph.dilation(img, selem_d), selem_e))
     elif method == 'Xi-Morph':
         '基于局部对比度的自适应Top-Hat红外小目标检测 http://www.opticsjournal.net/Articles/OJf9b777891546d03b/FullText'
-        response = np.zeros_like(img)
+        selem_d = np.pad(morph.disk(radius=r, dtype=bool), ((dd, dd), (dd, dd)))                        # structural element for dilation
+        selem_e = morph.disk(radius=r-1, dtype=bool)                                                    # structural element for erosion
 
+        ## Modified top-hat response
+        response = img - np.minimum(img, morph.erosion(morph.dilation(img, selem_d), selem_e))
     else:
         response = np.zeros_like(img)
 
@@ -489,12 +491,11 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
     r = size // 2
     padded_img = np.pad(img, ((r, r), (r, r)))                                  # padded image
     patches = np.lib.stride_tricks.sliding_window_view(padded_img, (d, d))      # image patches (h, w, d, d)
-    max_intensity = 255 if img.dtype == 255 else 1.0                            # max intensity for image data type
 
     ## 1. Preselect
     #!NOTE: only use local rank_filter, because the global background threshold might be too high under starry light interference
     std = np.std(img)
-    mask = is_local_topk(img, -1, connectivity) | is_near_local_max(img, std, connectivity) # possible seed mask (h, w)
+    mask = is_local_topk(img, -2, connectivity) | is_near_local_max(img, std, connectivity) # possible seed mask (h, w)
     if d >= 5:                                                                  # check the mean gray of inner ring is higher than the outter one
         rr = d // 4
         inner = np.zeros((d, d), dtype=bool)
@@ -502,8 +503,9 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
         omean = np.maximum(np.mean(patches[..., ~inner], axis=-1), eps)         # outer ring mean map
         inner[r, r] = False                                                     # exclude central pixel
         imean = np.maximum(np.mean(patches[..., inner], axis=-1), eps)          # inner ring mean map 
-        mask = mask & ((img == max_intensity) | (img - 1. * imean >= 0)) & (imean - 1. * omean >= 0)
-    print('Number of seeds after preselection:', np.sum(mask))
+        mask = mask & (imean - 1. * omean >= 0)
+    if DEBUG:
+        print('Number of seeds after preselection:', np.sum(mask))
 
     ## 2. Double check with different operators 
     if method == 'DoH' or method == 'Ly':
@@ -512,12 +514,13 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
         mask = mask & is_local_topk(res, k=-1, connectivity=connectivity)
     elif method == 'Cgc':
         # combined gradient and curvature
-        res1, res2 = cal_gcm(img, 'GCM', size=d, sigma=1), cal_doh(img, sigma=1.5)
+        res1, res2 = cal_gcm(img, 'GCM', size=d, sigma=1), cal_doh(img, sigma=1)
         res2[mask] *= res1[mask]
-        mask = mask & (res1 > 0.6) & is_local_topk(res2, k=-2, connectivity=connectivity)
+        mask = mask & (res1 > 0.3) & is_local_topk(res2, k=-2, connectivity=connectivity)
     else:
         mask = np.zeros_like(mask, dtype=bool)
-    print('Number of seeds after operator double check:', np.sum(mask))
+    if DEBUG:
+        print('Number of seeds after operator double check:', np.sum(mask))
 
     ## 3. Generate unique label for each seed, namely merge possible connected seeds
     n = np.sum(mask)                                                            # number of initial unconnected seeds
@@ -546,7 +549,8 @@ def initialize_seeds(img: np.ndarray, method: str, size: int=5, connectivity: in
             labels[i] = label_cnt
     assert label_cnt == label_tab.count(), ''
     assert label_cnt == 0 or labels.min() >= 1 and labels.max() <= label_cnt
-    print('Number of seeds after merging:', label_cnt)
+    if DEBUG:
+        print('Number of seeds after merging:', label_cnt)
 
     return coords, labels
 
@@ -775,7 +779,7 @@ def find_ranges(nums: np.ndarray, threshold: int=0):
     return np.vstack([begs, ends]).transpose()
 
 
-def group_star(img: np.ndarray, method: list[str], size: int | list[int]=5, wind: int=15, connectivity: int=4, pixel_limit: int=5, output_dir: str=None):
+def group_star(img: np.ndarray, method: list[str], size: int | list[int]=5, wind: int=19, connectivity: int=4, pixel_limit: int=5, output_dir: str=None):
     '''
         Group the potential star in the image.
     '''
@@ -789,7 +793,7 @@ def group_star(img: np.ndarray, method: list[str], size: int | list[int]=5, wind
         coords, labels = np.array([]), np.array([])
     
     ## 2. Enhance the input image, and then binarize the enhanced image
-    enhanced_img = enhance_image(img, ehc_meth, size)
+    enhanced_img = enhance_image(img, ehc_meth, size=size)
     if len(coords) > 0:
         assert coords.shape[1] == 2
         
@@ -799,15 +803,21 @@ def group_star(img: np.ndarray, method: list[str], size: int | list[int]=5, wind
 
         binary_img = np.zeros_like(img, dtype=np.uint8)
         for y1, y2, x1, x2 in zip(ymin, ymax, xmin, xmax):
-            binary_img[y1:y2, x1:x2] = binary_img[y1:y2, x1:x2] | binarize_image(enhanced_img[y1:y2, x1:x2], thr_meth, size) #!NOTE: use union to avoid overlap
+            binary_img[y1:y2, x1:x2] |= binarize_image(enhanced_img[y1:y2, x1:x2], thr_meth, size=5) #!NOTE: use union to avoid overlap
     else:
-        binary_img = binarize_image(enhanced_img, thr_meth, size)
+        binary_img = binarize_image(enhanced_img, thr_meth, size=5)
 
     ## 3. Label the connected regions in the binary image
     group_coords = []
+    if lab_meth == 'RAW':
+        mask = binary_img[coords[:, 0], coords[:, 1]] > 0
+        coords, labels = coords[mask], labels[mask]
+        for ulabel in np.unique(labels):
+            group_coords.append((coords[labels==ulabel, 0], coords[labels==ulabel, 1]))
+        return group_coords
     if lab_meth == 'RGL':
         'Region Growth Label'
-        n, label_img = region_growth_label(binary_img, coords, labels, connectivity)
+        n, label_img = region_growth_label(binary_img.copy(), coords, labels, connectivity)
     elif lab_meth == 'CCL' or lab_meth == 'DCCL':
         'Connected Components Label'
         n, label_img = connected_components_label(binary_img, connectivity) if lab_meth == 'DCCL' else cv2.connectedComponents(binary_img, connectivity)
@@ -834,13 +844,6 @@ def group_star(img: np.ndarray, method: list[str], size: int | list[int]=5, wind
         os.makedirs(output_dir, exist_ok=True)
         cv2.imwrite(os.path.join(output_dir, 'img_d.png'), img)
         cv2.imwrite(os.path.join(output_dir, 'img_e.png'), enhanced_img)
+        cv2.imwrite(os.path.join(output_dir, 'img_ee.png'), np.where(enhanced_img == 0, 0, 255))
         cv2.imwrite(os.path.join(output_dir, 'img_b.png'), binary_img * 255)
-
-        seed_img = np.zeros_like(img)
-        seed_img[coords[:, 0], coords[:, 1]] = 255
-        cv2.imwrite(os.path.join(output_dir, 'img_s.png'), seed_img)
-
-        combined_img = np.where((binary_img == 1) & (seed_img == 255), 255, 0)
-        cv2.imwrite(os.path.join(output_dir, 'img_c.png'), combined_img)
-
     return group_coords

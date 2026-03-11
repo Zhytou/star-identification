@@ -234,7 +234,7 @@ def cal_mse_psnr_ssim(img1: np.ndarray, img2: np.ndarray, ndigits: int=-1):
     # print(psnr, 10 * np.log10(mv**2 / mse) if mse > 0 else np.inf)
     
     # caculate the mean ssim
-    mssim = structural_similarity(img1, img2, win_size=3, data_range=mv)
+    mssim = structural_similarity(img1, img2, win_size=13, data_range=mv)
 
     # round to ndigits precision if needed
     if ndigits != -1:
@@ -523,7 +523,7 @@ def plot_well_grid(img: np.ndarray, grid_len:int, show: bool=True, output_path: 
     save_and_show(output_path, show)
 
 
-def plot_gray_2d(img: np.ndarray, color_map: str='gray', color_bar: bool=False, axis_on: bool=False, text: bool=False, show: bool=True, output_path: str=None):
+def plot_gray_2d(img: np.ndarray, color_map: str='gray', color_bar: bool=False, axis_on: bool=False, text: bool=False, imshow: bool=True, show: bool=True, output_path: str=None):
     '''
         Plot the gray image in 2 dimensions.
     '''
@@ -531,7 +531,10 @@ def plot_gray_2d(img: np.ndarray, color_map: str='gray', color_bar: bool=False, 
     h, w = img.shape
 
     fig, ax = plt.subplots(figsize=(8, 8))    
-    im = ax.imshow(img, cmap=color_map, aspect='equal')
+    if imshow:
+        im = ax.imshow(img, cmap=color_map, aspect='equal')
+    else:
+        im = ax.imshow(np.ones_like(img), cmap=color_map)
 
     if color_bar:
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
@@ -541,9 +544,15 @@ def plot_gray_2d(img: np.ndarray, color_map: str='gray', color_bar: bool=False, 
         ax.set_yticks(np.arange(h))
         ax.set_xticklabels(np.arange(1, w + 1))
         ax.set_yticklabels(np.arange(1, h + 1))
+    else:
+        ax.axis('off')
     
     if text:
-        T = img.max() / 2.
+        if imshow:
+            T = (img.max() + img.min()) / 2.0
+        else:
+            T = img.max() + 1
+        
         for i in range(h):
             for j in range(w):
                 ax.text(
@@ -653,15 +662,15 @@ def plot_line_chart(res: dict, xlabel: str='x', ylabel: str='y', xrange: tuple=N
         Draw the results of the accuracy.
     '''
     # plot the results
-    fig, ax = plt.subplots()
+    _, ax = plt.subplots()
     xmin, xmax, ymin, ymax = np.inf, -np.inf, np.inf, -np.inf
     for method in res:
         xs, ys = zip(*res[method])
         xlabels = None
         if not isinstance(xs[0], numbers.Number) or isinstance(xs[0], bool):
             xlabels, xs = xs, np.arange(len(xs), dtype=np.float64)
-        xmin, xmax = np.min(xs, initial=xmin), np.max(xs, initial=xmax)
-        ymin, ymax = np.min(ys, initial=ymin), np.max(ys, initial=ymax)
+        xmin, xmax = np.min(xs, initial=xmin), np.max(xs, initial=xmax)+1e-6
+        ymin, ymax = np.min(ys, initial=ymin), np.max(ys, initial=ymax)+1e-6
         ax.set_xticks(xs)
         if xlabels:
             ax.set_xticklabels(xlabels)
@@ -670,7 +679,7 @@ def plot_line_chart(res: dict, xlabel: str='x', ylabel: str='y', xrange: tuple=N
     ax.set_ylabel(ylabel)
     ax.set_xlim(xrange) if xrange else ax.set_xlim((xmin, xmax)) 
     ax.set_ylim(yrange) if yrange else ax.set_ylim((ymin, ymax)) 
-    ax.legend()
+    ax.legend(loc='lower left')
 
     # save and show figure
     if output_dir:

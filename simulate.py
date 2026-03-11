@@ -44,9 +44,22 @@ def add_gaussian_and_pepper_noise(img: np.ndarray, sigma_g: float, prob_p: float
     return noised_img
 
 
-def gen_stellar_background(h: int, w: int, method: str='Gaussian', luminosity: float=5.5, position: tuple[int, int]=(0, 0), sigma_x: int=100, sigma_y: int=-1, rho: float=0.0, dtype: type=np.uint8):
+def add_stellar_noise(img: np.ndarray, method: str='Gaussian', luminosity: float=5.5, position: tuple[int, int]=(0, 0), sigma_x: int=100, sigma_y: int=-1, rho: float=0.0):
     '''
         Add stellar noise.
+    '''
+
+    h, w = img.shape
+    noise = gen_stellar_background(h, w, method, luminosity, position, sigma_x, sigma_y, rho, img.dtype)
+    img = np.clip(0.0 + img + noise, 0, 255 if img.dtype == np.uint8 else 1.0).astype(img.dtype)
+    # img = np.maximum(img, noise)
+
+    return img
+
+
+def gen_stellar_background(h: int, w: int, method: str='Gaussian', luminosity: float=5.5, position: tuple[int, int]=(0, 0), sigma_x: int=100, sigma_y: int=-1, rho: float=0.0, dtype: type=np.uint8):
+    '''
+        Generate stellar background.
     '''
     y, x = np.linspace(0, h-1, h), np.linspace(0, w-1, w)
     y, x = np.meshgrid(y, x, indexing='ij')

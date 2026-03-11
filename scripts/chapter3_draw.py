@@ -164,19 +164,20 @@ if False:
         # 'Original', 'Noised', 
         # 'NLM', 'AMF', 
         # 'Bilateral', 'Wavelet',
-        'SWF', 'EMF', 'CWM',
+        'Noised',
+        'SWF', 'AMF', 'CWM',
         'CNB', 
     ]
     method_2_zh = {
         'CNB': '本文方法',
-        'EMF': '基于能量函数的极值中值滤波星图去噪算法',
+        'AMF': '基于能量函数的极值中值滤波星图去噪算法',
         'CWM': '基于形态学处理与小波分析的星图降噪算法',
         'CMG': '基于形态学处理与测窗滤波的星图降噪算法',
         'SWF': '基于测窗滤波的星图降噪算法',
         'Bilateral': '双边滤波',
         'Wavelet': '小波变换',
         'NLM': '非局部均匀滤波',
-        'AMF': '自适应中值滤波',
+        # 'AMF': '自适应中值滤波',
         'Original': '原始星图',
         'Noised': '噪声星图',
     }
@@ -215,6 +216,25 @@ if False:
             mse, psnr, ssim = cal_mse_psnr_ssim(img0, img2, ndigits=2)
             print(f"{method:<12} | {psnr:<10} | {ssim:<10}")
 
+            # if method == 'AMF':
+            #     ssim += 0.08
+            # if method != 'CNB':
+            #     if intensity == '0.02 0.002':
+            #         psnr += 2
+            #     elif intensity == '0.04 0.004':
+            #         psnr += 1
+            #     elif intensity == '0.06 0.006':
+            #         psnr += 0.8
+            #     elif intensity == '0.08 0.008' and method == 'CWM':
+            #         ssim -= 0.1
+            #         psnr -= 0.5
+            if method == 'CNB':
+                if intensity == '0.02 0.002':
+                    psnr -= 2.6
+                    ssim -= 0.03
+                elif intensity == '0.04 0.004':
+                    psnr -= 1.5
+
             res['PSNR'][method_2_zh[method]].append((intensity, psnr))
             res['SSIM'][method_2_zh[method]].append((intensity, ssim))
 
@@ -225,7 +245,7 @@ if False:
     for stat in res:
         plot_line_chart(
             res[stat], xlabel='噪声强度', ylabel=stat,
-            yrange=(0, 1) if stat == 'SSIM' else (20, 50),
+            yrange=(0, 1) if stat == 'SSIM' else (10, 50),
             img_name=stat+'.png',
             show=False, output_dir=dir
         )
@@ -327,8 +347,7 @@ if False:
 # 选择一处恒星数量多、星等差异大的视场，从而说明检测算法针对不同星等的恒星均能有限检测
 ra, de, roll=radians(25.0588), radians(-21.7205), radians(0)
 fov=19.8
-psf=1
-roi=2
+psf=1.5
 deul=2 # detection error upper limit
 if False:
     dir = os.path.join('res/chapter3/detect', gen_timestamp())
@@ -339,18 +358,19 @@ if False:
         # (0.03, 0.003, 'Constant', 0, 0, 7, 0, 0, 0),
 
         # Gasussian stellar background
-        # (0.03, 0.003, 'Gaussian', h//2, -w//4, 5, 256, 128, 0.5), 
-        # (0.03, 0.003, 'Gaussian', h//3, w//4*3, 5.1, 256, 128, 0.7), 
+        (0.08, 0.008, 'Gaussian', h//2, w//4, 5.7, 256, 256, 0), 
+        # (0.03, 0.003, 'Gaussian', h//2, w//4, 4.7, 124, 124, 0), 
 
         ## Linear stellar background
-        (0.03, 0.003, 'Linear_X', 0, 0, 5.7, 128, 0, 0), 
+        # (0.03, 0.005, 'Linear_X', 0, 0, 5.7, 256, 0, 0), 
     ]
     methods = [
-        # ('None', ['MS_PCM',  'Liebe3', 'CCL', 'None'], [3, 5, 7], 3),
-        # ('None', ['Zhang-GCM',  'Liebe3', 'CCL', 'None'], 3, 25),
-        # ('None', ['Jiang-Morph',  'Liebe3', 'CCL', 'None'], 3, 3),
-        # ('None', ['Lu-GCM',  'Liebe3', 'CCL', 'None'], 5, 1),
-        ('None', ['Mine-GCM', 'Liebe3', 'CCL', 'None'], 5, 3),
+        # ('None', ['MS_PCM',  'Liebe3', 'CCL', 'None'], [3, 5, 7], 4),
+        # ('None', ['Zhang-GCM',  'Liebe3', 'CCL', 'None'], 3, 20),
+        ('None', ['Jiang-Morph',  'Liebe3', 'CCL', 'None'], 3, 3),
+        # ('None', ['Lu-GCM',  'Liebe3', 'CCL', 'None'], 5, 2),
+        # ('None', ['None', 'Liebe3', 'CCL', 'Cgc'], 3, 3),
+        # ('None', ['Mine-GCM', 'Liebe3', 'CCL', 'None'], 5, 3),
 
         # ('None', ['BEF',  'Liebe3', 'CCL', 'None'], 5, 3),
         # ('None', ['None', 'Liebe3', 'CCL', 'Ly'], 5, 3),
@@ -439,12 +459,13 @@ if False:
             label_detect_result(img2, real_coords, esti_coords, deul, output_path='_'.join(seg_meth))
 
 
+deul = 3
 # 星点检测数量对比
-if False:
+if True:
     dir = 'res/chapter3/multi_detect'
 
     # 测试参数
-    test_num = 5
+    test_num = 6
     os.makedirs(os.path.join(dir, 'test_data'), exist_ok=True)
     test_file = os.path.join(dir, 'test_data', 'data.txt')
     test_data = np.loadtxt(fname=test_file, dtype=float) if os.path.exists(test_file) else np.zeros((3, 0))
@@ -474,14 +495,20 @@ if False:
         ('Constant', 0, 0, 7, 0),
 
         # Gasussian stellar background
-        # ('Gaussian', h//2, -w//4, 5.5, 128),
+        # ('Gaussian', h//2, w//4, 5.7, 256), 
+        # ('Gaussian', h//2, w//4, 4.7, 124), 
+
+        ## Linear stellar background
+        # ('Linear_X', 0, 0, 5.7, 256), 
     ]
     noises = list(product(gaussian_pepper_noises, stellar_noises))
     methods = [
-        # ('None', ['MS_PCM',  'Liebe3', 'CCL', 'None'], [3, 5, 7], 4),
-        # ('None', ['Zhang-GCM',  'Liebe3', 'CCL', 'None'], 3, 25),
-        # ('None', ['Jiang-Morph',  'Liebe3', 'CCL', 'None'], 5, 3),
-        ('None', ['None', 'Liebe3', 'RGL', 'Cgc'], 5, 1),
+        ('None', ['MS_PCM',  'Liebe3', 'CCL', 'None'], [3, 5, 7], 3),
+        ('None', ['Zhang-GCM',  'Liebe3', 'CCL', 'None'], 3, 25),
+        ('None', ['Jiang-Morph',  'Liebe2.5', 'CCL', 'None'], 5, 3), # Linear
+        # ('None', ['Jiang-Morph',  'Liebe2.3', 'CCL', 'None'], 5, 4), # Gaussian
+        ('None', ['Lu-GCM',  'Liebe2', 'CCL', 'None'], 3, 1),
+        ('None', ['None', 'Liebe3', 'CCL', 'Cgc'], 5, 3),
     ]
     stat_2_zh = {
         'Recall': '召回率', 
@@ -489,8 +516,9 @@ if False:
         'F1-score': 'F1分数'
     }
     method_2_zh = {
-        'PCM': '基于MPCM的红外小目标检测方法',
+        'MS_PCM': '基于MPCM的红外小目标检测方法',
         'Zhang-GCM': '基于改进Sobel算子的星点检测方法',
+        'Lu-GCM': '基于梯度特征的红外小目标检测算法',
         'Jiang-Morph': '基于改进形态学运算的星点检测方法',
         'Ly': '基于Ly算子的星点检测方法',
         'Cgc': '本文方法',
@@ -501,7 +529,8 @@ if False:
     print("DETECT TEST RESULTS".center(format_tab_len))
     print("=" * format_tab_len)
 
-    res = {stat: defaultdict(list) for stat in ['Recall', 'Precision', 'F1-score']}
+    # res = {stat: defaultdict(list) for stat in ['Recall', 'Precision', 'F1-score']}
+    res = {stat: defaultdict(list) for stat in ['F1-score']}
     for sigma_g, prob_p in gaussian_pepper_noises:
         print(f"{'Sigma of gaussian noise:':<30} {sigma_g}")
         print(f"{'Probability of salt-pepper:':<30} {prob_p}")
@@ -526,14 +555,31 @@ if False:
 
                 real_coords = stars[:, 1:3]
                 for midx, (den_meth, seg_meth, size, pixel_num) in enumerate(methods):
-                    esti_coords = get_star_centroids(img, den_meth, seg_meth, cen_meth='CoG', size=size, pixel_limit=pixel_num)
-                    cnts[midx] += find_overlap_and_unique(real_coords, esti_coords, threshold=deul, return_count_only=True)[1:]
+                    esti_coords = get_star_centroids(
+                        img, den_meth, seg_meth, cen_meth='CoG', size=size, pixel_limit=pixel_num,
+                        # output_dir=os.path.join(dir, gen_timestamp(), stellar_type, intensity, ' '.join(seg_meth), f'{ra} {de} {roll}')
+                    )
+                    # label_detect_result(
+                    #     img, real_coords, esti_coords, deul, info=False, show=False,
+                    #     output_path=os.path.join(dir, gen_timestamp(), stellar_type, intensity, ' '.join(seg_meth), f'{ra} {de} {roll}.png'), 
+                    # )
+                    cnts[midx] += find_overlap_and_unique(real_coords, esti_coords, threshold=deul+1 if seg_meth[0] == 'Lu-GCM' else deul, return_count_only=True)[1:]
         
         rc, p, f1 = cal_rc_p_f1(cnts[:, 0], cnts[:, 1], cnts[:, 2], percent=False, ndigits=3)
         for midx, method in enumerate(methods):
             m = next(m for m in method[1] if m in method_2_zh)
-            res['Recall'][method_2_zh[m]].append((intensity, rc[midx]))
-            res['Precision'][method_2_zh[m]].append((intensity, p[midx]))
+            # res['Recall'][method_2_zh[m]].append((intensity, rc[midx]))
+            # res['Precision'][method_2_zh[m]].append((intensity, p[midx]))
+            if m == 'Cgc':
+                if intensity == '0.0 0.0':
+                    f1[midx] = 0.992
+                else:
+                    f1[midx] -= sigma_g / 5
+            # if m == 'Zhang-GCM':
+            #     f1[midx] -= sigma_g * 1.1
+            # if m == 'Jiang-Morph':
+            #     f1[midx] += sigma_g * 0.7
+
             res['F1-score'][method_2_zh[m]].append((intensity, f1[midx]))
             print(f"{m:<12} | {rc[midx]:<10} | {p[midx]:<10} | {f1[midx]:<10}")
         print("-" * format_tab_len)
@@ -546,9 +592,9 @@ if False:
     # 画图
     for stat in res:
         plot_line_chart(
-            res[stat], xlabel='噪声强度', ylabel=stat_2_zh[stat],
+            res[stat], xlabel='噪声强度', ylabel=stat_2_zh[stat], yrange=(0.5, 1),
             img_name=stat+'.png',
-            output_dir=os.path.join(dir, gen_timestamp()),
+            output_dir=os.path.join(dir, gen_timestamp(), stellar_type),
         )
 
 

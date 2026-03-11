@@ -100,7 +100,7 @@ if True:
         h=h, w=w, 
         fovy=fov, fovx=fov, 
         limit_mag=limit_mag, 
-        background=7,
+        background=7, sigma_psf=1, roi=3
     )
     cv2.imwrite('res/chapter2/sim/original.png', img0)
     
@@ -114,7 +114,7 @@ if True:
     cv2.imwrite('res/chapter2/sim/noise.png', img1)
     cv2.imwrite('res/chapter2/sim/noise_scale.png', crop_img1)
 
-    img2 = add_stellar_noise(img0, method='Gaussian', position=(h//2, w//3), luminosity=5.3, sigma_x=64)
+    img2 = add_stellar_noise(img0, method='Gaussian', position=(h//2, w//3), luminosity=5.3, sigma_x=128)
     img2, crop_img2 = extract_rect(img2, top_left, bot_right)
     cv2.imwrite('res/chapter2/sim/gaussian.png', img2)
     cv2.imwrite('res/chapter2/sim/gaussian_scale.png', crop_img2)
