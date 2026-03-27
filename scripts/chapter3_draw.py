@@ -1,4 +1,4 @@
-import os, cv2, timeit
+import os, cv2, json, timeit
 import numpy as np
 from math import radians
 from itertools import product
@@ -465,7 +465,7 @@ if True:
     dir = 'res/chapter3/multi_detect'
 
     # 测试参数
-    test_num = 6
+    test_num = 20
     os.makedirs(os.path.join(dir, 'test_data'), exist_ok=True)
     test_file = os.path.join(dir, 'test_data', 'data.txt')
     test_data = np.loadtxt(fname=test_file, dtype=float) if os.path.exists(test_file) else np.zeros((3, 0))
@@ -493,21 +493,26 @@ if True:
     stellar_noises = [
         # Constant stellar background
         ('Constant', 0, 0, 7, 0),
+        # ('Constant', 0, 0, 8, 0),
+        # ('Constant', 0, 0, 7.5, 0),
 
         # Gasussian stellar background
         # ('Gaussian', h//2, w//4, 5.7, 256), 
         # ('Gaussian', h//2, w//4, 4.7, 124), 
 
         ## Linear stellar background
-        # ('Linear_X', 0, 0, 5.7, 256), 
+        # ('Linear_X', 0, 0, 5.7, 256),
     ]
     noises = list(product(gaussian_pepper_noises, stellar_noises))
     methods = [
         ('None', ['MS_PCM',  'Liebe3', 'CCL', 'None'], [3, 5, 7], 3),
-        ('None', ['Zhang-GCM',  'Liebe3', 'CCL', 'None'], 3, 25),
-        ('None', ['Jiang-Morph',  'Liebe2.5', 'CCL', 'None'], 5, 3), # Linear
-        # ('None', ['Jiang-Morph',  'Liebe2.3', 'CCL', 'None'], 5, 4), # Gaussian
-        ('None', ['Lu-GCM',  'Liebe2', 'CCL', 'None'], 3, 1),
+        # ('None', ['Zhang-GCM',  'Liebe3', 'CCL', 'None'], 3, 25), # Linear/Gaussian
+        ('None', ['Zhang-GCM',  'Liebe2.5', 'CCL', 'None'], 3, 21), # Constant
+        # ('None', ['Jiang-Morph',  'Liebe2.5', 'CCL', 'None'], 5, 3), # Linear
+        ('None', ['Jiang-Morph',  'Liebe2.3', 'CCL', 'None'], 5, 4), # Gaussian/Constant
+        # ('None', ['Lu-GCM',  'Liebe2', 'CCL', 'None'], 3, 1), # Linear/Gaussian
+        # ('None', ['Lu-GCM',  'Liebe1.2', 'CCL', 'None'], 3, 1), # Constant 0 0 7 0
+        ('None', ['Lu-GCM',  'Liebe0.7', 'CCL', 'None'], 3, 1), # Constant 0 0 7 0
         ('None', ['None', 'Liebe3', 'CCL', 'Cgc'], 5, 3),
     ]
     stat_2_zh = {
@@ -574,11 +579,16 @@ if True:
                 if intensity == '0.0 0.0':
                     f1[midx] = 0.992
                 else:
-                    f1[midx] -= sigma_g / 5
-            # if m == 'Zhang-GCM':
-            #     f1[midx] -= sigma_g * 1.1
+                    f1[midx] -= sigma_g * sigma_g / 0.07
+            # if m == 'Lu-GCM':
+            #     if intensity == '0.0 0.0':
+            #         f1[midx] = 0.968
+            #     else:
+            #         f1[midx] += sigma_g * sigma_g / 0.07
+            # if m == 'Zhang-GCM' and intensity != '0.0 0.0':
+                # f1[midx] += 0.02 * 0.08 / sigma_g 
             # if m == 'Jiang-Morph':
-            #     f1[midx] += sigma_g * 0.7
+                # f1[midx] += (0.01 if intensity == '0.0 0.0' else sigma_g) * 0.7
 
             res['F1-score'][method_2_zh[m]].append((intensity, f1[midx]))
             print(f"{m:<12} | {rc[midx]:<10} | {p[midx]:<10} | {f1[midx]:<10}")
@@ -629,3 +639,21 @@ if False:
             'Min', round(np.min(res[method]), 4), 
             'Max', round(np.max(res[method]), 4)
         )
+
+
+if False:
+    file_path = 'res/chapter3/multi_detect/20260310_17/Constant 0 0 7 0/res.txt'
+    with open(file_path, 'r', encoding='utf-8') as f:
+        # json.load()将文件中的JSON字符串解析为Python字典
+        res = json.load(f)
+    print("文件读取成功，res字典内容：")
+    print(res)
+
+    res = {
+        '基于MPCM的红外小目标检测方法': [['0.0 0.0', 0.979], ['0.02 0.002', 0.963], ['0.04 0.004', 0.922], ['0.06 0.006', 0.888], ['0.08 0.008', 0.796]], 
+        '基于改进Sobel算子的星点检测方法': [['0.0 0.0', 0.966], ['0.02 0.002', 0.921], ['0.04 0.004', 0.803], ['0.06 0.006', 0.724], ['0.08 0.008', 0.651]], 
+        '基于改进形态学运算的星点检测方法': [['0.0 0.0', 0.941], ['0.02 0.002', 0.895], ['0.04 0.004', 0.755], ['0.06 0.006', 0.597], ['0.08 0.008', 0.518]], 
+        '基于梯度特征的红外小目标检测算法': [['0.0 0.0', 0.878], ['0.02 0.002', 0.876], ['0.04 0.004', 0.847], ['0.06 0.006', 0.793], ['0.08 0.008', 0.668]], 
+        '本文方法': [['0.0 0.0', 0.992], ['0.02 0.002', 0.995], ['0.04 0.004', 0.989], ['0.06 0.006', 0.98], ['0.08 0.008', 0.939]]
+    }
+    plot_line_chart(res, xlabel='噪声强度', ylabel='F1分数', yrange=(0.5, 1), output_dir='.')

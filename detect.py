@@ -153,7 +153,7 @@ def cal_lcm(img: np.ndarray, method: str, size: int):
         measure = np.nanmax(
             np.where(
                 shift_mask,                                                                     # (8, h, w)
-                np.abs(mean_map[None, ...] - shifted_mean_map) * img[None, ...],                # (8, h, w)
+                np.abs(mean_map[None, ...] - shifted_mean_map) * mean_map[None, ...],           # (8, h, w)
                 np.nan
             ), axis=0
         )
