@@ -5,11 +5,6 @@ import matplotlib.pyplot as plt, matplotlib.axes._axes as axes
 from math import radians, sqrt, tan, sin, cos, pi
 
 
-# Chinese font setting
-plt.rcParams['font.sans-serif']=['SimHei']
-plt.rcParams['axes.unicode_minus'] = False
-
-
 def draw_distri(cata: pd.DataFrame, title: str = '', ax: axes.Axes = None):
     '''
         Draw the distribution of stars in the celestial sphere.
@@ -366,23 +361,21 @@ if __name__ == '__main__':
     mag_limit = 6.0
     agd_limit = 0.03
 
-    raw_file = 'raw_catalogue/sao_j2000.dat'
-    sao_file = 'catalogue/sao.csv'
-    uni_file = f'catalogue/sao{mag_limit}_d{agd_limit}_{fov}_{max_limit}.csv'
-    rni_file = f'catalogue/sao{mag_limit}_d{agd_limit}_{fov}_{max_limit}_r{min_limit}.csv'
+    raw_file = 'raw_cata/sao_j2000.dat'
+    sao_file = 'cata/sao.csv'
+    uni_file = f'cata/sao{mag_limit}_d{agd_limit}_{fov}_{max_limit}.csv'
+    rni_file = f'cata/sao{mag_limit}_d{agd_limit}_{fov}_{max_limit}_r{min_limit}.csv'
 
     df = parse_heasarc_sao(raw_file, sao_file)
     df = df[df['Magnitude'] < 7.0]
-    draw_distri(df)
+    df.to_csv(sao_file, index=False)
     f_df = filter_catalogue(df, max_limit, mag_limit, agd_limit, fov=fov, uniform=False).reset_index(drop=True)
-    draw_distri(f_df)
-    # draw_prob(f_df, fov=fov, num_vec=3000)
-    
+
     if os.path.exists(uni_file):
         uf_df = pd.read_csv(uni_file)
     else:
         uf_df = filter_catalogue(df, max_limit, mag_limit, agd_limit, fov=fov, num_vec=360).reset_index(drop=True)
-        uf_df.to_csv(uni_file)
+        uf_df.to_csv(uni_file, index=False)
     
     draw_distri(uf_df)
     draw_prob(uf_df, fov=fov, num_vec=3000)

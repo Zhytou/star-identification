@@ -6,7 +6,7 @@ from utils import label_star_image
 
 
 # read star catalogue
-cata_path = 'catalogue/sao.csv'
+cata_path = 'cata/sao.csv'
 cata = pd.read_csv(cata_path, usecols=['Star ID', 'Ra', 'De', 'Magnitude'])
 cata['X'] = np.cos(cata['Ra'])*np.cos(cata['De'])
 cata['Y'] = np.sin(cata['Ra'])*np.cos(cata['De'])
