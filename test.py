@@ -16,10 +16,6 @@ from model import create_model
 from utils import cal_angdist, traid, gen_combos
 
 
-# Chinese font setting
-plt.rcParams['font.sans-serif']=['SimHei']
-plt.rcParams['axes.unicode_minus'] = False
-
 DEBUG = False
 
 # A single image is considered to have been successfully identified only when min_cnt stars are successfully identified within it.

@@ -11,8 +11,8 @@ from matplotlib.lines import Line2D
 from scipy.ndimage import rank_filter, maximum_filter, gaussian_filter, sobel, convolve
 from skimage.metrics import mean_squared_error, peak_signal_noise_ratio, structural_similarity
 
-plt.rcParams['font.sans-serif']=['SimHei']
-plt.rcParams['axes.unicode_minus'] = False
+plt.rcParams['font.sans-serif'] = ['WenQuanYi Micro Hei']
+plt.rcParams['axes.unicode_minus'] = False 
 
 
 def gen_combos(n: int, k: int):
@@ -657,14 +657,15 @@ def plot_freq_spectrum(img: np.ndarray):
     plt.show()
 
 
-def plot_line_chart(res: dict, xlabel: str='x', ylabel: str='y', xrange: tuple=None, yrange: tuple=None, img_name: str='result.png', show: bool=True, output_dir: str=None):
+def plot_line_chart(res: dict, xlabel: str='x', ylabel: str='y', xrange: tuple=None, yrange: tuple=None, img_name: str='result.png', json_name: str='result.txt', show: bool=True, output_dir: str=None):
     '''
         Draw the results of the accuracy.
     '''
     # plot the results
+    markers = ['o', 's', 'x', 'v', '<', '>', 'D', 'P', '*', 'X', 'H']
     _, ax = plt.subplots()
     xmin, xmax, ymin, ymax = np.inf, -np.inf, np.inf, -np.inf
-    for method in res:
+    for i, method in enumerate(res):
         xs, ys = zip(*res[method])
         xlabels = None
         if not isinstance(xs[0], numbers.Number) or isinstance(xs[0], bool):
@@ -674,7 +675,7 @@ def plot_line_chart(res: dict, xlabel: str='x', ylabel: str='y', xrange: tuple=N
         ax.set_xticks(xs)
         if xlabels:
             ax.set_xticklabels(xlabels)
-        ax.plot(xs, ys, label=method, marker='o')
+        ax.plot(xs, ys, label=method, marker=markers[i % len(markers)])
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_xlim(xrange) if xrange else ax.set_xlim((xmin, xmax)) 
@@ -682,12 +683,14 @@ def plot_line_chart(res: dict, xlabel: str='x', ylabel: str='y', xrange: tuple=N
     ax.legend(loc='lower left')
 
     # save and show figure
-    if output_dir:
+    if output_dir and img_name:
         save_and_show(os.path.join(output_dir, img_name), show)
+    else:
+        save_and_show(None, show)
 
     # save the text results
-    if output_dir:
-        with open(os.path.join(output_dir, 'res.txt'), 'w') as f:
+    if output_dir and json_name:
+        with open(os.path.join(output_dir, json_name), 'w') as f:
             json.dump(res, f, indent=4)
 
 
@@ -777,7 +780,6 @@ def label_detect_result(img: np.ndarray, real_coords: np.ndarray, esti_coords: n
         handles=legends, 
         bbox_to_anchor=(0.97, 0), # anchor point in axes coordinates
         loc='lower right', # align the legend corner to the anchor
-        prop={'family': 'SimHei', 'size': 18}
     )
 
     for row, col, label in detect_res:
