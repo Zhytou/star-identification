@@ -15,7 +15,7 @@ DEBUG = True
 
 
 # 仿真实验结果作图
-if False:
+if True:
     res = {
         # grid 0.5_6_100 T=3.6
         # 'grid': {
@@ -46,11 +46,11 @@ if False:
         },
 
         # lpt_nn 0.5_6_55_0 T=0.3
-        'lpt_nn': {
-            'pos': [(0.0, 98.88), (0.5, 98.89), (1.0, 98.35), (1.5, 97.97), (2.0, 97.35)],
-            'mag': [(0.0, 100.0), (0.1, 98.56), (0.2, 98.47), (0.3, 97.14), (0.4, 94.02)],
-            'fs': [(0.0, 99.24), (1.0, 97.97), (2.0, 96.96), (3.0, 96.24), (4.0, 95.49)],
-        },
+        # 'lpt_nn': {
+        #     'pos': [(0.0, 98.88), (0.5, 98.89), (1.0, 98.35), (1.5, 97.97), (2.0, 97.35)],
+        #     'mag': [(0.0, 100.0), (0.1, 98.56), (0.2, 98.47), (0.3, 97.14), (0.4, 94.02)],
+        #     'fs': [(0.0, 99.24), (1.0, 97.97), (2.0, 96.96), (3.0, 96.24), (4.0, 95.49)],
+        # },
 
         # lpt_nn 0.5_6_55_0 T=0.5
         'lpt_nn': {
@@ -93,7 +93,7 @@ if False:
         'pos': '位置噪声(pixel)',
         'mag': '亮度噪声(Mv)',
         'fs': '伪星数目',
-        'ms': '缺失星数目'
+        # 'ms': '缺失星数目'
     }
 
     dir = os.path.join('res/chapter4/sim', gen_timestamp())
@@ -115,7 +115,7 @@ if False:
             if mname not in res or tname not in res[mname]:
                 continue
             sub_res[mname] = res[mname][tname]
-        plot_line_chart(sub_res, xlabel='噪声强度', ylabel='识别率(%)', img_name=tname+'.png', show=True, output_dir=dir)
+        plot_line_chart(sub_res, xlabel='噪声强度', ylabel='识别率(%)', yrange=(80, 100), img_name=tname+'.png', show=True, output_dir=dir)
 
 
 # 模型内存和计算消耗统计
@@ -324,7 +324,7 @@ if False:
 
 
 # 多张实拍星图验证算法有效性
-if True:
+if False:
     # 清华测试图像大小以及拍摄焦距
     h, w, f = 1040, 1288, 18500/4.8
     # 和matlab结果比较时，坐标误差阈值
